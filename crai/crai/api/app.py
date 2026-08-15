@@ -1,13 +1,14 @@
 """
 crai/api/app.py
 FastAPI — unifica os dois pipelines da CRAI:
-  /webhooks/stripe        → churn involuntário
-  /webhooks/segment       → churn voluntário
-  /simulate/*             → endpoints de teste sem precisar do Stripe/Segment reais
+  /webhooks/stripe        → churn involuntário (assinatura HMAC obrigatória)
+  /webhooks/segment       → churn voluntário  (assinatura HMAC obrigatória)
+  /simulate/*             → endpoints de teste, restritos a ENV=development|demo
 """
 
 import os
 import json
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -16,11 +17,41 @@ from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState
 from ..churn_voluntary.voluntary_agent import voluntary_churn_agent
 from ..churn_voluntary.state import ChurnVoluntaryState
+from ..security.webhook_verification import (
+    verify_stripe_signature,
+    verify_segment_signature,
+)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CRAI", version="2.0.0",
               description="Agente autônomo de recuperação de receita — churn involuntário + voluntário")
 
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Ambientes onde os endpoints /simulate/* ficam expostos. O default é
+# "production" (fail closed): esquecer de definir ENV nunca deve deixar um
+# endpoint que dispara pipeline aberto sem autenticação.
+SIMULATION_ENVS = {"development", "demo"}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "desconhecido"
+
+
+def _reject_unsigned(request: Request, origem: str) -> HTTPException:
+    """401 padrão para webhook sem assinatura válida, registrando a origem."""
+    logger.warning(f"[SECURITY] Webhook {origem} rejeitado (401) — IP {_client_ip(request)}")
+    return HTTPException(status_code=401, detail="Assinatura de webhook inválida")
+
+
+def _require_simulation_env() -> None:
+    """Endpoints /simulate/* só existem fora de produção."""
+    env = os.getenv("ENV", "production").strip().lower()
+    if env not in SIMULATION_ENVS:
+        logger.warning(f"[SECURITY] /simulate/* bloqueado — ENV={env or 'não definido'}")
+        raise HTTPException(
+            status_code=403,
+            detail="Endpoints /simulate/* exigem ENV=development ou ENV=demo",
+        )
 
 
 # ── Churn Involuntário ───────────────────────────────────────────────────
@@ -28,7 +59,14 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request) -> JSONResponse:
     payload = await request.body()
-    event = json.loads(payload)  # modo dev: sem validação de assinatura
+    if not verify_stripe_signature(
+        payload,
+        request.headers.get("stripe-signature", ""),
+        os.getenv("STRIPE_WEBHOOK_SECRET", ""),
+    ):
+        raise _reject_unsigned(request, "stripe")
+
+    event = json.loads(payload)
     if event.get("type") == "invoice.payment_failed":
         await _run_involuntary_pipeline(event)
     return JSONResponse({"status": "ok"})
@@ -42,6 +80,7 @@ class SimulatePayment(BaseModel):
 
 @app.post("/simulate/payment-failed")
 async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
+    _require_simulation_env()
     event = _build_fake_stripe_event(payload)
     await _run_involuntary_pipeline(event)
     return JSONResponse({"status": "pipeline_executado", "customer_id": payload.customer_id})
@@ -51,7 +90,15 @@ async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
 
 @app.post("/webhooks/segment")
 async def segment_webhook(request: Request) -> JSONResponse:
-    payload = await request.json()
+    raw = await request.body()
+    if not verify_segment_signature(
+        raw,
+        request.headers.get("x-signature", ""),
+        os.getenv("SEGMENT_WEBHOOK_SECRET", ""),
+    ):
+        raise _reject_unsigned(request, "segment")
+
+    payload = json.loads(raw)
     await _run_voluntary_pipeline(
         user_id=payload.get("userId", "usr_unknown"),
         event=payload.get("event", ""),
@@ -71,6 +118,7 @@ class SimulateChurnRisk(BaseModel):
 
 @app.post("/simulate/churn-risk")
 async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
+    _require_simulation_env()
     props = {
         "days_since_last":   payload.days_since_last,
         "features_used_30d": payload.features_used_30d,

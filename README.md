@@ -233,12 +233,15 @@ cp .env.example .env
 
 | Variável | Obrigatória | Descrição |
 |----------|:-----------:|-----------|
+| `ENV` | Para `/simulate/*` | `development` ou `demo` habilitam os endpoints de teste; qualquer outro valor (ou ausente) faz eles responderem 403 |
 | `ANTHROPIC_API_KEY` | Para LLM | Mensagens personalizadas via Claude API |
 | `STRIPE_SECRET_KEY` | Não | Modo simulação funciona sem |
+| `STRIPE_WEBHOOK_SECRET` | Para `/webhooks/stripe` | Valida o header `stripe-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
+| `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
 
-> Todos os módulos funcionam **sem nenhuma API key** — fallbacks heurísticos e templates estáticos substituem as chamadas externas.
+> Os módulos de ML e o pipeline funcionam **sem nenhuma API key** — fallbacks heurísticos e templates estáticos substituem as chamadas externas. Os *secrets de webhook* são a exceção: sem eles os endpoints `/webhooks/*` rejeitam qualquer request (fail closed), por design. Para rodar local sem webhook real, use `/simulate/*` com `ENV=development`.
 
 ### Proteção contra Commit de Segredos (opcional)
 
