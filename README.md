@@ -240,6 +240,18 @@ cp .env.example .env
 
 > Todos os módulos funcionam **sem nenhuma API key** — fallbacks heurísticos e templates estáticos substituem as chamadas externas.
 
+### Proteção contra Commit de Segredos (opcional)
+
+O repositório inclui um hook de pre-commit que bloqueia commits contendo um
+`.env` real ou padrões de chave conhecidos (`sk-ant-`, `sk_live_`, `whsec_`,
+`pat-na1-` seguidos de caracteres reais). Ele não roda automaticamente —
+para ativar localmente:
+
+```bash
+cp scripts/pre-commit-secrets.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
 ---
 
 ## Como Executar
