@@ -135,7 +135,7 @@ Autoencoder denso em **PyTorch** (12→32→16→4→16→32→12) treinado **ap
 - Top features que mais contribuem para o erro (explicabilidade)
 - Anomalia reduz `p_recovery` em 30% e recalcula o e-Profit downstream
 
-Pipeline de treino, avaliação e figuras para a banca em [`modulo_02_autoencoder/`](modulo_02_autoencoder/). Métricas: ROC-AUC **0.996**, recall **97,4%** @ p95, separação saudáveis vs anômalos de **11,6x**.
+Treino via `AnomalyDetector.train()` — gera o dataset comportamental sintético, treina só nos saudáveis, calibra o threshold no percentil 95 dos saudáveis de validação (held-out) e salva os artefatos em `crai/models/`. Métricas do último treino: ROC-AUC **0.995**, recall **98,4%** @ p95, separação saudáveis vs anômalos de **7,7x**.
 
 ### 3. Payday Inference (`ml/payday_inference.py`)
 
@@ -147,7 +147,7 @@ Pipeline de treino, avaliação e figuras para a banca em [`modulo_02_autoencode
 
 **Outputs:** data ótima de retry + confiança + perfil inferido (84% de acurácia via âncoras de payday).
 
-Pipeline de treino e relatório em [`modulo_03_payday/`](modulo_03_payday/). Métricas: MAE de **0,62 dia** vs 5,01 da heurística de dias fixos; acerto da janela com ±1 dia em **89,3%** dos casos (ROC-AUC diário 0.97).
+Treino via `PaydayInference.train()` — gera as séries de liquidez sintéticas, faz o split **por cliente** (nunca por janela, para não vazar o padrão individual), treina LSTM + os 3 Prophets e salva tudo em `crai/models/`. Métricas do último treino: MAE de **0,60 dia** vs 5,32 da heurística de dias fixos; acerto da janela com ±1 dia em **90,6%** dos casos (ROC-AUC diário 0.979).
 
 ### 4. Offer Selector (`churn_voluntary/offer_bandit.py`)
 
@@ -158,7 +158,7 @@ Pipeline de treino e relatório em [`modulo_03_payday/`](modulo_03_payday/). Mé
 - **Otimiza e-Profit, não conversão**: `argmax p_amostrado × LTV_retido − custo(oferta)` — no CLT, a consulta CS converte mais (50%) mas perde para o desconto de 10% por causa do custo humano
 - Aprendizado contínuo: cada aceite/recusa real atualiza o posterior e persiste em disco
 
-Simulação, relatório e figuras em [`modulo_04_offer_bandit/`](modulo_04_offer_bandit/). Em 6.000 rodadas: **+R$199 mil** vs o epsilon-greedy anterior, regret 40% menor, 87% de escolhas ótimas ao final.
+Os posteriores nascem do warm start da simulação de 6.000 rodadas e evoluem em produção a cada aceite/recusa, persistidos em `crai/models/bandit_state.json`. Na simulação: **+R$199 mil** vs o epsilon-greedy anterior, regret 40% menor, 87% de escolhas ótimas ao final.
 
 ### 5. Agente LangGraph (`agent/` + `dunning/`)
 
@@ -192,7 +192,10 @@ crai/
 │   │   ├── failure_classifier.py       # XGBoost + RF + e-Profit + SHAP
 │   │   ├── anomaly_detector.py         # Autoencoder PyTorch
 │   │   ├── payday_inference.py         # LSTM + Prophet
-│   │   └── synthetic_data.py           # Gerador de dataset sintético (seed 42)
+│   │   └── synthetic_data.py           # 3 geradores de dataset sintético (seed 42)
+│   │
+│   ├── scripts/                        # Scripts executáveis do pacote
+│   │   └── train_all.py                # Treina classifier + anomaly + payday
 │   │
 │   ├── dunning/                        # Motor de cobrança inteligente
 │   │   ├── dunning_engine.py           # LangGraph + Claude API (multicanal)
@@ -204,13 +207,20 @@ crai/
 │   └── api/                            # API REST
 │       └── app.py                      # FastAPI: webhooks + simulação
 │
+├── models/                             # Artefatos treinados (gerados por train_all)
+│
 ├── tests/
-│   └── test_failure_classifier.py      # 26 testes unitários (pytest)
+│   ├── test_failure_classifier.py      # Módulo 1: dataset, treino, SHAP, e-Profit
+│   ├── test_anomaly_detector.py        # Módulo 2: dataset, treino, persistência
+│   ├── test_payday_inference.py        # Módulo 3: séries, treino, persistência
+│   └── test_agent_graph.py             # Módulo 5: roteamento do grafo + dunning
 │
 ├── test_pipeline.py                    # Demo: 8 cenários (4 involuntário + 4 voluntário)
 ├── requirements.txt                    # Dependências com versões fixadas
 └── .env.example                        # Template de variáveis de ambiente
 ```
+
+> A pasta [`archive/protótipos-pré-unificação/`](archive/prot%C3%B3tipos-pr%C3%A9-unifica%C3%A7%C3%A3o/) guarda os laboratórios originais dos módulos 2, 3 e 4 (relatórios, figuras e métricas usados no TCC). A lógica de treino deles já vive no pacote `crai/` — as pastas ficam só como histórico.
 
 ---
 
@@ -255,18 +265,62 @@ cp scripts/pre-commit-secrets.sh .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 ```
 
+### Higiene de segredos (hook de pre-commit)
+
+O `.env` real **nunca** deve ser commitado. Além do `.gitignore`, o repositório traz um hook opcional em `scripts/pre-commit` que bloqueia o commit quando detecta:
+
+- qualquer arquivo `.env` / `.env.*` estagiado (exceto `.env.example`);
+- valores que se pareçam com chaves reais (`sk-ant-`, `sk_live_`, `whsec_`, `pat-na1-`, `AKIA…`, `ghp_…`) no conteúdo estagiado.
+
+Ativação local (uma vez, na raiz do repositório):
+
+```bash
+git config core.hooksPath scripts
+```
+
+Verificar se ficou ativo:
+
+```bash
+git config --get core.hooksPath   # deve imprimir: scripts
+```
+
+O hook vale para todo o repositório, incluindo `archive/`. Ele não roda automaticamente para quem clona o repositório — cada pessoa precisa executar o comando acima. Em caso de falso positivo, o bypass pontual é `git commit --no-verify` (usar com parcimônia).
+
 ---
 
 ## Como Executar
 
-### Treinar o modelo de classificação
+### Treinar os três modelos de ML
 
 ```bash
 cd crai
-python -m crai.ml.failure_classifier
+python -m crai.scripts.train_all
 ```
 
-Gera dataset sintético (3.000 linhas), treina XGBoost+RF, calcula métricas e demonstra 3 predições com SHAP.
+Comando único que treina, em sequência, os três modelos treináveis do pacote:
+
+| # | Modelo | Dataset sintético | Artefatos em `crai/models/` |
+|---|--------|-------------------|------------------------------|
+| 1 | Failure Classifier (XGBoost + RF) | 3.000 transações | `xgb_*.joblib`, `rf_*.joblib`, `label_encoders.joblib` |
+| 2 | Anomaly Detector (Autoencoder) | 5.500 clientes (91% saudáveis) | `autoencoder.pt`, `autoencoder_scaler.pkl`, `autoencoder_meta.json` |
+| 3 | Payday Inference (LSTM + Prophet) | 600 clientes × 180 dias | `payday_lstm.pt`, `payday_prophet_*.json`, `payday_meta.json` |
+
+Ao final imprime um resumo das métricas dos três e confirma que cada modelo salvo é recarregável via `load()` — é essa verificação que garante que o agente LangGraph vai encontrar os artefatos no formato esperado. Leva cerca de 1 minuto em CPU.
+
+Para um smoke test rápido (amostras reduzidas):
+
+```bash
+python -m crai.scripts.train_all --quick
+```
+
+Cada modelo também pode ser treinado isoladamente:
+
+```python
+from crai.ml.anomaly_detector import AnomalyDetector
+metrics = AnomalyDetector().train(n_samples=5500)
+```
+
+Sem os artefatos treinados, **todos os módulos continuam funcionando** com os fallbacks heurísticos — o treino melhora a qualidade da decisão, não é pré-requisito para rodar.
 
 ### Rodar testes
 
@@ -275,7 +329,7 @@ cd crai
 pytest tests/ -v
 ```
 
-26 testes cobrindo: dataset sintético, heurística, treino, predição, SHAP, e-Profit, persistência.
+Cobrem: os três datasets sintéticos, os fallbacks heurísticos, o treino de cada modelo (em amostras pequenas), a persistência (`train()` → `load()`), SHAP, e-Profit e o roteamento do grafo do agente.
 
 ### Pipeline completo (8 cenários)
 
@@ -324,16 +378,42 @@ O sistema só recomenda intervenção quando `e-Profit > 0`, ou seja, quando o r
 
 ---
 
-## Métricas do Módulo 1 (Failure Classifier)
+## Métricas dos Modelos
+
+Resultado de `python -m crai.scripts.train_all` com os tamanhos de dataset padrão.
+
+**Módulo 1 — Failure Classifier** (XGBoost 70% + Random Forest 30%)
 
 | Métrica | Valor |
 |---------|-------|
-| AUC-ROC | 0.68 |
-| Acurácia | 0.64 |
+| AUC-ROC | 0.680 |
+| Acurácia | 0.640 |
+| Recall (recuperado) | 0.629 |
 | e-Profit médio | R$ 404,93 |
 | Clientes com e-Profit > 0 | 100% (teste) |
 
-*Treinado em dataset sintético com seed fixa (42) para reprodutibilidade.*
+**Módulo 2 — Anomaly Detector** (Autoencoder, treino só em clientes saudáveis)
+
+| Métrica | Valor |
+|---------|-------|
+| ROC-AUC | 0.995 |
+| Average Precision | 0.991 |
+| Precision @ threshold p95 | 0.928 |
+| Recall @ threshold p95 | 0.984 |
+| Separação saudáveis vs anômalos | 7,7x |
+
+**Módulo 3 — Payday Inference** (LSTM + Prophet, split por cliente)
+
+| Métrica | Ensemble | Heurística de dias fixos |
+|---------|----------|--------------------------|
+| MAE da janela de retry | **0,60 dia** | 5,32 dias |
+| Acerto exato | 84,3% | — |
+| Acerto ±1 dia | 90,6% | — |
+| ROC-AUC diário | 0.979 | — |
+
+Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → **1,10** | freelancer 4,68 → **1,21**
+
+*Todos treinados em dataset sintético com seed fixa (42) para reprodutibilidade.*
 
 ---
 
@@ -348,14 +428,14 @@ O sistema só recomenda intervenção quando `e-Profit > 0`, ou seja, quando o r
 - [x] **Módulo 2** — Autoencoder PyTorch (anomaly_detector.py)
   - [x] Dataset comportamental sintético (5000 saudáveis + 500 anômalos)
   - [x] Autoencoder denso 12→4→12 com early stopping (treino só em saudáveis)
-  - [x] Threshold calibrado no percentil 95 (ROC-AUC 0.996, recall 97,4%)
+  - [x] Threshold calibrado no percentil 95 dos saudáveis held-out (ROC-AUC 0.995, recall 98,4%)
   - [x] Explicabilidade: quebra do erro de reconstrução por feature
   - [x] Integração ao pipeline LangGraph com fallback heurístico
 - [x] **Módulo 3** — LSTM + Prophet (payday_inference.py)
   - [x] Séries de liquidez sintéticas (600 clientes × 180 dias, 3 perfis BR)
   - [x] LiquidityLSTM seq2vec (30 dias → 14 dias) com split por cliente
   - [x] Prophet por perfil com sazonalidade mensal (payday brasileiro)
-  - [x] Ensemble 0.6/0.4 — MAE 0,62 dia vs 5,01 da heurística (hit ±1d: 89%)
+  - [x] Ensemble 0.6/0.4 — MAE 0,60 dia vs 5,32 da heurística (hit ±1d: 90,6%)
   - [x] Integração ao pipeline LangGraph com fallback heurístico
 - [x] **Módulo 4** — Thompson Sampling (offer_selector.py)
   - [x] Ambiente simulado com verdade oculta (aceites por perfil × oferta, MRR lognormal)
@@ -370,6 +450,11 @@ O sistema só recomenda intervenção quando `e-Profit > 0`, ou seja, quando o r
   - [x] Pix Automático como primeira opção, boleto no fallback
   - [x] Trilha de raciocínio em PT-BR por decisão (auditoria)
   - [x] Testes do grafo (7 casos de roteamento + dunning)
+- [x] **Consolidação** — treino real dentro do pacote principal
+  - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)
+  - [x] Geradores de dataset dos módulos 2 e 3 portados para `ml/synthetic_data.py`
+  - [x] Comando único de treino: `python -m crai.scripts.train_all`
+  - [x] Protótipos movidos para `archive/protótipos-pré-unificação/` (histórico)
 - [ ] **Módulo 6** — Demo para banca (demo_reasoning.py)
 
 ---

@@ -5,7 +5,7 @@ O erro de reconstrução funciona como score de anomalia: clientes cujo
 comportamento se desviou do padrão saudável são reconstruídos com erro alto.
 
 Cold start (modelo não treinado): heurística de z-score sobre o evento Stripe.
-Produção: autoencoder treinado pelo pipeline em modulo_02_autoencoder/.
+Produção: autoencoder treinado por train(), com artefatos em crai/models/.
 """
 
 import json
@@ -13,10 +13,20 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+from sklearn.metrics import (
+    average_precision_score,
+    confusion_matrix,
+    roc_auc_score,
+)
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+from .synthetic_data import BEHAVIORAL_FEATURES, generate_behavioral_dataset
 
 try:
     import torch
     from torch import nn
+    from torch.utils.data import DataLoader, TensorDataset
     TORCH_AVAILABLE = True
 except ImportError:  # pragma: no cover
     TORCH_AVAILABLE = False
@@ -25,17 +35,10 @@ except ImportError:  # pragma: no cover
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR = BASE_DIR / "models"
 
-BEHAVIORAL_FEATURES = [
-    "tenure_days", "mrr_brl", "seats",
-    "logins_7d", "logins_30d", "feature_adoption",
-    "avg_session_min", "api_calls_7d", "days_since_last_login",
-    "tickets_30d", "failed_pay_90d", "nps_last",
-]
-
 
 if TORCH_AVAILABLE:
     class BehaviorAutoencoder(nn.Module):
-        """Arquitetura idêntica à treinada em modulo_02_autoencoder/src/model.py."""
+        """Encoder afunila 12 features até um gargalo de 4 dimensões."""
 
         def __init__(self, input_dim: int = 12, bottleneck: int = 4, dropout: float = 0.1):
             super().__init__()
@@ -65,6 +68,244 @@ class AnomalyDetector:
         self.scaler = None
         self.threshold = None
         self.features = BEHAVIORAL_FEATURES
+        self._train_metrics: dict = {}
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TREINO
+    # ══════════════════════════════════════════════════════════════════════
+
+    def train(
+        self,
+        n_samples: int = 5500,
+        test_size: float = 0.15,
+        anomaly_rate: float = 0.09,
+        epochs: int = 100,
+        batch_size: int = 128,
+        lr: float = 1e-3,
+        bottleneck: int = 4,
+        patience: int = 10,
+        threshold_percentile: float = 95.0,
+        seed: int = 42,
+    ) -> dict:
+        """
+        Treina o autoencoder em dataset comportamental sintético e retorna métricas.
+
+        Premissa central: treinar SOMENTE com clientes saudáveis. Isso força a
+        rede a aprender a geometria do comportamento normal; qualquer cliente
+        fora dessa distribuição produz reconstrução ruim. Os clientes anômalos
+        nunca entram no treino — só no conjunto de avaliação, junto com os
+        saudáveis de validação (held-out).
+
+        Args:
+            n_samples: Tamanho total do dataset sintético (saudáveis + anômalos)
+            test_size: Fração dos saudáveis reservada para validação
+            anomaly_rate: Fração de clientes anômalos no dataset
+            epochs: Máximo de épocas (early stopping pode interromper antes)
+            batch_size: Tamanho do batch
+            lr: Learning rate do Adam
+            bottleneck: Dimensão do gargalo do autoencoder
+            patience: Épocas sem melhora antes do early stopping
+            threshold_percentile: Percentil do erro dos saudáveis que vira threshold
+            seed: Seed para reprodutibilidade
+
+        Returns:
+            Dicionário com métricas de treino (ROC-AUC, precision/recall, threshold)
+        """
+        if not TORCH_AVAILABLE:
+            raise RuntimeError(
+                "PyTorch não instalado — necessário para treinar o autoencoder "
+                "(pip install torch)"
+            )
+
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        print("[ANOMALY] Gerando dataset comportamental sintético...")
+        df = generate_behavioral_dataset(
+            n_samples=n_samples, anomaly_rate=anomaly_rate, seed=seed
+        )
+        self.features = list(BEHAVIORAL_FEATURES)
+
+        saudaveis = df[df["is_anomalous"] == 0]
+        anomalos = df[df["is_anomalous"] == 1]
+        X_healthy = saudaveis[self.features].to_numpy(dtype=np.float32)
+        X_anomalous = anomalos[self.features].to_numpy(dtype=np.float32)
+
+        X_train, X_val = train_test_split(X_healthy, test_size=test_size, random_state=seed)
+
+        # Scaler ajustado apenas nos saudáveis de treino
+        self.scaler = StandardScaler().fit(X_train)
+        X_train_s = self.scaler.transform(X_train).astype(np.float32)
+        X_val_s = self.scaler.transform(X_val).astype(np.float32)
+
+        print(f"[ANOMALY] Treinando autoencoder ({len(self.features)}→{bottleneck}→"
+              f"{len(self.features)}) em {len(X_train)} clientes saudáveis...")
+
+        self.model = BehaviorAutoencoder(
+            input_dim=len(self.features), bottleneck=bottleneck
+        )
+        historico = self._fit_autoencoder(
+            X_train_s, X_val_s, epochs, batch_size, lr, patience
+        )
+        self.model.eval()
+
+        # ── Threshold calibrado nos saudáveis de validação (held-out) ────
+        erros_val = self._reconstruction_error(X_val_s)
+        self.threshold = float(np.percentile(erros_val, threshold_percentile))
+
+        metrics = self._evaluate(X_val_s, X_anomalous, threshold_percentile, historico)
+        metrics["n_train_healthy"] = int(len(X_train))
+        self._train_metrics = metrics
+        self.is_fitted = True
+
+        self._save_models(bottleneck, seed, metrics)
+
+        print(f"[ANOMALY] Treino concluído — ROC-AUC: {metrics['roc_auc']:.3f} | "
+              f"recall: {metrics['recall']:.3f} | threshold: {self.threshold:.4f} | "
+              f"separação: {metrics['separation_ratio']:.1f}x")
+
+        return metrics
+
+    def _fit_autoencoder(
+        self,
+        X_train_s: np.ndarray,
+        X_val_s: np.ndarray,
+        epochs: int,
+        batch_size: int,
+        lr: float,
+        patience: int,
+    ) -> dict:
+        """Loop de treino com early stopping; restaura o melhor state_dict."""
+        train_loader = DataLoader(
+            TensorDataset(torch.from_numpy(X_train_s)),
+            batch_size=batch_size,
+            shuffle=True,
+        )
+        val_tensor = torch.from_numpy(X_val_s)
+
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        loss_fn = nn.MSELoss()
+
+        historico = {"train_loss": [], "val_loss": []}
+        melhor_val = float("inf")
+        sem_melhora = 0
+        melhor_state = None
+
+        for epoch in range(1, epochs + 1):
+            self.model.train()
+            soma, n = 0.0, 0
+            for (batch,) in train_loader:
+                optimizer.zero_grad()
+                loss = loss_fn(self.model(batch), batch)
+                loss.backward()
+                optimizer.step()
+                soma += loss.item() * batch.size(0)
+                n += batch.size(0)
+            train_loss = soma / n
+
+            self.model.eval()
+            with torch.no_grad():
+                val_loss = loss_fn(self.model(val_tensor), val_tensor).item()
+
+            historico["train_loss"].append(train_loss)
+            historico["val_loss"].append(val_loss)
+            if epoch % 10 == 0 or epoch == 1:
+                print(f"[ANOMALY]   época {epoch:3d} | train {train_loss:.5f} | val {val_loss:.5f}")
+
+            if val_loss < melhor_val - 1e-5:
+                melhor_val = val_loss
+                sem_melhora = 0
+                melhor_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+            else:
+                sem_melhora += 1
+                if sem_melhora >= patience:
+                    print(f"[ANOMALY]   early stop — sem melhora há {patience} épocas")
+                    break
+
+        if melhor_state is not None:
+            self.model.load_state_dict(melhor_state)
+
+        historico["melhor_val_loss"] = melhor_val
+        return historico
+
+    def _reconstruction_error(self, X_scaled: np.ndarray) -> np.ndarray:
+        """Erro quadrático médio de reconstrução, por amostra."""
+        with torch.no_grad():
+            tensor = torch.from_numpy(X_scaled.astype(np.float32))
+            recon = self.model(tensor).numpy()
+        return ((recon - X_scaled) ** 2).mean(axis=1)
+
+    def _evaluate(
+        self,
+        X_val_s: np.ndarray,
+        X_anomalous: np.ndarray,
+        threshold_percentile: float,
+        historico: dict,
+    ) -> dict:
+        """Avalia em saudáveis held-out + anômalos (nunca vistos no treino)."""
+        X_anom_s = self.scaler.transform(X_anomalous).astype(np.float32)
+
+        erros = np.concatenate([
+            self._reconstruction_error(X_val_s),
+            self._reconstruction_error(X_anom_s),
+        ])
+        y = np.concatenate([np.zeros(len(X_val_s), dtype=int), np.ones(len(X_anom_s), dtype=int)])
+        preds = (erros > self.threshold).astype(int)
+
+        tn, fp, fn, tp = confusion_matrix(y, preds, labels=[0, 1]).ravel()
+        precision = tp / (tp + fp) if (tp + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+        erro_saudaveis = float(erros[y == 0].mean())
+        erro_anomalos = float(erros[y == 1].mean()) if (y == 1).any() else 0.0
+
+        return {
+            "roc_auc": round(float(roc_auc_score(y, erros)), 4) if len(set(y)) > 1 else 0.0,
+            "average_precision": (
+                round(float(average_precision_score(y, erros)), 4) if len(set(y)) > 1 else 0.0
+            ),
+            "precision": round(float(precision), 4),
+            "recall": round(float(recall), 4),
+            "f1": round(float(f1), 4),
+            "threshold": round(self.threshold, 6),
+            "threshold_percentile": threshold_percentile,
+            "confusion_matrix": [[int(tn), int(fp)], [int(fn), int(tp)]],
+            "mean_error_healthy": round(erro_saudaveis, 4),
+            "mean_error_anomalous": round(erro_anomalos, 4),
+            "separation_ratio": round(erro_anomalos / (erro_saudaveis + 1e-9), 2),
+            "epochs_trained": len(historico["train_loss"]),
+            "best_val_loss": round(float(historico["melhor_val_loss"]), 6),
+            "n_val_healthy": int(len(X_val_s)),
+            "n_anomalous": int(len(X_anomalous)),
+        }
+
+    # ── Persistência do modelo treinado ──────────────────────────────────
+    def _save_models(self, bottleneck: int, seed: int, metrics: dict):
+        """Salva pesos, scaler e meta.json no formato esperado por load()."""
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+        torch.save(self.model.state_dict(), MODELS_DIR / "autoencoder.pt")
+        joblib.dump(self.scaler, MODELS_DIR / "autoencoder_scaler.pkl")
+
+        meta = {
+            "features": self.features,
+            "input_dim": len(self.features),
+            "bottleneck": bottleneck,
+            "threshold": self.threshold,
+            "threshold_percentil": metrics["threshold_percentile"],
+            "epochs_treinadas": metrics["epochs_trained"],
+            "melhor_val_loss": metrics["best_val_loss"],
+            "n_treino_saudaveis": metrics["n_train_healthy"],
+            "n_val_saudaveis": metrics["n_val_healthy"],
+            "n_anomalos_avaliacao": metrics["n_anomalous"],
+            "roc_auc": metrics["roc_auc"],
+            "seed": seed,
+        }
+        with open(MODELS_DIR / "autoencoder_meta.json", "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        print(f"[ANOMALY] Modelos salvos em {MODELS_DIR}/")
 
     # ── Carregamento do modelo treinado ──────────────────────────────────
     def load(self) -> bool:

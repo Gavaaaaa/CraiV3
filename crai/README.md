@@ -51,9 +51,12 @@ crai/
 │   ├── risk_scorer.py           # Calcula risk_score a partir de eventos Segment
 │   └── state.py
 ├── ml/
-│   ├── failure_classifier.py    # XGBoost + Random Forest
-│   ├── anomaly_detector.py      # Autoencoder (heurística no MVP)
-│   └── payday_inference.py      # LSTM + Prophet (heurística no MVP)
+│   ├── failure_classifier.py    # XGBoost + Random Forest — train() + predict()
+│   ├── anomaly_detector.py      # Autoencoder PyTorch — train() + check()
+│   ├── payday_inference.py      # LSTM + Prophet — train() + predict_next_window()
+│   └── synthetic_data.py        # Geradores de dataset dos 3 modelos (seed 42)
+├── scripts/
+│   └── train_all.py             # Treina os 3 modelos: python -m crai.scripts.train_all
 ├── dunning/
 │   ├── dunning_engine.py        # LangGraph + Claude API (dunning involuntário)
 │   └── smart_backoff.py         # Backoff Exponencial + Jitter
