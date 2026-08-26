@@ -8,6 +8,10 @@ Cobre:
 - Fallback heurístico (modelo não treinado)
 - Persistência (salvar/carregar modelos)
 - Reprodutibilidade (seed fixa)
+
+O treino é redirecionado para um diretório temporário (MODELS_DIR monkeypatched),
+para que a suíte não sobrescreva os modelos de produção em crai/models/ — um
+modelo treinado aqui usa amostra pequena e degradaria a demo.
 """
 
 import json
@@ -17,13 +21,24 @@ import pandas as pd
 from pathlib import Path
 
 from crai.ml.synthetic_data import generate_dataset, GATEWAY_ERROR_CODES, CARD_BRANDS
+from crai.ml import failure_classifier as classifier_module
 from crai.ml.failure_classifier import (
     FailureClassifier,
     INTERVENTION_COSTS,
     ALL_FEATURES,
-    MODELS_DIR,
     LOGS_DIR,
 )
+
+
+@pytest.fixture(scope="module")
+def classificador_treinado(tmp_path_factory):
+    """Treina uma vez, em dataset pequeno, salvando num diretório temporário."""
+    models_dir = tmp_path_factory.mktemp("models")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(classifier_module, "MODELS_DIR", models_dir)
+        clf = FailureClassifier()
+        metrics = clf.train(n_samples=1000, test_size=0.2)
+        yield clf, metrics, models_dir
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -147,23 +162,20 @@ class TestFailureClassifierHeuristic:
 class TestFailureClassifierTrained:
     """Testes com modelo treinado."""
 
-    @classmethod
-    def setup_class(cls):
-        """Treina o modelo uma vez para todos os testes da classe."""
-        cls.clf = FailureClassifier()
-        cls.metrics = cls.clf.train(n_samples=1000, test_size=0.2)
-
-    def test_is_fitted_after_train(self):
+    def test_is_fitted_after_train(self, classificador_treinado):
         """Modelo está marcado como treinado."""
-        assert self.clf.is_fitted
+        clf, _, _ = classificador_treinado
+        assert clf.is_fitted
 
-    def test_auc_above_threshold(self):
+    def test_auc_above_threshold(self, classificador_treinado):
         """AUC deve ser razoável (> 0.60) mesmo com dados sintéticos."""
-        assert self.metrics["auc"] > 0.60
+        _, metrics, _ = classificador_treinado
+        assert metrics["auc"] > 0.60
 
-    def test_predict_returns_ensemble(self):
+    def test_predict_returns_ensemble(self, classificador_treinado):
         """Predição usa ensemble, não heurística."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 12, "day_of_month": 10, "invoice_amount": 200.00,
             "avg_ticket": 200.00, "gateway_error_code": "insufficient_funds",
             "card_brand": "visa", "payment_history_score": 0.80,
@@ -172,9 +184,10 @@ class TestFailureClassifierTrained:
         })
         assert result["method"] == "ensemble_xgb_rf"
 
-    def test_recovery_score_range(self):
+    def test_recovery_score_range(self, classificador_treinado):
         """Score de recuperabilidade está entre 0 e 100."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 6, "day_of_month": 15, "invoice_amount": 300.00,
             "avg_ticket": 300.00, "gateway_error_code": "card_declined",
             "card_brand": "mastercard", "payment_history_score": 0.50,
@@ -183,8 +196,9 @@ class TestFailureClassifierTrained:
         })
         assert 0 <= result["recovery_score"] <= 100
 
-    def test_eprofit_formula(self):
+    def test_eprofit_formula(self, classificador_treinado):
         """e-Profit = P_recovery * LTV - custo do canal."""
+        clf, _, _ = classificador_treinado
         features = {
             "tenure_months": 12, "day_of_month": 5, "invoice_amount": 150.00,
             "avg_ticket": 150.00, "gateway_error_code": "processing_error",
@@ -192,13 +206,14 @@ class TestFailureClassifierTrained:
             "failure_count_90d": 0, "hour_of_day": 9, "day_of_week": 1,
             "attempt_count": 1, "ltv_estimated": 5000.00,
         }
-        result = self.clf.predict(features, channel="email_auto")
+        result = clf.predict(features, channel="email_auto")
         expected = round(result["p_recovery"] * 5000.00 - INTERVENTION_COSTS["email_auto"], 2)
         assert abs(result["eprofit"] - expected) <= 0.02
 
-    def test_shap_explanation_present(self):
+    def test_shap_explanation_present(self, classificador_treinado):
         """Predição inclui explicação SHAP com features."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 18, "day_of_month": 10, "invoice_amount": 250.00,
             "avg_ticket": 250.00, "gateway_error_code": "insufficient_funds",
             "card_brand": "elo", "payment_history_score": 0.70,
@@ -216,9 +231,10 @@ class TestFailureClassifierTrained:
             assert "contribution_pct" in feat
             assert "direction" in feat
 
-    def test_shap_readable_not_empty(self):
+    def test_shap_readable_not_empty(self, classificador_treinado):
         """Explicação SHAP em texto não é vazia."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 24, "day_of_month": 5, "invoice_amount": 299.90,
             "avg_ticket": 280.00, "gateway_error_code": "insufficient_funds",
             "card_brand": "visa", "payment_history_score": 0.92,
@@ -227,9 +243,10 @@ class TestFailureClassifierTrained:
         })
         assert len(result["shap_explanation"]["readable"]) > 10
 
-    def test_optimal_channel_selected(self):
+    def test_optimal_channel_selected(self, classificador_treinado):
         """Canal ótimo é calculado para todas as opções."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 20, "day_of_month": 10, "invoice_amount": 400.00,
             "avg_ticket": 400.00, "gateway_error_code": "insufficient_funds",
             "card_brand": "visa", "payment_history_score": 0.80,
@@ -241,9 +258,10 @@ class TestFailureClassifierTrained:
         assert "all_channels" in opt
         assert len(opt["all_channels"]) == len(INTERVENTION_COSTS)
 
-    def test_high_recovery_client(self):
+    def test_high_recovery_client(self, classificador_treinado):
         """Cliente fiel com erro técnico deve ter score alto e e-Profit positivo."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 36, "day_of_month": 5, "invoice_amount": 199.90,
             "avg_ticket": 200.00, "gateway_error_code": "processing_error",
             "card_brand": "visa", "payment_history_score": 0.95,
@@ -254,9 +272,10 @@ class TestFailureClassifierTrained:
         assert result["eprofit"] > 0
         assert result["recommend_action"] is True
 
-    def test_negative_eprofit_no_action(self):
+    def test_negative_eprofit_no_action(self, classificador_treinado):
         """e-Profit negativo com ligação CS (custo alto) → não recomendar."""
-        result = self.clf.predict({
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
             "tenure_months": 1, "day_of_month": 22, "invoice_amount": 49.90,
             "avg_ticket": 49.90, "gateway_error_code": "do_not_honor",
             "card_brand": "hipercard", "payment_history_score": 0.20,
@@ -275,20 +294,18 @@ class TestFailureClassifierTrained:
 class TestPersistence:
     """Testes de salvar e carregar modelos."""
 
-    @classmethod
-    def setup_class(cls):
-        cls.clf = FailureClassifier()
-        cls.clf.train(n_samples=500)
-
-    def test_models_saved_on_disk(self):
+    def test_models_saved_on_disk(self, classificador_treinado):
         """Modelos são salvos no disco após treino."""
-        assert (MODELS_DIR / "xgb_failure_classifier.joblib").exists()
-        assert (MODELS_DIR / "rf_failure_classifier.joblib").exists()
-        assert (MODELS_DIR / "label_encoders.joblib").exists()
-        assert (MODELS_DIR / "train_metrics.json").exists()
+        _, _, models_dir = classificador_treinado
+        assert (models_dir / "xgb_failure_classifier.joblib").exists()
+        assert (models_dir / "rf_failure_classifier.joblib").exists()
+        assert (models_dir / "label_encoders.joblib").exists()
+        assert (models_dir / "train_metrics.json").exists()
 
-    def test_load_and_predict(self):
+    def test_load_and_predict(self, classificador_treinado):
         """Modelo carregado do disco produz mesma predição."""
+        clf, _, _ = classificador_treinado
+
         # Predição original
         features = {
             "tenure_months": 12, "day_of_month": 10, "invoice_amount": 200.00,
@@ -297,7 +314,7 @@ class TestPersistence:
             "failure_count_90d": 1, "hour_of_day": 10, "day_of_week": 2,
             "attempt_count": 1, "ltv_estimated": 4800.00,
         }
-        original = self.clf.predict(features)
+        original = clf.predict(features)
 
         # Carregar em nova instância
         clf2 = FailureClassifier()
@@ -307,9 +324,10 @@ class TestPersistence:
         assert original["recovery_score"] == loaded["recovery_score"]
         assert original["p_recovery"] == loaded["p_recovery"]
 
-    def test_audit_logs_created(self):
+    def test_audit_logs_created(self, classificador_treinado):
         """Logs de auditoria SHAP são criados após predição."""
-        self.clf.predict({
+        clf, _, _ = classificador_treinado
+        clf.predict({
             "tenure_months": 6, "day_of_month": 15, "invoice_amount": 300.00,
             "avg_ticket": 300.00, "gateway_error_code": "card_declined",
             "card_brand": "mastercard", "payment_history_score": 0.50,

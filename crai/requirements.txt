@@ -19,8 +19,13 @@ numpy==1.26.4
 pandas==2.2.3
 shap==0.46.0
 joblib==1.4.2
-torch==2.3.1
-prophet==1.3.0
+
+# torch e prophet sao usados no treino dos Modulos 2 e 3 (autoencoder e LSTM).
+# Sem eles, os dois modulos caem no fallback heuristico e o resto roda normal.
+# Para CPU (suficiente para este projeto), instale o torch pelo indice de CPU:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.3
+prophet>=1.1
 
 # ── Pagamentos ────────────────────────────────────────────
 stripe==10.12.0
