@@ -1,12 +1,28 @@
-"""crai/agent/state.py — Schema de estado do agente (churn involuntário)."""
+"""crai/agent/state.py — Schema de estado do agente (churn involuntário).
 
-from typing import TypedDict, Optional
+O pipeline é alimentado por webhooks com regras de retentativa incompatíveis —
+Pix Automático (regulado pelo BACEN) e cartão (backoff livre). `payment_method`
+é o campo que mantém os dois isolados: ele é preenchido na entrada do pipeline,
+antes de qualquer nó de decisão, e é o que a aresta condicional do grafo lê
+para escolher a política.
+
+Desde a Fase 3 só o caminho de Pix Automático tem política ativa; o de cartão
+está preservado, fora do fluxo, em crai/dunning/legacy_card/. O campo continua
+aqui porque é exatamente o ponto de extensão para reativá-lo.
+"""
+
+from typing import TypedDict, Optional, Literal
 from datetime import datetime
+
+# Meio de pagamento de origem do evento. Determina qual política de
+# retentativa o grafo aplica — ver crai/agent/main_agent.py.
+PaymentMethod = Literal["pix_automatico", "card"]
 
 
 class AgentState(TypedDict):
     # Input
-    stripe_event:   dict
+    payment_event:  dict            # evento de origem (Pix normalizado ou Stripe cru)
+    payment_method: PaymentMethod   # preenchido na entrada, nunca inferido depois
     customer_id:    str
     amount:         float
     invoice_id:     str
@@ -35,11 +51,17 @@ class AgentState(TypedDict):
     estrategia:   Optional[str]    # retry_automatico | mensagem_pagamento
     raciocinio:   Optional[list]   # trilha de raciocínio em PT-BR (auditoria)
 
-    # Retentativa (Backoff)
+    # Retentativa — a política aplicada depende de payment_method:
+    #   pix_automatico → PixAutomaticoRetryPolicy (3 tentativas / 7 dias, BACEN)
+    #   card           → nenhuma: a recobrança automática de cartão saiu do
+    #                    pipeline ativo na Fase 3 (ver crai/dunning/legacy_card/)
     retry_count:     int
     next_retry_at:   Optional[datetime]
     retry_exhausted: bool
     recovered:       bool
+
+    # Plano completo de tentativas dentro da janela regulada (só Pix Automático)
+    pix_retry_schedule: Optional[list]
 
     # Dunning (LangGraph + Claude) — mensagem personalizada, sem escalonamento humano
     dunning_sent:     bool

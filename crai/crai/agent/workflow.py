@@ -6,14 +6,20 @@ from .state import AgentState
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
-from ..dunning.smart_backoff import SmartBackoff
+from ..ml.synthetic_data import seed_por_cliente
+from ..dunning.pix_automatico_retry import (
+    MAX_TENTATIVAS as MAX_TENTATIVAS_PIX,
+    PixAutomaticoRetryPolicy,
+)
 from ..dunning.dunning_engine import DunningEngine
 from ..integrations.hubspot_crm import HubSpotCRM
+
+# Não há import de smart_backoff aqui: a retentativa de cartão saiu do pipeline
+# ativo na Fase 3 e vive isolada em crai/dunning/legacy_card/.
 
 _classifier = FailureClassifier()
 _detector   = AnomalyDetector()
 _payday     = PaydayInference()
-_backoff    = SmartBackoff()
 _dunning    = DunningEngine()
 _hubspot    = HubSpotCRM()
 
@@ -22,10 +28,16 @@ _classifier.load()
 _detector.load()
 _payday.load()
 
+# A política de Pix reaproveita o Payday Engine já carregado acima, em vez de
+# instanciar e recarregar o modelo por conta própria.
+_pix_retry = PixAutomaticoRetryPolicy(payday_inference=_payday)
+
 
 async def diagnose_failure(state: AgentState) -> AgentState:
     """Diagnostica causa da falha via ensemble XGBoost+RF com e-Profit e SHAP."""
-    features = _extract_features(state["stripe_event"], state["amount"])
+    features = _extract_features(
+        state["payment_event"], state["amount"], state.get("payment_method", "card"),
+    )
     result = _classifier.predict(features)
 
     shap_readable = result["shap_explanation"].get("readable", "")
@@ -53,7 +65,7 @@ async def diagnose_failure(state: AgentState) -> AgentState:
 
 
 async def check_anomaly(state: AgentState) -> AgentState:
-    result = await _detector.check(state["customer_id"], state["stripe_event"])
+    result = await _detector.check(state["customer_id"], state["payment_event"])
 
     # Anomalia ajusta o score de recuperação para baixo
     if result["is_anomaly"]:
@@ -121,8 +133,22 @@ async def decide_recovery(state: AgentState) -> AgentState:
     score = state.get("recovery_score", 0)
     eprofit = state.get("eprofit", 0.0)
     anomala = state.get("is_anomalous", False)
-    ja_retentou = state.get("retry_count", 0) > 0
-    retentavel = causa in CAUSAS_RETENTAVEIS and not ja_retentou
+    metodo = state.get("payment_method", "card")
+    usadas = state.get("retry_count", 0)
+
+    # Quantas retentativas ainda cabem depende do meio de pagamento:
+    #   pix_automatico → o BACEN concede até 3 na janela de 7 dias, e desistir
+    #                    na primeira jogaria fora tentativas a que o recebedor
+    #                    tem direito. Quem valida o limite exato é a
+    #                    PixAutomaticoRetryPolicy — aqui só evitamos entrar no
+    #                    nó de retentativa quando a janela já acabou.
+    #   cartão         → ZERO: a recobrança automática de cartão saiu do
+    #                    pipeline ativo na Fase 3 (ver crai/dunning/legacy_card/).
+    #                    Um evento de cartão que chegue aqui vai direto para a
+    #                    mensagem personalizada, nunca para uma retentativa.
+    limite = MAX_TENTATIVAS_PIX if metodo == "pix_automatico" else 0
+    ainda_cabe = usadas < limite
+    retentavel = causa in CAUSAS_RETENTAVEIS and ainda_cabe
 
     raciocinio = [
         f"Observação: causa={causa}, score={score}/100, "
@@ -130,8 +156,12 @@ async def decide_recovery(state: AgentState) -> AgentState:
     ]
 
     if retentavel:
-        quando = ("na janela de liquidez prevista (Módulo 3)"
-                  if causa == "insufficient_funds" else "imediatamente")
+        if metodo == "pix_automatico":
+            quando = (f"na janela regulada do BACEN ({usadas}/{MAX_TENTATIVAS_PIX} "
+                      f"tentativas usadas), mirando a liquidez prevista (Módulo 3)")
+        else:
+            quando = ("na janela de liquidez prevista (Módulo 3)"
+                      if causa == "insufficient_funds" else "imediatamente")
         raciocinio.append(
             f"Pensamento: '{causa}' costuma ser resolvido por nova tentativa de "
             f"cobrança {quando} — insistir aqui tem retorno esperado positivo.")
@@ -141,8 +171,12 @@ async def decide_recovery(state: AgentState) -> AgentState:
         if causa not in CAUSAS_RETENTAVEIS:
             motivo = (f"'{causa}' não se resolve por retentativa — o cliente "
                       f"precisa agir (atualizar cartão ou pagar por outro meio)")
+        elif metodo == "pix_automatico":
+            motivo = (f"as {MAX_TENTATIVAS_PIX} tentativas da janela regulada do "
+                      f"BACEN já foram usadas")
         else:
-            motivo = "a retentativa automática já foi tentada e falhou"
+            motivo = ("a recobrança automática de cartão está fora do pipeline "
+                      "ativo [CARTAO-DESATIVADO] — só resta contatar o cliente")
         urgencia = "alta" if (anomala or score < 40) else "normal"
         raciocinio.append(
             f"Pensamento: {motivo}. Contatar com mensagem personalizada; "
@@ -157,15 +191,40 @@ async def decide_recovery(state: AgentState) -> AgentState:
     return {**state, "estrategia": estrategia, "raciocinio": raciocinio}
 
 
-async def schedule_retry(state: AgentState) -> AgentState:
-    attempt = state.get("retry_count", 0)
-    result = _backoff.get_schedule(state["failure_cause"], attempt, state.get("optimal_retry_at"))
-    if result["exhausted"]:
-        print(f"[AGENT] Retentativas esgotadas")
-    else:
-        print(f"[AGENT] Retry agendado: {result['schedule_at'].strftime('%d/%m %H:%M')} ({result.get('strategy')})")
-    return {**state, "next_retry_at": result.get("schedule_at"), "retry_exhausted": result["exhausted"],
-            "retry_count": attempt + 1}
+async def schedule_retry_pix(state: AgentState) -> AgentState:
+    """Retentativa de PIX AUTOMÁTICO — janela regulada pelo BACEN.
+
+    Só é alcançável quando payment_method == "pix_automatico". Nunca chama
+    SmartBackoff: o backoff exponencial estouraria o limite de 3 tentativas
+    dentro dos 7 dias corridos.
+
+    A política devolve o plano completo das tentativas restantes de uma vez, e
+    não uma por execução: são todas instruções de pagamento a reenviar dentro
+    da mesma janela legal. Por isso `retry_count` passa a refletir todas as
+    tentativas comprometidas — um novo evento do mesmo cliente na mesma janela
+    encontra o limite já gasto e cai direto na mensagem personalizada.
+    """
+    usadas = state.get("retry_count", 0)
+    tentativas = await _pix_retry.schedule(
+        customer_id=state["customer_id"],
+        valor_original=state["amount"],
+        tentativas_usadas=usadas,
+    )
+
+    if not tentativas:
+        print("[AGENT] Pix Automático: janela regulada esgotada — sem nova tentativa")
+        return {**state, "next_retry_at": None, "retry_exhausted": True,
+                "pix_retry_schedule": []}
+
+    plano = [
+        {"numero": t.numero, "quando": t.quando, "valor": t.valor, "origem": t.origem}
+        for t in tentativas
+    ]
+    print(f"[AGENT] Pix Automático: {len(plano)} tentativa(s) na janela BACEN | "
+          f"próxima: {tentativas[0].quando.strftime('%d/%m %H:%M')} ({tentativas[0].origem})")
+
+    return {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
+            "retry_count": usadas + len(tentativas), "pix_retry_schedule": plano}
 
 
 async def trigger_dunning(state: AgentState) -> AgentState:
@@ -192,24 +251,68 @@ async def update_roi_dashboard(state: AgentState) -> AgentState:
     return state
 
 
-def _extract_features(event: dict, amount: float) -> dict:
-    """Extrai as 11 features + LTV para o novo classificador."""
-    charge = event.get("data", {}).get("object", {})
-    now = datetime.now()
+# Causa atribuída a uma cobrança recorrente de Pix Automático que falhou.
+# No fluxo do BACEN, as duas janelas automáticas do dia do vencimento já
+# tentaram debitar a conta do pagador; se ambas falharam, a causa dominante é
+# ausência de saldo — que é exatamente o caso em que o Payday Engine agrega.
+CAUSA_PIX_FALHA = "insufficient_funds"
 
-    # Simular tenure e histórico (em produção viriam do banco/CRM)
-    rng = np.random.default_rng(seed=abs(hash(charge.get("customer", ""))) % (2**32))
+
+def _extract_features(event: dict, amount: float, payment_method: str = "card") -> dict:
+    """Extrai as 11 features + LTV para o classificador, conforme a origem do evento."""
+    if payment_method == "pix_automatico":
+        return _features_pix(event, amount)
+    return _features_cartao(event, amount)
+
+
+def _features_cartao(event: dict, amount: float) -> dict:
+    """Features a partir do payload cru do Stripe (cartão)."""
+    charge = event.get("data", {}).get("object", {})
+
+    invoice_amount = charge.get("amount", 0) / 100 if charge.get("amount", 0) > 100 else amount
+    perfil = _perfil_simulado(charge.get("customer", ""), invoice_amount)
+
+    return {
+        **perfil,
+        "gateway_error_code": charge.get("failure_code") or "processing_error",
+        "card_brand": (charge.get("payment_method_details") or {}).get("brand") or "visa",
+        "attempt_count": charge.get("attempt_count", 1),
+    }
+
+
+def _features_pix(event: dict, amount: float) -> dict:
+    """Features a partir do evento JÁ normalizado de Pix Automático.
+
+    O evento normalizado tem só 5 campos e nenhum deles identifica o pagador —
+    a chave Pix nunca chega até aqui. O identificador usado é o da autorização
+    de recorrência, que é opaco.
+    """
+    invoice_amount = event.get("valor") or amount
+    perfil = _perfil_simulado(event.get("id_recorrencia", ""), invoice_amount)
+
+    return {
+        **perfil,
+        "gateway_error_code": CAUSA_PIX_FALHA,
+        # Não existe bandeira em Pix; o encoder trata valor desconhecido.
+        "card_brand": "n/a",
+        # As duas janelas automáticas do dia são do PSP do pagador e não contam
+        # como tentativa do recebedor.
+        "attempt_count": 1,
+    }
+
+
+def _perfil_simulado(chave_cliente: str, invoice_amount: float) -> dict:
+    """Tenure, histórico e LTV do cliente (em produção viriam do banco/CRM)."""
+    now = datetime.now()
+    rng = np.random.default_rng(seed=seed_por_cliente(chave_cliente))
+
     tenure = int(rng.exponential(scale=12))
     payment_history = round(float(np.clip(rng.beta(5, 2), 0, 1)), 3)
     failure_count = int(rng.poisson(1.5))
-
-    invoice_amount = charge.get("amount", 0) / 100 if charge.get("amount", 0) > 100 else amount
     avg_ticket = round(invoice_amount * rng.uniform(0.9, 1.1), 2)
     ltv = round(max(invoice_amount, tenure * avg_ticket * 0.9 / 12), 2)
 
     return {
-        "gateway_error_code": charge.get("failure_code") or "processing_error",
-        "card_brand": (charge.get("payment_method_details") or {}).get("brand") or "visa",
         "tenure_months": tenure,
         "day_of_month": now.day,
         "invoice_amount": invoice_amount,
@@ -218,6 +321,5 @@ def _extract_features(event: dict, amount: float) -> dict:
         "failure_count_90d": failure_count,
         "hour_of_day": now.hour,
         "day_of_week": now.weekday(),
-        "attempt_count": charge.get("attempt_count", 1),
         "ltv_estimated": ltv,
     }

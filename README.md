@@ -14,7 +14,7 @@ PMEs de SaaS no Brasil perdem entre **5% a 12% do MRR** mensalmente com churn in
 
 ## A Solução
 
-O CRAI é um **agente autônomo** que:
+O CRAI é um **agente autônomo** que cobra via **Pix Automático** e:
 
 1. **Diagnostica** a causa raiz de cada falha de pagamento (XGBoost + Random Forest)
 2. **Detecta anomalias** no comportamento do cliente (Autoencoder PyTorch)
@@ -45,7 +45,7 @@ Recomenda intervenção **somente se e-Profit > 0**, evitando gastar R$15 numa l
 │  (pagamento falhou) │  (cliente em risco)                      │
 ├─────────────────────┼───────────────────────────────────────────┤
 │                     │                                           │
-│  Stripe Webhook     │  Segment SDK (evento comportamental)     │
+│  Webhook Pix Autom. │  Segment SDK (evento comportamental)     │
 │       │             │       │                                   │
 │       ▼             │       ▼                                   │
 │  ┌──────────┐       │  ┌──────────┐                            │
@@ -66,10 +66,15 @@ Recomenda intervenção **somente se e-Profit > 0**, evitando gastar R$15 numa l
 │  └────┬─────┘       │  │(execução)│                            │
 │       ▼             │  └────┬─────┘                            │
 │  ┌──────────┐       │       ▼                                   │
-│  │ Dunning  │       │  ┌──────────┐                            │
-│  │ Engine   │       │  │ Track    │                            │
-│  │(LangGraph│       │  │ Outcome  │                            │
-│  │ + LLM)   │       │  └────┬─────┘                            │
+│  │Retry BACEN│      │  ┌──────────┐                            │
+│  │3x / 7 dias│      │  │ Track    │                            │
+│  └────┬─────┘       │  │ Outcome  │                            │
+│       ▼             │  └────┬─────┘                            │
+│  ┌──────────┐       │       │                                   │
+│  │ Dunning  │       │       │                                   │
+│  │ Engine   │       │       │                                   │
+│  │(LangGraph│       │       │                                   │
+│  │ + LLM)   │       │       │                                   │
 │  └────┬─────┘       │       │                                   │
 │       │             │       │                                   │
 ├───────┴─────────────┴───────┴───────────────────────────────────┤
@@ -91,7 +96,9 @@ Recomenda intervenção **somente se e-Profit > 0**, evitando gastar R$15 numa l
 | **XAI** | SHAP (TreeExplainer) | Explicabilidade por predição com log de auditoria JSON |
 | **Agente** | LangGraph | Orquestração multi-etapa com raciocínio em loop |
 | **LLM** | Claude API (Anthropic) | Geração de mensagens personalizadas por canal |
-| **API** | FastAPI | Webhooks Stripe/Segment + endpoints de simulação |
+| **Pagamentos** | Pix Automático (PSP) | Cobrança recorrente com retentativa regulada pelo BACEN |
+| **Segurança** | HMAC + Fernet | Assinatura dos webhooks + cifragem da chave Pix |
+| **API** | FastAPI | Webhooks Pix/Stripe/Segment + endpoints de simulação |
 | **CRM** | HubSpot API | Espelhamento automático de ciclos de recuperação/retenção |
 | **Dados** | NumPy + Pandas | Dataset sintético com distribuições do mercado BR |
 
@@ -160,7 +167,63 @@ Treino via `PaydayInference.train()` — gera as séries de liquidez sintéticas
 
 Os posteriores nascem do warm start da simulação de 6.000 rodadas e evoluem em produção a cada aceite/recusa, persistidos em `crai/models/bandit_state.json`. Na simulação: **+R$199 mil** vs o epsilon-greedy anterior, regret 40% menor, 87% de escolhas ótimas ao final.
 
-### 5. Agente LangGraph (`agent/` + `dunning/`)
+### 5. Pix Automático — cobrança e retentativa regulada (`integrations/` + `dunning/`)
+
+O sistema de cobrança novo é **exclusivamente Pix Automático**. Cartão continua entrando pelo webhook do Stripe, mas os dois caminhos são isolados no grafo (ver abaixo).
+
+**Camada de adaptação de PSP** (`integrations/payment_gateway.py`): a interface `PaymentGatewayAdapter` normaliza o evento de qualquer PSP para um schema fechado, o que permite trocar Iugu por Pagar.me sem tocar em `agent/` nem em `ml/`. O `parse_card_event` existe na interface mas levanta `NotImplementedError` — cartão é roadmap futuro.
+
+O schema normalizado tem **exatamente cinco campos**:
+
+```
+e2e_id | valor | status | ispb_pagador | id_recorrencia
+```
+
+A **chave Pix do pagador** (CPF/telefone/e-mail) nunca entra nele. Quando precisa ser guardada para conciliação, vai cifrada com Fernet (`security/tokenization.py`) para um arquivo segregado, sem nenhum caminho de código até `ml/` ou `agent/`. Sem `CRAI_ENCRYPTION_KEY` no ambiente, o arquivamento **falha** em vez de gravar em texto puro.
+
+**Retentativa regulada** (`dunning/pix_automatico_retry.py`): o Pix Automático não admite backoff livre. O BACEN define que, no dia do vencimento, há duas janelas automáticas geridas pelo PSP do pagador (00h-08h e 18h-21h, sem ação da CRAI); se ambas falharem, o recebedor tem direito a **no máximo 3 novas tentativas em 7 dias corridos**, cada uma pelo **valor original**.
+
+Dentro dessas restrições sobra uma decisão de otimização — *quando* usar as 3 tentativas — e é aí que o Módulo 3 entra:
+
+| Situação | Estratégia |
+|----------|-----------|
+| Previsão de liquidez com confiança ≥ 0.60 e dentro da janela | Tentativas concentradas a partir do dia previsto |
+| Previsão fraca, cliente novo, ou liquidez só depois do prazo | Fallback uniforme pelos dias restantes (mínimo 1 dia de intervalo) |
+
+Violar qualquer um dos três limites levanta `PixRetryPolicyViolation` — a política falha alto em vez de corrigir em silêncio. Cada agendamento é logado com prefixo `[PIX-RETRY]`, indicando qual das duas estratégias foi usada.
+
+#### Decisão de arquitetura: recobrança de cartão fora do pipeline ativo
+
+As duas políticas de retentativa são **incompatíveis por natureza**:
+
+| | Cartão | Pix Automático |
+|---|--------|----------------|
+| Teto de tentativas | nenhum | 3, por lei |
+| Espaçamento | backoff exponencial + jitter | dentro de 7 dias corridos |
+| Valor | livre | sempre o original |
+
+Manter as duas vivas no mesmo grafo significaria sustentar indefinidamente uma superfície onde um erro de roteamento aplicaria a política errada — e o erro na direção cartão → Pix é uma **violação regulatória**, não um bug de conveniência.
+
+Como o sistema de cobrança desta fase é exclusivamente Pix Automático e o cartão **não está em uso real**, a recobrança automática de cartão foi retirada do pipeline ativo. O grafo tem hoje um único caminho de retentativa:
+
+```
+decide_recovery ─┬─ payment_method == "pix_automatico" → schedule_retry_pix  (3 tentativas / 7 dias)
+                 └─ qualquer outro caso               → trigger_dunning
+```
+
+**O que isso não é:** não é remoção de código. `crai/dunning/legacy_card/` preserva `smart_backoff.py` e o nó `schedule_retry_card` íntegros, com o caminho de reativação documentado no `__init__.py` do pacote. O campo `payment_method` continua no `AgentState` e a aresta condicional continua lendo ele — é exatamente onde um nó de cartão volta a ser plugado.
+
+**O que continua funcionando:** `/webhooks/stripe` segue no ar com a validação de assinatura HMAC da Fase 1. Toda falha de cartão é recebida e **registrada** com o prefixo `[CARTAO-DESATIVADO]`, nunca descartada em silêncio:
+
+```
+[CARTAO-DESATIVADO] cus_joao_002 | fatura inv_cus_joao_002 | R$ 149.00 — evento
+registrado, recobrança automática de cartão fora do pipeline ativo
+(aguardando reimplementação; ver crai/dunning/legacy_card/)
+```
+
+`tests/test_payment_isolation.py` trava esse estado: valida que o evento de cartão é registrado e logado sem retentativa, que o grafo não tem mais nó de cartão, que nenhum módulo ativo importa `SmartBackoff`, e que o código isolado continua funcional.
+
+### 6. Agente LangGraph (`agent/` + `dunning/`)
 
 Orquestração multi-etapa com **raciocínio (ReAct)** sobre o contexto acumulado:
 - Avalia a situação com contexto ML + SHAP + anomaly score + payday
@@ -199,10 +262,18 @@ crai/
 │   │
 │   ├── dunning/                        # Motor de cobrança inteligente
 │   │   ├── dunning_engine.py           # LangGraph + Claude API (multicanal)
-│   │   └── smart_backoff.py            # Backoff exponencial + jitter
+│   │   ├── pix_automatico_retry.py     # Janela regulada BACEN (3 tentativas / 7 dias)
+│   │   └── legacy_card/                # Cartão: preservado, fora do fluxo ativo
+│   │       ├── smart_backoff.py        # Backoff exponencial + jitter
+│   │       └── card_retry.py           # Nó de retentativa de cartão (inativo)
 │   │
 │   ├── integrations/                   # Integrações externas
+│   │   ├── payment_gateway.py          # Adapter de PSP → schema normalizado de Pix
 │   │   └── hubspot_crm.py             # CRM com 2 pipelines (recovery + retention)
+│   │
+│   ├── security/                       # Fronteira de confiança
+│   │   ├── webhook_verification.py     # HMAC dos 3 webhooks
+│   │   └── tokenization.py             # Fernet para campos sensíveis
 │   │
 │   └── api/                            # API REST
 │       └── app.py                      # FastAPI: webhooks + simulação
@@ -213,7 +284,11 @@ crai/
 │   ├── test_failure_classifier.py      # Módulo 1: dataset, treino, SHAP, e-Profit
 │   ├── test_anomaly_detector.py        # Módulo 2: dataset, treino, persistência
 │   ├── test_payday_inference.py        # Módulo 3: séries, treino, persistência
-│   └── test_agent_graph.py             # Módulo 5: roteamento do grafo + dunning
+│   ├── test_agent_graph.py             # Módulo 5: roteamento do grafo + dunning
+│   ├── test_webhook_security.py        # HMAC dos webhooks + restrição de ENV
+│   ├── test_payment_gateway.py         # Adapter de Pix + privacidade da chave
+│   ├── test_pix_automatico_retry.py    # Limites do BACEN na retentativa
+│   └── test_payment_isolation.py       # Cartão nunca usa política de Pix (e vice-versa)
 │
 ├── test_pipeline.py                    # Demo: 8 cenários (4 involuntário + 4 voluntário)
 ├── requirements.txt                    # Dependências com versões fixadas
@@ -247,6 +322,8 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Para LLM | Mensagens personalizadas via Claude API |
 | `STRIPE_SECRET_KEY` | Não | Modo simulação funciona sem |
 | `STRIPE_WEBHOOK_SECRET` | Para `/webhooks/stripe` | Valida o header `stripe-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
+| `PIX_WEBHOOK_SECRET` | Para `/webhooks/pix-automatico` | Valida o header `x-pix-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
+| `CRAI_ENCRYPTION_KEY` | Para arquivar chave Pix | Chave Fernet para cifrar a chave Pix do pagador. Sem ela o arquivamento falha em vez de gravar em texto puro |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -339,10 +416,15 @@ uvicorn crai.api.app:app --reload
 **Endpoints de simulação:**
 
 ```bash
-# Churn involuntário
+# Churn involuntário — cartão
 curl -X POST http://localhost:8000/simulate/payment-failed \
   -H "Content-Type: application/json" \
   -d '{"customer_id":"cus_teste","amount":299.90,"failure_code":"insufficient_funds"}'
+
+# Churn involuntário — Pix Automático (cobrança recorrente falhada)
+curl -X POST http://localhost:8000/simulate/pix-falhado \
+  -H "Content-Type: application/json" \
+  -d '{"id_recorrencia":"RN_teste","valor":299.90,"ispb_pagador":"60701190"}'
 
 # Churn voluntário
 curl -X POST http://localhost:8000/simulate/churn-risk \
@@ -438,6 +520,17 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Pix Automático como primeira opção, boleto no fallback
   - [x] Trilha de raciocínio em PT-BR por decisão (auditoria)
   - [x] Testes do grafo (7 casos de roteamento + dunning)
+- [x] **Pix Automático** — cobrança regulada e isolamento de meios de pagamento
+  - [x] `PaymentGatewayAdapter` (ABC) + `PixAutomaticoAdapter` — troca de PSP sem tocar no pipeline
+  - [x] Schema normalizado de 5 campos, sem a chave Pix do pagador
+  - [x] Chave Pix cifrada com Fernet, em arquivo segregado de `ml/` e `agent/`
+  - [x] `PixAutomaticoRetryPolicy` — 3 tentativas / 7 dias, valor original, com o Payday Engine escolhendo os dias
+  - [x] Endpoint `/webhooks/pix-automatico` com HMAC obrigatório
+  - [x] Recobrança automática de cartão retirada do pipeline ativo e isolada em `dunning/legacy_card/`
+  - [x] `/webhooks/stripe` mantido, registrando as falhas com `[CARTAO-DESATIVADO]`
+  - [x] `parse_card_event` reservado para o roadmap — cartão não implementado nesta fase
+  - [x] Demo reprodutível: `hashlib.md5` no lugar do `hash()` randomizado por processo
+- [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)
   - [x] Geradores de dataset dos módulos 2 e 3 portados para `ml/synthetic_data.py`

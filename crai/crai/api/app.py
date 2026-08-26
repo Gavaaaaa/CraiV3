@@ -1,9 +1,15 @@
 """
 crai/api/app.py
-FastAPI — unifica os dois pipelines da CRAI:
-  /webhooks/stripe        → churn involuntário (assinatura HMAC obrigatória)
-  /webhooks/segment       → churn voluntário  (assinatura HMAC obrigatória)
-  /simulate/*             → endpoints de teste, restritos a ENV=development|demo
+FastAPI — unifica os pipelines da CRAI:
+  /webhooks/pix-automatico → churn involuntário via Pix (assinatura obrigatória)
+  /webhooks/stripe         → churn involuntário via cartão (assinatura obrigatória)
+  /webhooks/segment        → churn voluntário  (assinatura obrigatória)
+  /simulate/*              → endpoints de teste, restritos a ENV=development|demo
+
+Os dois webhooks de churn involuntário alimentam o MESMO pipeline
+(_run_involuntary_pipeline), mas cada um marca `payment_method` na entrada do
+state. É esse campo que o grafo lê para escolher a política de retentativa
+correta — ver crai/agent/main_agent.py.
 """
 
 import os
@@ -14,12 +20,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..agent.main_agent import crai_agent
-from ..agent.state import AgentState
+from ..agent.state import AgentState, PaymentMethod
 from ..churn_voluntary.voluntary_agent import voluntary_churn_agent
 from ..churn_voluntary.state import ChurnVoluntaryState
+from ..integrations.payment_gateway import (
+    STATUS_COBRANCA_CONFIRMADA,
+    STATUS_COBRANCA_FALHADA,
+    STATUS_AUTORIZACAO_CONCEDIDA,
+    STATUS_AUTORIZACAO_REVOGADA,
+    PixAutomaticoAdapter,
+)
 from ..security.webhook_verification import (
     verify_stripe_signature,
     verify_segment_signature,
+    verify_pix_automatico_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +45,22 @@ app = FastAPI(title="CRAI", version="2.0.0",
 # "production" (fail closed): esquecer de definir ENV nunca deve deixar um
 # endpoint que dispara pipeline aberto sem autenticação.
 SIMULATION_ENVS = {"development", "demo"}
+
+# Header de assinatura do webhook de Pix Automático (mesmo formato do Stripe:
+# 't=<timestamp>,v1=<hmac>'). O nome varia por PSP; ajustar aqui se necessário.
+PIX_SIGNATURE_HEADER = "x-pix-signature"
+
+# Os 4 eventos de Pix Automático cobertos. Só o último é falha de pagamento e
+# aciona a recuperação; a revogação da autorização é sinal de churn voluntário
+# e fica registrada para o pipeline voluntário consumir no futuro.
+PIX_EVENTO_LABEL = {
+    STATUS_AUTORIZACAO_CONCEDIDA: "autorização de recorrência concedida",
+    STATUS_AUTORIZACAO_REVOGADA:  "autorização revogada pelo pagador",
+    STATUS_COBRANCA_CONFIRMADA:   "cobrança recorrente confirmada",
+    STATUS_COBRANCA_FALHADA:      "cobrança recorrente falhada",
+}
+
+_pix_adapter = PixAutomaticoAdapter()
 
 
 def _client_ip(request: Request) -> str:
@@ -54,10 +84,58 @@ def _require_simulation_env() -> None:
         )
 
 
-# ── Churn Involuntário ───────────────────────────────────────────────────
+# ── Churn Involuntário — Pix Automático ──────────────────────────────────
+
+@app.post("/webhooks/pix-automatico")
+async def pix_automatico_webhook(request: Request) -> JSONResponse:
+    """Recebe os eventos de Pix Automático do PSP.
+
+    Só a cobrança recorrente FALHADA aciona o pipeline de recuperação. Os
+    outros três eventos são registrados: autorização concedida/revogada e
+    cobrança confirmada não são falha de pagamento.
+    """
+    raw = await request.body()
+    if not verify_pix_automatico_signature(
+        raw,
+        request.headers.get(PIX_SIGNATURE_HEADER, ""),
+        os.getenv("PIX_WEBHOOK_SECRET", ""),
+    ):
+        raise _reject_unsigned(request, "pix_automatico")
+
+    evento = await _pix_adapter.parse_pix_event(json.loads(raw))
+    status = evento["status"]
+
+    if status != STATUS_COBRANCA_FALHADA:
+        rotulo = PIX_EVENTO_LABEL.get(status, status)
+        logger.info("[PIX] %s — registrado sem acionar recuperação (recorrencia=%s)",
+                    rotulo, evento["id_recorrencia"])
+        return JSONResponse({"status": "ok", "evento": status, "pipeline": False})
+
+    await _run_involuntary_pipeline(
+        event=evento,
+        payment_method="pix_automatico",
+        # O identificador da autorização de recorrência é opaco: identifica o
+        # contrato de cobrança, não a pessoa. A chave Pix nunca chega aqui.
+        customer_id=evento["id_recorrencia"] or "rec_desconhecida",
+        amount=evento["valor"],
+        invoice_id=evento["e2e_id"] or "e2e_desconhecido",
+    )
+    return JSONResponse({"status": "ok", "evento": status, "pipeline": True})
+
+
+# ── Churn Involuntário — Cartão (recobrança automática desativada) ───────
 
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request) -> JSONResponse:
+    """Recebe falhas de cobrança no cartão — registra, mas não recobra.
+
+    O endpoint segue no ar com a validação de assinatura da Fase 1. Desde a
+    Fase 3, porém, a recobrança automática de cartão está fora do pipeline
+    ativo: o sistema de cobrança da CRAI é exclusivamente Pix Automático, e as
+    duas políticas de retentativa são incompatíveis (ver
+    crai/dunning/legacy_card/). O evento é registrado, nunca descartado em
+    silêncio.
+    """
     payload = await request.body()
     if not verify_stripe_signature(
         payload,
@@ -68,8 +146,12 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
     event = json.loads(payload)
     if event.get("type") == "invoice.payment_failed":
-        await _run_involuntary_pipeline(event)
-    return JSONResponse({"status": "ok"})
+        _registrar_cartao_desativado(event)
+        return JSONResponse({
+            "status": "ok", "pipeline": False,
+            "motivo": "recobranca_automatica_de_cartao_fora_do_pipeline_ativo",
+        })
+    return JSONResponse({"status": "ok", "pipeline": False})
 
 
 class SimulatePayment(BaseModel):
@@ -80,10 +162,39 @@ class SimulatePayment(BaseModel):
 
 @app.post("/simulate/payment-failed")
 async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
+    """Falha de cartão simulada — mesmo tratamento do webhook real: só registra."""
     _require_simulation_env()
-    event = _build_fake_stripe_event(payload)
-    await _run_involuntary_pipeline(event)
-    return JSONResponse({"status": "pipeline_executado", "customer_id": payload.customer_id})
+    _registrar_cartao_desativado(_build_fake_stripe_event(payload))
+    return JSONResponse({
+        "status": "registrado", "pipeline": False,
+        "customer_id": payload.customer_id,
+        "motivo": "recobranca_automatica_de_cartao_fora_do_pipeline_ativo",
+    })
+
+
+class SimulatePixFalha(BaseModel):
+    id_recorrencia: str   = "RN_demo_001"
+    valor:          float = 299.90
+    ispb_pagador:   str   = "60701190"
+
+
+@app.post("/simulate/pix-falhado")
+async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
+    """Cobrança recorrente de Pix Automático que falhou, sem PSP real."""
+    _require_simulation_env()
+    evento = {
+        "e2e_id": f"E{payload.ispb_pagador}{payload.id_recorrencia}",
+        "valor": payload.valor,
+        "status": STATUS_COBRANCA_FALHADA,
+        "ispb_pagador": payload.ispb_pagador,
+        "id_recorrencia": payload.id_recorrencia,
+    }
+    await _run_involuntary_pipeline(
+        event=evento, payment_method="pix_automatico",
+        customer_id=payload.id_recorrencia, amount=payload.valor,
+        invoice_id=evento["e2e_id"],
+    )
+    return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})
 
 
 # ── Churn Voluntário ─────────────────────────────────────────────────────
@@ -136,16 +247,52 @@ async def health():
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-async def _run_involuntary_pipeline(event: dict):
-    invoice = event.get("data", {}).get("object", {})
-    customer_id = invoice.get("customer", "cus_unknown")
-    amount = invoice.get("amount_due", 0) / 100
-    # attempt_count do Stripe conta a cobranca original; retentativas ja feitas = count - 1
-    retries_done = max(0, invoice.get("attempt_count", 1) - 1)
+def _registrar_cartao_desativado(event: dict) -> dict:
+    """Registra uma falha de cartão sem acionar recobrança automática.
 
+    O prefixo [CARTAO-DESATIVADO] existe para deixar explícito, no log e na
+    demo, que o evento chegou e foi reconhecido — o que não aconteceu foi a
+    retentativa, que aguarda a reimplementação descrita no roadmap da Fase 3.
+    """
+    dados = _dados_stripe(event)
+    aviso = (f"[CARTAO-DESATIVADO] {dados['customer_id']} | fatura "
+             f"{dados['invoice_id']} | R$ {dados['amount']:.2f} — evento registrado, "
+             f"recobrança automática de cartão fora do pipeline ativo "
+             f"(aguardando reimplementação; ver crai/dunning/legacy_card/)")
+    print(aviso)
+    logger.warning(aviso)
+    return dados
+
+
+def _dados_stripe(event: dict) -> dict:
+    """Extrai do payload do Stripe os campos de entrada do pipeline."""
+    invoice = event.get("data", {}).get("object", {})
+    return {
+        "customer_id": invoice.get("customer", "cus_unknown"),
+        "amount": invoice.get("amount_due", 0) / 100,
+        "invoice_id": invoice.get("id", "inv_unknown"),
+        # attempt_count do Stripe conta a cobranca original; retentativas ja feitas = count - 1
+        "retries_done": max(0, invoice.get("attempt_count", 1) - 1),
+    }
+
+
+async def _run_involuntary_pipeline(
+    event: dict,
+    payment_method: PaymentMethod,
+    customer_id: str,
+    amount: float,
+    invoice_id: str,
+    retries_done: int = 0,
+) -> None:
+    """Monta o state inicial e roda o grafo de churn involuntário.
+
+    `payment_method` é preenchido AQUI, na entrada, antes de qualquer nó de
+    decisão — é o que permite ao grafo escolher a política de retentativa certa
+    sem nunca precisar inferir a origem do evento depois.
+    """
     initial: AgentState = {
-        "stripe_event": event, "customer_id": customer_id,
-        "invoice_id": invoice.get("id", "inv_unknown"), "amount": amount,
+        "payment_event": event, "payment_method": payment_method,
+        "customer_id": customer_id, "invoice_id": invoice_id, "amount": amount,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
@@ -153,7 +300,8 @@ async def _run_involuntary_pipeline(event: dict):
         "optimal_retry_at": None,
         "estrategia": None, "raciocinio": None,
         "confidence": None, "profile_type": None, "retry_count": retries_done, "next_retry_at": None,
-        "retry_exhausted": False, "recovered": False, "dunning_sent": False,
+        "retry_exhausted": False, "recovered": False, "pix_retry_schedule": None,
+        "dunning_sent": False,
         "channel": None, "metodo_pagamento": None, "message_sent": None,
     }
     config = {"configurable": {"thread_id": customer_id}}

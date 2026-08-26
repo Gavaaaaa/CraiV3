@@ -12,6 +12,9 @@ crai/models/
 # Logs de auditoria SHAP (regeneraveis)
 crai/logs/
 
+# Chaves Pix cifradas (conciliacao financeira) — nunca versionar
+crai/vault/
+
 # Ambiente
 .env
 .env.*

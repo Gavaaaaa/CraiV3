@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from .synthetic_data import generate_liquidity_series
+from .synthetic_data import generate_liquidity_series, seed_por_cliente
 
 try:
     import torch
@@ -528,7 +528,7 @@ class PaydayInference:
         Simulação determinística por customer_id, com as mesmas âncoras de
         pagamento BR usadas no treino (CLT 50%, PJ 30%, freelancer 20%).
         """
-        rng = np.random.default_rng(seed=abs(hash(customer_id)) % (2**32))
+        rng = np.random.default_rng(seed=seed_por_cliente(customer_id))
         profile = rng.choice(PROFILES, p=[0.50, 0.30, 0.20])
 
         hoje = pd.Timestamp(datetime.now().date())
@@ -598,7 +598,7 @@ class PaydayInference:
         }
 
     async def _fetch_history(self, customer_id: str) -> list:
-        rng = np.random.default_rng(seed=abs(hash(customer_id)) % (2**32))
+        rng = np.random.default_rng(seed=seed_por_cliente(customer_id))
         base = rng.uniform(500, 5000)
         noise = rng.normal(0, base * 0.05, 30)
         return [

@@ -51,8 +51,8 @@ def client(monkeypatch):
 
     chamadas = []
 
-    async def fake_involuntary(event):
-        chamadas.append(("involuntary", event))
+    async def fake_involuntary(event, payment_method="card", **kwargs):
+        chamadas.append(("involuntary", payment_method))
 
     async def fake_voluntary(user_id, event, props):
         chamadas.append(("voluntary", user_id))
@@ -75,10 +75,17 @@ class TestStripeWebhook:
                         headers={"stripe-signature": stripe_header(STRIPE_PAYLOAD)})
         assert r.status_code == 200
 
-    def test_assinatura_valida_dispara_pipeline(self, client):
-        client.post("/webhooks/stripe", content=STRIPE_PAYLOAD,
-                    headers={"stripe-signature": stripe_header(STRIPE_PAYLOAD)})
-        assert [c[0] for c in client.pipeline_calls] == ["involuntary"]
+    def test_assinatura_valida_registra_sem_recobrar(self, client):
+        """Fase 3: cartão passa pela porta, mas não entra no pipeline.
+
+        A recobrança automática de cartão saiu do fluxo ativo — o evento é
+        registrado com [CARTAO-DESATIVADO]. Ver tests/test_payment_isolation.py.
+        """
+        r = client.post("/webhooks/stripe", content=STRIPE_PAYLOAD,
+                        headers={"stripe-signature": stripe_header(STRIPE_PAYLOAD)})
+        assert r.status_code == 200
+        assert r.json()["pipeline"] is False
+        assert client.pipeline_calls == []
 
     def test_assinatura_invalida_rejeita_401(self, client):
         r = client.post("/webhooks/stripe", content=STRIPE_PAYLOAD,
@@ -211,7 +218,9 @@ class TestSimulateEnvGate:
         monkeypatch.setenv("ENV", "development")
         r = client.post("/simulate/payment-failed", json={"customer_id": "cus_dev"})
         assert r.status_code == 200
-        assert [c[0] for c in client.pipeline_calls] == ["involuntary"]
+        # Cartão só é registrado desde a Fase 3 — o gate de ambiente é o que
+        # está sob teste aqui, não o pipeline.
+        assert r.json()["status"] == "registrado"
 
     def test_liberado_em_demo(self, client, monkeypatch):
         monkeypatch.setenv("ENV", "demo")

@@ -6,6 +6,7 @@ Funciona em modo simulação se HUBSPOT_TOKEN não estiver definido —
 não quebra o pipeline durante desenvolvimento.
 """
 
+import hashlib
 import os
 import logging
 from datetime import datetime
@@ -56,7 +57,10 @@ class HubSpotCRM:
         full_props = {"dealname": name, "pipeline": pipeline, "dealstage": DEAL_STAGES.get(stage, stage), **props}
         if self.dry:
             print(f"[HUBSPOT-SIM] Deal criado: {name} | pipeline={pipeline} | stage={stage}")
-            return f"sim_deal_{abs(hash(name)) % 100000}"
+            # md5 e nao hash(): o hash() de string e randomizado por processo,
+            # o que faria o id do deal mudar a cada execucao da demo.
+            digest = hashlib.md5(name.encode()).hexdigest()
+            return f"sim_deal_{int(digest, 16) % 100000}"
         try:
             obj = DealInput(properties=full_props)
             result = self.client.crm.deals.basic_api.create(simple_public_object_input_for_create=obj)

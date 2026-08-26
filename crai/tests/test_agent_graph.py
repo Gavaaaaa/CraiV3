@@ -16,20 +16,31 @@ from crai.agent.main_agent import route_after_decision
 from crai.dunning.dunning_engine import DunningEngine
 
 
-def _estado(causa, score=60, retry_count=0, anomala=False):
+def _estado(causa, score=60, retry_count=0, anomala=False, payment_method="card"):
     return {
         "failure_cause": causa, "recovery_score": score, "eprofit": 100.0,
         "is_anomalous": anomala, "retry_count": retry_count, "amount": 200.0,
         "customer_id": "cus_test", "p_recovery": score / 100,
+        "payment_method": payment_method,
     }
 
 
 @pytest.mark.asyncio
 async def test_causa_retentavel_vira_retry():
+    """Retentativa automática só existe para Pix Automático (Fase 3)."""
     for causa in ("insufficient_funds", "processing_error"):
-        s = await decide_recovery(_estado(causa))
+        s = await decide_recovery(_estado(causa, payment_method="pix_automatico"))
         assert s["estrategia"] == "retry_automatico", causa
-        assert route_after_decision(s) == "schedule_retry"
+        assert route_after_decision(s) == "schedule_retry_pix"
+
+
+@pytest.mark.asyncio
+async def test_cartao_nunca_vira_retry_automatico():
+    """A recobrança automática de cartão saiu do pipeline ativo na Fase 3."""
+    for causa in ("insufficient_funds", "processing_error"):
+        s = await decide_recovery(_estado(causa, payment_method="card"))
+        assert s["estrategia"] == "mensagem_pagamento", causa
+        assert route_after_decision(s) == "trigger_dunning"
 
 
 @pytest.mark.asyncio
@@ -42,8 +53,10 @@ async def test_causa_nao_retentavel_vira_mensagem():
 
 @pytest.mark.asyncio
 async def test_retry_ja_tentado_nao_reinsiste():
-    # insufficient_funds e retentável, mas se ja tentou, contata o cliente.
-    s = await decide_recovery(_estado("insufficient_funds", retry_count=1))
+    # insufficient_funds e retentável, mas esgotada a janela do BACEN
+    # (3 tentativas), contata o cliente.
+    s = await decide_recovery(_estado("insufficient_funds", retry_count=3,
+                                      payment_method="pix_automatico"))
     assert s["estrategia"] == "mensagem_pagamento"
 
 
@@ -53,7 +66,7 @@ async def test_nenhuma_decisao_aciona_humano():
     for causa in ("insufficient_funds", "expired_card", "card_declined",
                   "do_not_honor", "processing_error", "generic_decline"):
         s = await decide_recovery(_estado(causa, retry_count=2))
-        assert route_after_decision(s) in ("schedule_retry", "trigger_dunning")
+        assert route_after_decision(s) in ("schedule_retry_pix", "trigger_dunning")
         assert "humano" not in " ".join(s["raciocinio"]).lower()
 
 
