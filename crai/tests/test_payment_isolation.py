@@ -1,0 +1,239 @@
+"""
+tests/test_payment_isolation.py — Isolamento cartão x Pix Automático (Fase 3).
+
+**A cláusula de remoção do cartão FOI acionada.** A recobrança automática de
+cartão saiu do pipeline ativo e está preservada, isolada, em
+`crai/dunning/legacy_card/`. Por isso este arquivo não valida a coexistência de
+duas políticas de retentativa, e sim que só existe uma:
+
+    evento Pix    → PixAutomaticoRetryPolicy (3 tentativas / 7 dias, BACEN)
+    evento cartão → apenas registrado e logado com [CARTAO-DESATIVADO],
+                    sem nenhuma tentativa de retentativa automática
+
+Por que isso importa: as duas políticas são incompatíveis por natureza. O
+backoff exponencial do cartão não tem teto de tentativas; aplicá-lo a uma
+cobrança Pix violaria o limite regulatório. Com cartão fora do fluxo ativo, essa
+superfície de erro deixa de existir — e os testes abaixo travam esse estado.
+"""
+
+import hashlib
+import hmac
+import json
+import time
+from datetime import datetime, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from crai.agent import workflow as workflow_module
+from crai.agent.main_agent import build_crai_graph, route_after_decision
+from crai.agent.workflow import decide_recovery, schedule_retry_pix
+from crai.api import app as app_module
+
+VALOR = 299.90
+STRIPE_SECRET = "whsec_teste_fase3"
+
+
+def _estado(payment_method, causa="insufficient_funds", retry_count=0):
+    """State mínimo para os nós de decisão e retentativa."""
+    return {
+        "payment_event": {}, "payment_method": payment_method,
+        "customer_id": "RN_teste" if payment_method == "pix_automatico" else "cus_teste",
+        "invoice_id": "inv_1", "amount": VALOR,
+        "failure_cause": causa, "recovery_score": 60, "p_recovery": 0.6,
+        "eprofit": 100.0, "recommend_action": True, "is_anomalous": False,
+        "optimal_retry_at": None, "estrategia": "retry_automatico",
+        "retry_count": retry_count, "next_retry_at": None,
+        "retry_exhausted": False, "recovered": False, "pix_retry_schedule": None,
+    }
+
+
+class EspiaoPixPolicy:
+    """Espião na política de Pix — registra qualquer uso da janela regulada."""
+
+    def __init__(self):
+        self.chamadas = []
+
+    async def schedule(self, customer_id, valor_original, **kwargs):
+        self.chamadas.append((customer_id, valor_original))
+        return []
+
+
+def stripe_header(payload: bytes, secret: str = STRIPE_SECRET) -> str:
+    timestamp = int(time.time())
+    assinatura = hmac.new(secret.encode(), f"{timestamp}.".encode() + payload,
+                          hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={assinatura}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CARTÃO: SÓ REGISTRO, NENHUMA RETENTATIVA
+# ══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def client(monkeypatch):
+    """Client com o secret do Stripe e o pipeline espionado."""
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", STRIPE_SECRET)
+    monkeypatch.setenv("ENV", "development")
+
+    chamadas = []
+
+    async def fake_involuntary(event, payment_method="card", **kwargs):
+        chamadas.append(payment_method)
+
+    monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
+
+    with TestClient(app_module.app) as c:
+        c.pipeline_calls = chamadas
+        yield c
+
+
+STRIPE_PAYLOAD = json.dumps({
+    "id": "evt_1", "type": "invoice.payment_failed",
+    "data": {"object": {"id": "inv_1", "customer": "cus_1", "amount_due": 29990,
+                        "failure_code": "insufficient_funds", "attempt_count": 1}},
+}).encode()
+
+
+class TestCartaoApenasRegistrado:
+    """O evento de cartão chega, é reconhecido, e para por aí."""
+
+    def test_webhook_stripe_nao_aciona_pipeline(self, client):
+        r = client.post("/webhooks/stripe", content=STRIPE_PAYLOAD,
+                        headers={"stripe-signature": stripe_header(STRIPE_PAYLOAD)})
+
+        assert r.status_code == 200
+        assert r.json()["pipeline"] is False
+        assert client.pipeline_calls == [], "evento de cartão entrou no pipeline"
+
+    def test_webhook_stripe_loga_com_prefixo_cartao_desativado(self, client, capsys):
+        client.post("/webhooks/stripe", content=STRIPE_PAYLOAD,
+                    headers={"stripe-signature": stripe_header(STRIPE_PAYLOAD)})
+
+        saida = capsys.readouterr().out
+        assert "[CARTAO-DESATIVADO]" in saida
+        # O registro identifica a cobrança, para não se perder.
+        assert "cus_1" in saida and "299.90" in saida
+
+    def test_webhook_stripe_continua_exigindo_assinatura(self, client):
+        """A validação de assinatura da Fase 1 permanece ativa."""
+        r = client.post("/webhooks/stripe", content=STRIPE_PAYLOAD)
+        assert r.status_code == 401
+
+    def test_simulate_payment_failed_tambem_so_registra(self, client, capsys):
+        r = client.post("/simulate/payment-failed", json={"customer_id": "cus_demo"})
+
+        assert r.status_code == 200
+        assert r.json()["pipeline"] is False
+        assert client.pipeline_calls == []
+        assert "[CARTAO-DESATIVADO]" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_cartao_no_grafo_nunca_pede_retentativa(self):
+        """Se um evento de cartão chegar ao nó de decisão, vira mensagem."""
+        s = await decide_recovery(_estado("card"))
+        assert s["estrategia"] == "mensagem_pagamento"
+        assert route_after_decision(s) == "trigger_dunning"
+
+    @pytest.mark.asyncio
+    async def test_raciocinio_explica_que_cartao_esta_desativado(self):
+        s = await decide_recovery(_estado("card"))
+        assert "[CARTAO-DESATIVADO]" in " ".join(s["raciocinio"])
+
+    def test_router_manda_cartao_para_dunning_mesmo_forcado(self):
+        """Defesa em profundidade: state forjado pedindo retry não retenta."""
+        forcado = {"estrategia": "retry_automatico", "payment_method": "card"}
+        assert route_after_decision(forcado) == "trigger_dunning"
+
+    def test_payment_method_ausente_tambem_nao_retenta(self):
+        assert route_after_decision({"estrategia": "retry_automatico"}) == "trigger_dunning"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PIX: A ÚNICA POLÍTICA DE RETENTATIVA ATIVA
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestPixEhOUnicoCaminhoDeRetentativa:
+
+    @pytest.mark.asyncio
+    async def test_evento_pix_usa_a_politica_regulada(self, monkeypatch):
+        espiao = EspiaoPixPolicy()
+        monkeypatch.setattr(workflow_module, "_pix_retry", espiao)
+
+        await schedule_retry_pix(_estado("pix_automatico"))
+        assert len(espiao.chamadas) == 1
+
+    @pytest.mark.asyncio
+    async def test_pix_no_grafo_chega_ao_no_de_retentativa(self):
+        s = await decide_recovery(_estado("pix_automatico"))
+        assert s["estrategia"] == "retry_automatico"
+        assert route_after_decision(s) == "schedule_retry_pix"
+
+    @pytest.mark.asyncio
+    async def test_janela_esgotada_marca_retry_exhausted(self, monkeypatch):
+        """Sem tentativa disponível, o grafo segue para a mensagem personalizada."""
+        monkeypatch.setattr(workflow_module, "_pix_retry", EspiaoPixPolicy())
+        resultado = await schedule_retry_pix(_estado("pix_automatico", retry_count=3))
+
+        assert resultado["retry_exhausted"] is True
+        assert resultado["next_retry_at"] is None
+        assert resultado["pix_retry_schedule"] == []
+
+    @pytest.mark.asyncio
+    async def test_plano_de_tentativas_vai_para_o_state(self, monkeypatch):
+        """O plano completo fica no state, para auditoria e para o CRM."""
+        class PixComPlano:
+            async def schedule(self, customer_id, valor_original, **kwargs):
+                from crai.dunning.pix_automatico_retry import TentativaAgendada
+                base = datetime.now() + timedelta(days=1)
+                return [
+                    TentativaAgendada(1, base, valor_original, "payday_engine"),
+                    TentativaAgendada(2, base + timedelta(days=1), valor_original, "payday_engine"),
+                ]
+
+        monkeypatch.setattr(workflow_module, "_pix_retry", PixComPlano())
+        resultado = await schedule_retry_pix(_estado("pix_automatico"))
+
+        assert len(resultado["pix_retry_schedule"]) == 2
+        assert resultado["retry_exhausted"] is False
+        assert resultado["next_retry_at"] == resultado["pix_retry_schedule"][0]["quando"]
+        assert resultado["retry_count"] == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# O CÓDIGO DE CARTÃO ESTÁ ISOLADO, NÃO DELETADO
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestLegacyCardIsolado:
+    """A cláusula de remoção mandava isolar, não apagar."""
+
+    def test_smart_backoff_continua_existindo_no_legacy(self):
+        from crai.dunning.legacy_card.smart_backoff import SmartBackoff
+
+        agendamento = SmartBackoff().get_schedule("insufficient_funds", 0)
+        assert agendamento["exhausted"] is False
+
+    def test_no_de_retentativa_de_cartao_preservado(self):
+        from crai.dunning.legacy_card.card_retry import schedule_retry_card
+
+        assert callable(schedule_retry_card)
+
+    def test_pipeline_ativo_nao_importa_legacy_card(self):
+        """Nenhum módulo do fluxo ativo depende do pacote isolado."""
+        import crai.agent.main_agent
+        import crai.agent.workflow
+        import crai.api.app
+        import crai.dunning.dunning_engine
+
+        for modulo in (crai.agent.workflow, crai.agent.main_agent,
+                       crai.api.app, crai.dunning.dunning_engine):
+            fonte = modulo.__dict__
+            assert not any("legacy_card" in str(v) for v in fonte.get("__builtins__", {}) or {})
+            assert "SmartBackoff" not in fonte, (
+                f"{modulo.__name__} ainda referencia SmartBackoff")
+
+    def test_grafo_nao_tem_mais_no_de_cartao(self):
+        nos = set(build_crai_graph().get_graph().nodes)
+        assert "schedule_retry_pix" in nos
+        assert "schedule_retry_card" not in nos
+        assert "schedule_retry" not in nos

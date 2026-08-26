@@ -21,7 +21,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from .synthetic_data import BEHAVIORAL_FEATURES, generate_behavioral_dataset
+from .synthetic_data import (
+    BEHAVIORAL_FEATURES,
+    generate_behavioral_dataset,
+    seed_por_cliente,
+)
 
 try:
     import torch
@@ -374,7 +378,7 @@ class AnomalyDetector:
         Determinístico por customer_id: ~15% dos clientes exibem o padrão
         degradado (queda de uso, fricção alta) usado no treino como anomalia.
         """
-        rng = np.random.default_rng(seed=abs(hash(customer_id)) % (2**32))
+        rng = np.random.default_rng(seed=seed_por_cliente(customer_id))
         degradado = rng.uniform() < 0.15
 
         seats = int(np.clip(rng.poisson(lam=15), 1, 200))

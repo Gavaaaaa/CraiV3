@@ -1,9 +1,15 @@
 """
 test_pipeline.py
-Testa os DOIS pipelines da CRAI sem precisar de Stripe, Segment ou HubSpot reais:
+Testa os pipelines da CRAI sem precisar de PSP, Stripe, Segment ou HubSpot reais:
 
-  1. Churn Involuntário — 4 cenários de falha de pagamento
-  2. Churn Voluntário   — 4 cenários de risco de cancelamento
+  1. Churn Involuntário — Pix Automático : 3 cenários da janela regulada (BACEN)
+  2. Churn Involuntário — cartão         : 2 cenários de registro sem recobrança
+  3. Churn Voluntário                    : 4 cenários de risco de cancelamento
+
+Desde a Fase 3, a recobrança automática de cartão está fora do pipeline ativo
+(ver crai/dunning/legacy_card/). Os cenários de cartão existem para demonstrar
+que o evento continua sendo recebido e registrado, com prefixo
+[CARTAO-DESATIVADO], em vez de descartado em silêncio.
 
 Uso:
     python test_pipeline.py
@@ -17,6 +23,7 @@ load_dotenv()
 
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
+from crai.api.app import _registrar_cartao_desativado
 from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
 from crai.churn_voluntary.state import ChurnVoluntaryState
 
@@ -35,27 +42,44 @@ def make_stripe_event(customer_id, amount, failure_code):
     }
 
 
-async def run_involuntary_scenario(name, customer_id, amount, failure_code, attempt_count=1):
-    print(f"\n{'═'*64}\n  CHURN INVOLUNTÁRIO — {name}\n  {customer_id} | R$ {amount:.2f} | {failure_code}\n{'═'*64}")
+def run_card_scenario(name, customer_id, amount, failure_code):
+    """Cartão: o evento é recebido e registrado, sem recobrança automática."""
+    print(f"\n{'═'*64}\n  CARTÃO (RECOBRANÇA DESATIVADA) — {name}\n"
+          f"  {customer_id} | R$ {amount:.2f} | {failure_code}\n{'═'*64}")
+    return _registrar_cartao_desativado(make_stripe_event(customer_id, amount, failure_code))
 
-    event = make_stripe_event(customer_id, amount, failure_code)
-    event["data"]["object"]["attempt_count"] = attempt_count
-    retries_done = max(0, attempt_count - 1)
+
+# ── Churn Involuntário via Pix Automático ────────────────────────────────
+
+async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
+    print(f"\n{'═'*64}\n  CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}\n"
+          f"  {id_recorrencia} | R$ {valor:.2f} | cobrança recorrente falhada\n{'═'*64}")
+
+    # Evento já normalizado pelo PixAutomaticoAdapter: 5 campos, sem chave Pix.
+    evento = {
+        "e2e_id": f"E60701190{id_recorrencia}",
+        "valor": valor,
+        "status": "cobranca_falhada",
+        "ispb_pagador": "60701190",
+        "id_recorrencia": id_recorrencia,
+    }
 
     initial: AgentState = {
-        "stripe_event": event,
-        "customer_id": customer_id, "invoice_id": f"inv_{customer_id}", "amount": amount,
+        "payment_event": evento, "payment_method": "pix_automatico",
+        "customer_id": id_recorrencia, "invoice_id": evento["e2e_id"], "amount": valor,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
         "is_anomalous": None, "reconstruction_error": None, "anomaly_explanation": None,
         "optimal_retry_at": None,
         "estrategia": None, "raciocinio": None,
-        "confidence": None, "profile_type": None, "retry_count": retries_done, "next_retry_at": None,
-        "retry_exhausted": False, "recovered": False, "dunning_sent": False,
+        "confidence": None, "profile_type": None,
+        "retry_count": tentativas_usadas, "next_retry_at": None,
+        "retry_exhausted": False, "recovered": False, "pix_retry_schedule": None,
+        "dunning_sent": False,
         "channel": None, "metodo_pagamento": None, "message_sent": None,
     }
-    config = {"configurable": {"thread_id": customer_id}}
+    config = {"configurable": {"thread_id": id_recorrencia}}
     return await crai_agent.ainvoke(initial, config)
 
 
@@ -82,17 +106,23 @@ async def main():
     if not os.getenv("HUBSPOT_TOKEN"):
         print("⚠️  HUBSPOT_TOKEN não definida — HubSpot rodará em modo simulação\n")
 
-    # ── Cenários de churn involuntário ──────────────────────────────────
-    involuntary_scenarios = [
-        ("Saldo Insuficiente", "cus_maria_001", 299.90, "insufficient_funds"),
-        ("Cartão Expirado",    "cus_joao_002",  149.00, "expired_card"),
-        ("Bloqueio Bancário",  "cus_pedro_003", 599.00, "card_declined"),
-        ("Erro Técnico",       "cus_ana_004",    99.90, "processing_error"),
+    # ── Cenários de Pix Automático (janela regulada BACEN) ──────────────
+    pix_scenarios = [
+        ("Primeira falha — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0),
+        ("Já usou 2 das 3 tentativas",                "RN_joao_002",  149.00, 2),
+        ("Janela esgotada — 3 de 3 usadas",           "RN_pedro_003", 599.00, 3),
     ]
-    involuntary_results = []
-    for name, cid, amount, code in involuntary_scenarios:
-        result = await run_involuntary_scenario(name, cid, amount, code)
-        involuntary_results.append(result)
+    pix_results = []
+    for name, rec_id, valor, usadas in pix_scenarios:
+        result = await run_pix_scenario(name, rec_id, valor, usadas)
+        pix_results.append(result)
+
+    # ── Cenários de cartão (recobrança automática desativada na Fase 3) ──
+    card_scenarios = [
+        ("Cartão Expirado",   "cus_joao_002",  149.00, "expired_card"),
+        ("Bloqueio Bancário", "cus_pedro_003", 599.00, "card_declined"),
+    ]
+    card_results = [run_card_scenario(*s) for s in card_scenarios]
 
     # ── Cenários de churn voluntário ────────────────────────────────────
     voluntary_scenarios = [
@@ -113,12 +143,23 @@ async def main():
     # ── Resumo ───────────────────────────────────────────────────────────
     print(f"\n{'═'*64}\n  RESUMO GERAL\n{'═'*64}")
 
-    total_amount = sum(r["amount"] for r in involuntary_results)
-    recovered = sum(1 for r in involuntary_results if r.get("recovered"))
-    print(f"\n📉 Churn Involuntário:")
-    print(f"   Volume testado     : R$ {total_amount:.2f}")
-    print(f"   Recuperados        : {recovered}/{len(involuntary_results)}")
-    print(f"   Dunnings enviados  : {sum(1 for r in involuntary_results if r.get('dunning_sent'))}/{len(involuntary_results)}")
+    pix_amount = sum(r["amount"] for r in pix_results)
+    com_plano = [r for r in pix_results if r.get("pix_retry_schedule")]
+    print(f"\n🔷 Churn Involuntário (Pix Automático):")
+    print(f"   Volume testado          : R$ {pix_amount:.2f}")
+    print(f"   Com plano de retentativa: {len(com_plano)}/{len(pix_results)}")
+    print(f"   Janela BACEN esgotada   : {sum(1 for r in pix_results if r.get('retry_exhausted'))}/{len(pix_results)}")
+    for r in com_plano:
+        plano = r["pix_retry_schedule"]
+        origem = plano[0]["origem"]
+        dias = ", ".join(t["quando"].strftime("%d/%m") for t in plano)
+        print(f"     {r['customer_id']}: {len(plano)} tentativa(s) em {dias} ({origem})")
+
+    card_amount = sum(r["amount"] for r in card_results)
+    print(f"\n💳 Cartão (recobrança automática desativada — Fase 3):")
+    print(f"   Volume registrado       : R$ {card_amount:.2f}")
+    print(f"   Eventos registrados     : {len(card_results)}/{len(card_results)}")
+    print(f"   Recobranças automáticas : 0 (código isolado em dunning/legacy_card/)")
 
     retained = sum(1 for r in voluntary_results if r.get("retained"))
     escalated = sum(1 for r in voluntary_results if r.get("escalated_to_human"))

@@ -15,6 +15,7 @@ Todos geram dados plausíveis para o mercado brasileiro de SaaS B2B:
 - Seed fixa (42) para reprodutibilidade
 """
 
+import hashlib
 from datetime import date
 from typing import Optional, Union
 
@@ -23,6 +24,23 @@ import pandas as pd
 
 # Seed global para reprodutibilidade
 SEED = 42
+
+
+def seed_por_cliente(customer_id: str) -> int:
+    """Seed determinística por cliente, estável entre execuções.
+
+    Vários pontos do sistema simulam o perfil de um cliente a partir do seu id
+    (tenure, saldo, uso do produto). Isso precisa ser determinístico: o mesmo
+    cliente tem que produzir sempre o mesmo perfil, senão a demo dá números
+    diferentes a cada execução e a banca não consegue reproduzir o resultado.
+
+    O `hash()` embutido do Python **não** serve: para strings ele é randomizado
+    por processo (via PYTHONHASHSEED), então o mesmo customer_id gera seeds
+    diferentes a cada execução do interpretador.
+
+    O md5 aqui é usado apenas como digest estável — não tem função de segurança.
+    """
+    return int(hashlib.md5(str(customer_id).encode()).hexdigest(), 16) % (2**32)
 
 # Códigos de falha de gateway comuns no mercado brasileiro
 GATEWAY_ERROR_CODES = [
