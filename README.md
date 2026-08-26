@@ -253,18 +253,6 @@ cp .env.example .env
 
 > Os módulos de ML e o pipeline funcionam **sem nenhuma API key** — fallbacks heurísticos e templates estáticos substituem as chamadas externas. Os *secrets de webhook* são a exceção: sem eles os endpoints `/webhooks/*` rejeitam qualquer request (fail closed), por design. Para rodar local sem webhook real, use `/simulate/*` com `ENV=development`.
 
-### Proteção contra Commit de Segredos (opcional)
-
-O repositório inclui um hook de pre-commit que bloqueia commits contendo um
-`.env` real ou padrões de chave conhecidos (`sk-ant-`, `sk_live_`, `whsec_`,
-`pat-na1-` seguidos de caracteres reais). Ele não roda automaticamente —
-para ativar localmente:
-
-```bash
-cp scripts/pre-commit-secrets.sh .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
-```
-
 ### Higiene de segredos (hook de pre-commit)
 
 O `.env` real **nunca** deve ser commitado. Além do `.gitignore`, o repositório traz um hook opcional em `scripts/pre-commit` que bloqueia o commit quando detecta:
