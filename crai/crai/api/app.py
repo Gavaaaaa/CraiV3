@@ -24,10 +24,12 @@ from ..agent.state import AgentState, PaymentMethod
 from ..churn_voluntary.voluntary_agent import voluntary_churn_agent
 from ..churn_voluntary.state import ChurnVoluntaryState
 from ..integrations.payment_gateway import (
+    DEGRADACOES_BLOQUEANTES,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
     STATUS_AUTORIZACAO_CONCEDIDA,
     STATUS_AUTORIZACAO_REVOGADA,
+    PayloadPixInvalido,
     PixAutomaticoAdapter,
 )
 from ..security.webhook_verification import (
@@ -93,6 +95,11 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     Só a cobrança recorrente FALHADA aciona o pipeline de recuperação. Os
     outros três eventos são registrados: autorização concedida/revogada e
     cobrança confirmada não são falha de pagamento.
+
+    Três formas de recusar, todas com log (Sprint 1):
+      400  corpo que não é JSON
+      422  payload que o adapter não sabe normalizar (lote, não-objeto)
+      422  cobrança falhada cujo VALOR não pôde ser lido
     """
     raw = await request.body()
     if not verify_pix_automatico_signature(
@@ -102,14 +109,43 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     ):
         raise _reject_unsigned(request, "pix_automatico")
 
-    evento = await _pix_adapter.parse_pix_event(json.loads(raw))
+    try:
+        corpo = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("[PIX] Corpo do webhook não é JSON válido (%s) — 400", e)
+        raise HTTPException(status_code=400, detail="Corpo do webhook não é JSON válido")
+
+    try:
+        evento = await _pix_adapter.parse_pix_event(corpo)
+    except PayloadPixInvalido as e:
+        logger.warning("[PIX] Payload recusado (%s) — 422. %s", e.motivo, e.detalhe)
+        raise HTTPException(status_code=422,
+                            detail={"motivo": e.motivo, "detalhe": e.detalhe})
+
     status = evento["status"]
 
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
-        logger.info("[PIX] %s — registrado sem acionar recuperação (recorrencia=%s)",
-                    rotulo, evento["id_recorrencia"])
+        logger.info("[PIX] %s — registrado sem acionar recuperação "
+                    "(recorrencia=%s, degradacoes=%s)",
+                    rotulo, evento["id_recorrencia"], evento["degradacoes"] or "nenhuma")
         return JSONResponse({"status": "ok", "evento": status, "pipeline": False})
+
+    # A checagem vem DEPOIS do desvio acima de propósito: uma autorização
+    # concedida legitimamente não carrega valor, e recusá-la transformaria a
+    # correção do P0-5 num falso positivo. Só a cobrança falhada — a única que
+    # entra no pipeline — precisa do valor.
+    bloqueantes = sorted(set(evento["degradacoes"]) & DEGRADACOES_BLOQUEANTES)
+    if bloqueantes:
+        logger.warning(
+            "[PIX] Cobrança falhada recusada (422): %s — recorrencia=%s. "
+            "Diagnosticar R$ 0 levaria e-Profit a <= 0 e descartaria um churn "
+            "involuntário legítimo sem rastro.",
+            ", ".join(bloqueantes), evento["id_recorrencia"] or "desconhecida",
+        )
+        raise HTTPException(status_code=422, detail={
+            "motivo": "evento_degradado", "degradacoes": bloqueantes,
+        })
 
     await _run_involuntary_pipeline(
         event=evento,
@@ -188,6 +224,9 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
         "status": STATUS_COBRANCA_FALHADA,
         "ispb_pagador": payload.ispb_pagador,
         "id_recorrencia": payload.id_recorrencia,
+        # Evento sintetizado aqui: por construção não passou por nenhuma
+        # degradação de parsing.
+        "degradacoes": [],
     }
     await _run_involuntary_pipeline(
         event=evento, payment_method="pix_automatico",
