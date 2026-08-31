@@ -8,6 +8,19 @@ build/
 
 # Modelos treinados (regeneraveis via train())
 crai/models/
+# ...exceto a calibracao: e um punhado de numeros medidos sobre a amostra real,
+# nao um binario. Precisa estar no clone limpo, senao a demo cai em
+# [SYNTH] MODO NAO-CALIBRADO na frente da banca.
+!crai/models/calibracao.json
+
+# Dados
+# Fonte A (Olist) e CC BY-NC-SA: fica fora do git e e regenerada de forma
+# deterministica por `python -m crai.scripts.preparar_amostra_real`.
+crai/data/real/
+# Dataset sintetico de treino (regeneravel, ~MBs)
+crai/data/synthetic/
+# Pacote de modelos da demo (gerado no Sprint 4)
+crai/models_demo.tar.gz
 
 # Logs de auditoria SHAP (regeneraveis)
 crai/logs/
