@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import time
 
 import pytest
@@ -23,19 +24,10 @@ from crai.api import app as app_module
 from crai.integrations import payment_gateway as gateway_module
 from crai.integrations.payment_gateway import (
     CARD_NOT_IMPLEMENTED,
-    DEGRADACAO_ENVELOPE_AUSENTE,
-    DEGRADACAO_LOTE_DE_1,
-    DEGRADACAO_STATUS_DESCONHECIDO,
-    DEGRADACAO_VALOR_AUSENTE,
-    DEGRADACAO_VALOR_ILEGIVEL,
-    DEGRADACOES_CONHECIDAS,
-    MOTIVO_LOTE_NAO_SUPORTADO,
-    MOTIVO_PAYLOAD_NAO_E_OBJETO,
     STATUS_AUTORIZACAO_CONCEDIDA,
     STATUS_AUTORIZACAO_REVOGADA,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
-    PayloadPixInvalido,
     PaymentGatewayAdapter,
     PixAutomaticoAdapter,
 )
@@ -44,6 +36,47 @@ from crai.security.tokenization import (
     decrypt_sensitive_field,
     generate_key,
 )
+
+# ── Rótulos do Sprint 1, como LITERAIS e não como constantes importadas ──
+#
+# Isto é deliberado e a auditoria A1 é a razão. Importando `DEGRADACAO_*`,
+# `PayloadPixInvalido` e companhia direto do módulo, a suíte inteira morria com
+# `ImportError` no commit anterior: `pytest` nem **coletava** o arquivo. Um erro
+# de coleção não é prova de nada — não demonstra que o teste pega o defeito,
+# só que os símbolos não existiam ainda.
+#
+# Com literais, o arquivo coleta no baseline e cada teste falha pelo COMPORTAMENTO
+# que ele descreve: `KeyError: 'degradacoes'`, `ValueError` do float, ou
+# "DID NOT RAISE". É o que o gate GA1 exige de um teste de regressão.
+DEGR_ENVELOPE_AUSENTE = "envelope_ausente"
+DEGR_LOTE_DE_1 = "lote_de_1"
+DEGR_VALOR_AUSENTE = "valor_ausente"
+DEGR_VALOR_ILEGIVEL = "valor_ilegivel"
+DEGR_VALOR_NAO_POSITIVO = "valor_nao_positivo"
+DEGR_STATUS_DESCONHECIDO = "status_desconhecido"
+DEGRADACOES_ESPERADAS = frozenset({
+    DEGR_ENVELOPE_AUSENTE, DEGR_LOTE_DE_1, DEGR_VALOR_AUSENTE,
+    DEGR_VALOR_ILEGIVEL, DEGR_VALOR_NAO_POSITIVO, DEGR_STATUS_DESCONHECIDO,
+})
+
+MOTIVO_LOTE = "lote_nao_suportado"
+MOTIVO_NAO_E_OBJETO = "payload_nao_e_objeto"
+MOTIVO_SEM_ID = "evento_sem_identificacao"
+
+
+class _NuncaLevantada(Exception):
+    """Sentinela para o baseline, onde `PayloadPixInvalido` não existe."""
+
+
+def excecao_de_recusa():
+    """A classe de recusa do adapter, resolvida em tempo de execução.
+
+    No baseline devolve a sentinela, então `pytest.raises` falha com
+    "DID NOT RAISE" (ou deixa passar a exceção real) — falha de comportamento,
+    não de importação.
+    """
+    return getattr(gateway_module, "PayloadPixInvalido", _NuncaLevantada)
+
 
 PIX_SECRET = "pix_secret_teste_fase3"
 
@@ -378,7 +411,7 @@ class TestPayloadsHostis:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bruto, esperado", [
-        ("299,90",       299.90),   # decimal pt-BR — hoje: ValueError → HTTP 500
+        ("299,90",       299.90),   # decimal pt-BR — antes: ValueError → HTTP 500
         ("1.299,90",     1299.90),  # milhar pt-BR
         ("R$ 299,90",    299.90),   # com símbolo de moeda
         ("R$ 1.299,90",  1299.90),  # milhar + moeda
@@ -406,7 +439,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 0.0
-        assert DEGRADACAO_VALOR_ILEGIVEL in resultado["degradacoes"]
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"]
 
     # ── P0-5: valor ausente é evento defeituoso, não R$ 0 ────────────────
 
@@ -419,7 +452,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 0.0
-        assert DEGRADACAO_VALOR_AUSENTE in resultado["degradacoes"]
+        assert DEGR_VALOR_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_valor_string_vazia_conta_como_ausente(self, adapter):
@@ -429,7 +462,7 @@ class TestPayloadsHostis:
 
         resultado = await adapter.parse_pix_event(payload)
 
-        assert DEGRADACAO_VALOR_AUSENTE in resultado["degradacoes"]
+        assert DEGR_VALOR_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_toda_degradacao_tambem_vira_warning(self, adapter, caplog):
@@ -457,7 +490,7 @@ class TestPayloadsHostis:
         assert resultado["valor"] == 299.90
         assert resultado["e2e_id"] == "E60701190202608261200abcdef123"
         assert resultado["id_recorrencia"] == "RN2026082600001"
-        assert DEGRADACAO_LOTE_DE_1 in resultado["degradacoes"]
+        assert DEGR_LOTE_DE_1 in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_lote_de_dois_e_recusado(self, adapter):
@@ -465,10 +498,10 @@ class TestPayloadsHostis:
         payload = payload_pix("automatic_pix.charge_failed")
         payload["data"] = [payload["data"], payload["data"]]
 
-        with pytest.raises(PayloadPixInvalido) as exc:
+        with pytest.raises(excecao_de_recusa()) as exc:
             await adapter.parse_pix_event(payload)
 
-        assert exc.value.motivo == MOTIVO_LOTE_NAO_SUPORTADO
+        assert exc.value.motivo == MOTIVO_LOTE
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("envelope", [{}, None, [], "texto", 42])
@@ -488,7 +521,7 @@ class TestPayloadsHostis:
 
         assert resultado["valor"] == 150.0
         assert resultado["id_recorrencia"] == "RN_raiz_001"
-        assert DEGRADACAO_ENVELOPE_AUSENTE in resultado["degradacoes"]
+        assert DEGR_ENVELOPE_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_sem_chave_data_nao_e_degradacao_silenciosa(self, adapter):
@@ -498,7 +531,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 99.0
-        assert DEGRADACAO_ENVELOPE_AUSENTE in resultado["degradacoes"]
+        assert DEGR_ENVELOPE_AUSENTE in resultado["degradacoes"]
 
     # ── P0-4: o fallback de status era código morto ──────────────────────
 
@@ -553,7 +586,7 @@ class TestPayloadsHostis:
         payload = {"data": {"valor": 10.0, "status": "quantum_flux"}}
         resultado = await adapter.parse_pix_event(payload)
         assert resultado["status"] == "desconhecido"
-        assert DEGRADACAO_STATUS_DESCONHECIDO in resultado["degradacoes"]
+        assert DEGR_STATUS_DESCONHECIDO in resultado["degradacoes"]
 
     # ── Degenerados ─────────────────────────────────────────────────────
 
@@ -566,9 +599,9 @@ class TestPayloadsHostis:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", [None, [], "texto", 42, [{"valor": 1}]])
     async def test_payload_que_nao_e_objeto_e_recusado(self, adapter, payload):
-        with pytest.raises(PayloadPixInvalido) as exc:
+        with pytest.raises(excecao_de_recusa()) as exc:
             await adapter.parse_pix_event(payload)
-        assert exc.value.motivo == MOTIVO_PAYLOAD_NAO_E_OBJETO
+        assert exc.value.motivo == MOTIVO_NAO_E_OBJETO
 
     @pytest.mark.asyncio
     async def test_evento_integro_tem_degradacoes_vazia(self, adapter):
@@ -585,7 +618,7 @@ class TestPayloadsHostis:
 
         resultado = await adapter.parse_pix_event(payload)
 
-        assert all(d in DEGRADACOES_CONHECIDAS for d in resultado["degradacoes"])
+        assert all(d in DEGRADACOES_ESPERADAS for d in resultado["degradacoes"])
         assert CHAVE_PIX_PAGADOR not in json.dumps(resultado["degradacoes"])
 
 
@@ -666,3 +699,198 @@ class TestEndpointRecusaPayloadDegradado:
         assert r.status_code == 200
         assert r.json()["pipeline"] is True
         assert [c[0] for c in client.pipeline_calls] == ["pix_automatico"]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# AUDITORIA A1 — DEFEITOS INTRODUZIDOS PELO PRÓPRIO SPRINT 1
+#
+# A auditoria adversarial rodou em contexto limpo e devolveu BLOQUEADO. Os
+# testes abaixo travam cada defeito que ela encontrou. Quase todos reproduzem,
+# por caminhos novos, sintomas que o Sprint 1 alegava ter matado.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestA1ValorAmbiguoNaoEChutado:
+    """N-1: `_para_float` convertia errado, em silêncio."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto", ["10,000", "1,299", "2,500", "1.299", "0,500"])
+    async def test_um_separador_com_tres_digitos_e_recusado(self, adapter, bruto):
+        """"10,000" é dez mil em en-US e dez em pt-BR. Sem o locale declarado
+        pelo PSP, chutar transformaria R$ 10.000,00 em R$ 10,00 — e o valor
+        errado atravessaria o portão de qualidade como se fosse legítimo."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = bruto
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"], (
+            f"{bruto!r} virou {resultado['valor']} em vez de ser recusado")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto, esperado", [
+        ("1.299,90", 1299.90),     # dois separadores: não há ambiguidade
+        ("1,299.90", 1299.90),
+        ("299,90", 299.90),        # duas casas decimais: sem dúvida
+        ("12345,678", 12345.68),   # grupo de milhar não tem 5 dígitos antes
+    ])
+    async def test_o_que_nao_e_ambiguo_continua_passando(self, adapter, bruto, esperado):
+        """A recusa não pode virar paranoia: só o caso genuinamente ambíguo."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = bruto
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert resultado["valor"] == esperado
+        assert resultado["degradacoes"] == []
+
+    def test_valor_ambiguo_devolve_422_na_borda(self, client):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = "10,000"
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+
+class TestA1InfinityENaN:
+    """N-2: `Infinity`/`NaN` atravessavam o parser e derrubavam a API com 500."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("valor", [float("inf"), float("-inf"), float("nan")])
+    async def test_nao_finito_nao_vira_valor(self, adapter, valor):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = valor
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert math.isfinite(resultado["valor"])
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"]
+
+    @pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+    def test_literal_no_corpo_do_webhook_devolve_400(self, client, literal):
+        """`json.loads` aceita esses três por extensão; o JSON padrão não os
+        tem, e nenhum PSP legítimo manda valor infinito."""
+        corpo = ('{"event":"automatic_pix.charge_failed","data":'
+                 '{"valor":' + literal + ',"recurrence_id":"RN_inf"}}').encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 400
+        assert client.pipeline_calls == []
+
+
+class TestA1PrecedenciaDeStatus:
+    """N-3 / N-4: a divisão em dois mapas quebrou a cobrança falhada."""
+
+    @pytest.mark.asyncio
+    async def test_status_da_cobranca_ganha_da_autorizacao(self, adapter):
+        """O caso mais comum, e o formato da fixture de referência deste
+        próprio repositório: `authorization_status: "approved"` (o contrato de
+        recorrência segue válido) junto de `status: "failed"` (esta cobrança
+        falhou).
+
+        Ler a autorização primeiro fazia a cobrança falhada virar
+        `autorizacao_concedida`, sem degradação e sem warning — pior que o
+        P0-4 original, que ao menos logava.
+        """
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["event"]
+        payload["data"]["status"] = "failed"
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert resultado["status"] == STATUS_COBRANCA_FALHADA
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto, esperado", [
+        ("revoked",    STATUS_AUTORIZACAO_REVOGADA),
+        ("cancelled",  STATUS_AUTORIZACAO_REVOGADA),
+        ("authorized", STATUS_AUTORIZACAO_CONCEDIDA),
+    ])
+    async def test_termo_de_autorizacao_no_campo_status_ainda_e_lido(
+        self, adapter, bruto, esperado,
+    ):
+        """N-4: o mapa único do plano cobria estes; dividir em dois os perdeu.
+        Cada campo consulta o seu mapa primeiro e o do outro depois."""
+        resultado = await adapter.parse_pix_event(
+            {"data": {"valor": 10.0, "status": bruto}})
+        assert resultado["status"] == esperado
+
+    @pytest.mark.asyncio
+    async def test_falha_no_campo_de_autorizacao_ainda_e_lida(self, adapter):
+        resultado = await adapter.parse_pix_event(
+            {"data": {"valor": 10.0, "authorization_status": "failed"}})
+        assert resultado["status"] == STATUS_COBRANCA_FALHADA
+
+    def test_cobranca_falhada_com_autorizacao_aprovada_aciona_o_pipeline(self, client):
+        """O N-3 ponta a ponta: com a precedência errada, este webhook
+        respondia `pipeline: false` e a receita sumia."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["event"]
+        payload["data"]["status"] = "failed"
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 200
+        assert r.json()["pipeline"] is True
+
+
+class TestA1ValorNaoPositivo:
+    """N-10: valor negativo virava LTV negativo e deal negativo no HubSpot."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("valor", [0, -1, -299.90, "-299,90"])
+    async def test_valor_zero_ou_negativo_e_degradacao(self, adapter, valor):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = valor
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert set(resultado["degradacoes"]) & {
+            DEGR_VALOR_NAO_POSITIVO, DEGR_VALOR_AUSENTE, DEGR_VALOR_ILEGIVEL}
+
+    def test_valor_negativo_devolve_422(self, client):
+        payload = payload_pix("automatic_pix.charge_failed")
+        payload["data"]["total_cents"] = -29990
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+
+class TestA1DegradacaoTemLeitor:
+    """N-6: `degradacoes` não era lido por nenhum nó do grafo."""
+
+    def test_pipeline_anuncia_evento_degradado(self, capsys):
+        """A docstring prometia que 'o pipeline nunca recebe um default sem
+        saber que é default'. Sem um leitor, era só um campo bonito."""
+        import asyncio
+
+        from crai.agent.workflow import diagnose_failure
+
+        estado = {
+            "payment_event": {
+                "e2e_id": "E1", "valor": 299.90, "status": "cobranca_falhada",
+                "ispb_pagador": "60701190", "id_recorrencia": "RN_degr",
+                "degradacoes": [DEGR_ENVELOPE_AUSENTE],
+            },
+            "payment_method": "pix_automatico", "customer_id": "RN_degr",
+            "amount": 299.90,
+        }
+        asyncio.run(diagnose_failure(estado))
+
+        assert "[QUALIDADE]" in capsys.readouterr().out

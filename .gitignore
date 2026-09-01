@@ -7,7 +7,9 @@ build/
 *.egg
 
 # Modelos treinados (regeneraveis via train())
-crai/models/
+# Padrao com /* (e nao com /) porque o git nao reabre um diretorio ignorado:
+# a excecao abaixo so funciona se o diretorio em si nao estiver ignorado.
+crai/models/*
 # ...exceto a calibracao: e um punhado de numeros medidos sobre a amostra real,
 # nao um binario. Precisa estar no clone limpo, senao a demo cai em
 # [SYNTH] MODO NAO-CALIBRADO na frente da banca.

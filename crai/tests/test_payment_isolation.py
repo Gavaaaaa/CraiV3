@@ -281,11 +281,55 @@ class TestThreadIdNuncaColide:
 
     def test_id_anonimo_e_deterministico_entre_processos(self):
         """Precisa ser sha256, não `hash()`: o hash embutido do Python é
-        randomizado por processo para strings."""
+        randomizado por processo para strings, e a demo tem que reproduzir."""
         evento = {"e2e_id": "E_z", "valor": 55.5, "ispb_pagador": "9",
                   "id_recorrencia": ""}
+        base = json.dumps(["E_z", "9", repr(55.5)], ensure_ascii=False)
         assert app_module._thread_id(evento) == (
-            "rec_anon_" + hashlib.sha256(b"E_z|9|55.5").hexdigest()[:16])
+            "rec_anon_" + hashlib.sha256(base.encode("utf-8")).hexdigest()[:16])
+
+    def test_separador_dentro_do_campo_nao_causa_colisao(self):
+        """A1/N-5. Concatenando os campos com `|` cru, estes dois eventos
+        produziam a MESMA base — `E123|999|60701190|299.9` — e dois clientes
+        distintos dividiam checkpoint pelo caminho que o P0-6 existia para
+        fechar. A base agora é serializada como lista JSON."""
+        a = {"e2e_id": "E123|999", "ispb_pagador": "60701190",
+             "valor": 299.90, "id_recorrencia": ""}
+        b = {"e2e_id": "E123", "ispb_pagador": "999|60701190",
+             "valor": 299.90, "id_recorrencia": ""}
+
+        assert app_module._thread_id(a) != app_module._thread_id(b)
+
+    def test_evento_sem_nenhuma_identificacao_e_recusado(self):
+        """A1/N-5. Sem `id_recorrencia` e sem `e2e_id` não há o que
+        identificar: num SaaS de preço único cujo PSP omita o e2e, a base
+        seria a mesma string para TODOS os clientes e o P0-6 voltaria inteiro.
+        Recusar é a única resposta honesta."""
+        evento = {"e2e_id": "", "ispb_pagador": "", "valor": 299.90,
+                  "id_recorrencia": ""}
+        assert app_module._thread_id(evento) is None
+
+    def test_webhook_sem_identificacao_devolve_422(self, monkeypatch):
+        """Ponta a ponta: o evento anônimo demais não entra no pipeline."""
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s3cr3t")
+        chamadas = []
+
+        async def fake(event, payment_method="card", **kw):
+            chamadas.append(payment_method)
+
+        monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake)
+
+        corpo = json.dumps({"data": {"valor": 299.90, "status": "failed"}}).encode()
+        ts = int(time.time())
+        assinatura = hmac.new(b"s3cr3t", f"{ts}.".encode() + corpo,
+                              hashlib.sha256).hexdigest()
+
+        with TestClient(app_module.app) as c:
+            r = c.post("/webhooks/pix-automatico", content=corpo,
+                       headers={"x-pix-signature": f"t={ts},v1={assinatura}"})
+
+        assert r.status_code == 422
+        assert chamadas == []
 
     def test_id_anonimo_e_reconhecivel_no_log(self):
         evento = {"e2e_id": "E_w", "valor": 1.0, "ispb_pagador": "2",
@@ -333,12 +377,34 @@ class TestPerfilSinteticoUsaUmIdSo:
 
 
 class TestUmDefaultSoParaPaymentMethod:
-    """P2-12: `route_after_decision` e `decide_recovery` concordam."""
+    """P2-12: `route_after_decision` e `decide_recovery` usam o mesmo default.
 
-    def test_payment_method_ausente_cai_no_mesmo_default(self):
+    **Declaração honesta, cobrada pela auditoria A1 (N-13):** esta correção é
+    um no-op COMPORTAMENTAL, e o teste abaixo passa igual no commit anterior.
+    `None` e `"card"` sempre rotearam para `trigger_dunning`, porque só
+    `"pix_automatico"` desvia — o `else` engolia os dois.
+
+    O teste fica porque o valor dele é outro: ele trava a **consistência** dos
+    dois defaults. No dia em que alguém acrescentar um segundo meio de pagamento
+    com política própria, dois defaults divergentes passam a mudar o
+    comportamento — e aí este teste começa a valer como regressão de verdade.
+    Marcar isso é melhor que deixar a suíte insinuar que houve conserto de bug.
+    """
+
+    def test_os_dois_pontos_leem_o_mesmo_default(self):
+        """Comparação direta do código-fonte: é o que a correção realmente fez."""
+        import inspect
+
+        from crai.agent.main_agent import route_after_decision as rota
+        from crai.agent.workflow import decide_recovery as decide
+
+        fonte_rota = inspect.getsource(rota)
+        fonte_decide = inspect.getsource(decide)
+        assert 'state.get("payment_method", "card")' in fonte_rota
+        assert 'state.get("payment_method", "card")' in fonte_decide
+
+    def test_payment_method_ausente_nao_retenta(self):
+        """Invariante de segurança que vale independente do default escolhido."""
         estado = _estado("pix_automatico")
         del estado["payment_method"]
-
-        # decide_recovery já usava "card"; o router usava None. Com dois
-        # defaults, o mesmo state ausente podia seguir dois caminhos.
         assert route_after_decision(estado) == "trigger_dunning"

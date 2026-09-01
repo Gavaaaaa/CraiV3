@@ -39,6 +39,16 @@ async def diagnose_failure(state: AgentState) -> AgentState:
         state["payment_event"], state["amount"], state.get("payment_method", "card"),
         customer_id=state["customer_id"],
     )
+    # O campo `degradacoes` do evento normalizado só vale alguma coisa se algum
+    # nó o LER. A borda já recusa as degradações bloqueantes (valor ilegível ou
+    # ausente); as não-bloqueantes chegam até aqui e precisam ficar visíveis na
+    # trilha de auditoria, senão o diagnóstico aparece na tela sem dizer que foi
+    # feito sobre um evento remendado.
+    degradacoes = state["payment_event"].get("degradacoes") or []
+    if degradacoes:
+        print(f"[QUALIDADE] Evento normalizado com degradação: {', '.join(degradacoes)} "
+              f"— diagnóstico feito sobre campos preenchidos por default")
+
     result = _classifier.predict(features)
 
     shap_readable = result["shap_explanation"].get("readable", "")

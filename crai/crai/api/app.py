@@ -16,6 +16,8 @@ import os
 import json
 import hashlib
 import logging
+from typing import Optional
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -26,6 +28,7 @@ from ..churn_voluntary.voluntary_agent import voluntary_churn_agent
 from ..churn_voluntary.state import ChurnVoluntaryState
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
+    MOTIVO_SEM_IDENTIFICACAO,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
     STATUS_AUTORIZACAO_CONCEDIDA,
@@ -76,7 +79,17 @@ def _reject_unsigned(request: Request, origem: str) -> HTTPException:
     return HTTPException(status_code=401, detail="Assinatura de webhook inválida")
 
 
-def _thread_id(evento: dict) -> str:
+def _rejeitar_constante_json(nome: str):
+    """Recusa `Infinity` / `-Infinity` / `NaN` no corpo do webhook.
+
+    O `json` do Python aceita esses três literais por extensão; o JSON padrão
+    (RFC 8259) não os tem. Nenhum PSP legítimo manda um valor infinito, e
+    deixá-los entrar é uma porta aberta para derrubar a API com 500.
+    """
+    raise ValueError(f"constante JSON não numérica não é aceita: {nome}")
+
+
+def _thread_id(evento: dict) -> Optional[str]:
     """Identidade do checkpoint do LangGraph para um evento de Pix.
 
     O `thread_id` do `MemorySaver` é o que separa a memória de um cliente da do
@@ -85,9 +98,22 @@ def _thread_id(evento: dict) -> str:
     caírem no mesmo checkpoint: o segundo evento retomava o estado do primeiro
     (P0-6).
 
-    Aqui o id anônimo é derivado do próprio evento. Colisão passa a acontecer
-    só quando dois eventos são realmente indistinguíveis — e aí compartilhar o
-    checkpoint é o comportamento correto, não um acidente.
+    Returns:
+        O id da recorrência, se houver; senão um id anônimo derivado do próprio
+        evento; **`None`** quando o evento não carrega nada que identifique o
+        pagador — e aí a borda recusa com 422.
+
+    Por que `None` em vez de um id derivado só de ISPB e valor: num SaaS de
+    preço único, cujo PSP não mande `e2e_id`, a base seria a mesma string para
+    **todos os clientes**, e o P0-6 voltaria inteiro para essa fatia da base.
+    Recusar é a única resposta honesta — a CRAI não pode isolar o estado de um
+    cliente que o payload não identifica.
+
+    A base é serializada como lista JSON, e não concatenada com `|`. Com o
+    separador cru, `e2e="E123|999" + ispb="60701190"` produzia exatamente a
+    mesma string que `e2e="E123" + ispb="999|60701190"` — dois clientes
+    distintos colidindo no mesmo checkpoint pelo caminho que a correção do
+    P0-6 existia para fechar.
 
     `sha256`, e não o `hash()` embutido: para strings, o hash do Python é
     randomizado por processo (PYTHONHASHSEED), o que daria um thread_id
@@ -97,8 +123,20 @@ def _thread_id(evento: dict) -> str:
     if rec:
         return rec
 
-    base = f"{evento.get('e2e_id', '')}|{evento.get('ispb_pagador', '')}|{evento.get('valor', 0)}"
-    anonimo = "rec_anon_" + hashlib.sha256(base.encode()).hexdigest()[:16]
+    e2e = str(evento.get("e2e_id") or "").strip()
+    if not e2e:
+        logger.warning(
+            "[PIX] Evento sem id de recorrência E sem e2e_id: não há como "
+            "identificar o pagador. Recusando — derivar o checkpoint de ISPB + "
+            "valor faria todos os clientes de mesmo preço dividirem estado.",
+        )
+        return None
+
+    base = json.dumps(
+        [e2e, str(evento.get("ispb_pagador") or ""), repr(evento.get("valor", 0))],
+        ensure_ascii=False,
+    )
+    anonimo = "rec_anon_" + hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
     logger.warning(
         "[PIX] Evento sem id de recorrência — checkpoint anônimo %s derivado do "
         "próprio evento (e2e/ISPB/valor).", anonimo,
@@ -141,10 +179,18 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
         raise _reject_unsigned(request, "pix_automatico")
 
     try:
-        corpo = json.loads(raw)
+        # parse_constant fecha a porta para os literais `Infinity`, `-Infinity`
+        # e `NaN`, que o JSON do Python aceita por padrão mas o JSON padrão não
+        # tem. Um `inf` atravessando o parser reproduzia o P0-1 três nós adiante
+        # — o sklearn levanta ValueError e o FastAPI devolve 500.
+        corpo = json.loads(raw, parse_constant=_rejeitar_constante_json)
     except json.JSONDecodeError as e:
         logger.warning("[PIX] Corpo do webhook não é JSON válido (%s) — 400", e)
         raise HTTPException(status_code=400, detail="Corpo do webhook não é JSON válido")
+    except ValueError as e:
+        logger.warning("[PIX] Corpo do webhook contém constante não numérica (%s) — 400", e)
+        raise HTTPException(status_code=400,
+                            detail="Corpo do webhook contém Infinity/NaN, que não são JSON válido")
 
     try:
         evento = await _pix_adapter.parse_pix_event(corpo)
@@ -178,12 +224,20 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
             "motivo": "evento_degradado", "degradacoes": bloqueantes,
         })
 
+    # O identificador da autorização de recorrência é opaco: identifica o
+    # contrato de cobrança, não a pessoa. A chave Pix nunca chega aqui.
+    customer_id = _thread_id(evento)
+    if customer_id is None:
+        raise HTTPException(status_code=422, detail={
+            "motivo": MOTIVO_SEM_IDENTIFICACAO,
+            "detalhe": ("evento sem id_recorrencia e sem e2e_id — sem isso, "
+                        "clientes distintos dividiriam o mesmo checkpoint"),
+        })
+
     await _run_involuntary_pipeline(
         event=evento,
         payment_method="pix_automatico",
-        # O identificador da autorização de recorrência é opaco: identifica o
-        # contrato de cobrança, não a pessoa. A chave Pix nunca chega aqui.
-        customer_id=_thread_id(evento),
+        customer_id=customer_id,
         amount=evento["valor"],
         invoice_id=evento["e2e_id"] or "e2e_desconhecido",
     )
@@ -259,9 +313,17 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
         # degradação de parsing.
         "degradacoes": [],
     }
+    # Mesma derivação de identidade do webhook real: se o simulador usasse o
+    # `id_recorrencia` cru, um `id_recorrencia=""` na simulação produziria um
+    # thread_id que o caminho real nunca produz — e o endpoint deixaria de
+    # exercitar o código que a demo mostra.
+    customer_id = _thread_id(evento)
+    if customer_id is None:
+        raise HTTPException(status_code=422, detail={"motivo": MOTIVO_SEM_IDENTIFICACAO})
+
     await _run_involuntary_pipeline(
         event=evento, payment_method="pix_automatico",
-        customer_id=payload.id_recorrencia, amount=payload.valor,
+        customer_id=customer_id, amount=payload.valor,
         invoice_id=evento["e2e_id"],
     )
     return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})

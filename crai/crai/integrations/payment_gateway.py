@@ -44,6 +44,8 @@ tem nenhum caminho de código até crai/ml/ ou crai/agent/.
 
 import json
 import logging
+import math
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -132,6 +134,7 @@ DEGRADACAO_ENVELOPE_AUSENTE = "envelope_ausente"
 DEGRADACAO_LOTE_DE_1 = "lote_de_1"
 DEGRADACAO_VALOR_AUSENTE = "valor_ausente"
 DEGRADACAO_VALOR_ILEGIVEL = "valor_ilegivel"
+DEGRADACAO_VALOR_NAO_POSITIVO = "valor_nao_positivo"
 DEGRADACAO_STATUS_DESCONHECIDO = "status_desconhecido"
 
 DEGRADACOES_CONHECIDAS = frozenset({
@@ -139,6 +142,7 @@ DEGRADACOES_CONHECIDAS = frozenset({
     DEGRADACAO_LOTE_DE_1,
     DEGRADACAO_VALOR_AUSENTE,
     DEGRADACAO_VALOR_ILEGIVEL,
+    DEGRADACAO_VALOR_NAO_POSITIVO,
     DEGRADACAO_STATUS_DESCONHECIDO,
 })
 
@@ -147,11 +151,13 @@ DEGRADACOES_CONHECIDAS = frozenset({
 DEGRADACOES_BLOQUEANTES = frozenset({
     DEGRADACAO_VALOR_AUSENTE,
     DEGRADACAO_VALOR_ILEGIVEL,
+    DEGRADACAO_VALOR_NAO_POSITIVO,
 })
 
 # ── Motivos de recusa (viram HTTP 422 na borda) ──────────────────────────
 MOTIVO_LOTE_NAO_SUPORTADO = "lote_nao_suportado"
 MOTIVO_PAYLOAD_NAO_E_OBJETO = "payload_nao_e_objeto"
+MOTIVO_SEM_IDENTIFICACAO = "evento_sem_identificacao"
 
 
 class PayloadPixInvalido(Exception):
@@ -197,33 +203,55 @@ def _primeiro_preenchido(fonte: dict, *caminhos: str, default=None):
 _LIXO_MONETARIO = str.maketrans("", "", "R$  \t\n")
 
 
+# Um único separador seguido de EXATAMENTE três dígitos, com 1 a 3 dígitos
+# antes: "10,000", "1.299", "2,500". Sem o locale declarado pelo PSP não existe
+# leitura correta — pt-BR lê mil, en-US lê um vírgula alguma coisa, e as duas
+# são plausíveis. Ver `_para_float`.
+_GRUPO_DE_MILHAR_AMBIGUO = re.compile(r"^[+-]?\d{1,3}[.,]\d{3}$")
+
+
 def _para_float(bruto) -> Optional[float]:
     """Converte para float qualquer forma plausível de valor monetário.
 
     Aceita `None`, `int`, `float`, e strings em pt-BR (`"299,90"`,
     `"1.299,90"`, `"R$ 1.299,90"`) ou en-US (`"299.90"`, `"1,299.90"`).
-    O separador decimal é decidido por qual dos dois sinais aparece **por
-    último** — o outro é tratado como separador de milhar e removido.
+    Quando os dois separadores aparecem, o que vem **por último** é o decimal e
+    o outro é milhar — isso não tem ambiguidade.
 
-    **Nunca levanta.** Devolve `None` quando não consegue ler; quem chama
-    decide se isso vira degradação ou recusa. Levantar aqui era o P0-1: um
-    `ValueError` dentro do parser vira HTTP 500 e provoca tempestade de retry
-    no PSP.
+    **Recusa o que é ambíguo, em vez de chutar.** `"10,000"` pode ser dez mil
+    (en-US) ou dez (pt-BR); `"1.299"` pode ser mil duzentos e noventa e nove
+    (pt-BR) ou um vírgula duzentos e noventa e nove (en-US). Chutar aqui
+    transformaria R$ 10.000,00 em R$ 10,00 **em silêncio** — o pior desfecho
+    possível, porque atravessa o portão de qualidade e vira decisão de negócio
+    com o valor errado. Nesses casos devolve `None`, o evento é marcado como
+    degradado e a borda recusa com 422. Um 422 que o PSP retenta com o campo
+    bem formatado é barato; uma cobrança diagnosticada por um centésimo do
+    valor real, não.
 
-    Limite conhecido e aceito: `"1.299"` é ambíguo (mil duzentos e noventa e
-    nove em pt-BR, um vírgula duzentos e noventa e nove em en-US). Sem locale
-    declarado pelo PSP não há como decidir; fica lido como `1.299`, que é a
-    interpretação literal do texto.
+    Também recusa `inf` e `nan`: `json.loads` aceita os literais `Infinity` e
+    `NaN`, e qualquer um deles atravessando o parser reproduz o P0-1 um andar
+    adiante (o sklearn levanta `ValueError` e o FastAPI devolve 500).
+
+    **Nunca levanta.** Quem chama decide se o `None` vira degradação ou recusa.
     """
     if bruto is None or isinstance(bruto, bool):
         return None
     if isinstance(bruto, (int, float)):
-        return float(bruto)
+        valor = float(bruto)
+        return valor if math.isfinite(valor) else None
     if not isinstance(bruto, str):
         return None
 
     texto = bruto.translate(_LIXO_MONETARIO)
     if not texto:
+        return None
+
+    if _GRUPO_DE_MILHAR_AMBIGUO.match(texto):
+        logger.warning(
+            "[PIX] Valor %r é ambíguo (um separador seguido de exatamente três "
+            "dígitos): milhar ou decimal depende do locale do PSP, que o payload "
+            "não declara. Recusando em vez de adivinhar.", bruto,
+        )
         return None
 
     ultima_virgula = texto.rfind(",")
@@ -234,9 +262,10 @@ def _para_float(bruto) -> Optional[float]:
         texto = texto.replace(",", "")
 
     try:
-        return float(texto)
+        valor = float(texto)
     except ValueError:
         return None
+    return valor if math.isfinite(valor) else None
 
 
 class PaymentGatewayAdapter(ABC):
@@ -370,12 +399,13 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         )
         if bruto_centavos is not None:
             centavos = _para_float(bruto_centavos)
-            if centavos is not None:
-                return round(centavos / 100, 2)
-            logger.warning("[PIX] Campo de centavos ilegível (%r) — valor degradado para 0.0",
-                           bruto_centavos)
-            degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
-            return 0.0
+            if centavos is None:
+                logger.warning("[PIX] Campo de centavos ilegível (%r) — valor "
+                               "degradado para 0.0", bruto_centavos)
+                degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+                return 0.0
+            return PixAutomaticoAdapter._validar_positivo(
+                round(centavos / 100, 2), bruto_centavos, degradacoes)
 
         bruto_reais = _primeiro_preenchido(dados, "pix.valor", "valor", "amount", "total")
         if bruto_reais is None:
@@ -388,19 +418,52 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             logger.warning("[PIX] Valor ilegível (%r) — valor degradado para 0.0", bruto_reais)
             degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
             return 0.0
-        return round(reais, 2)
+        return PixAutomaticoAdapter._validar_positivo(
+            round(reais, 2), bruto_reais, degradacoes)
+
+    @staticmethod
+    def _validar_positivo(valor: float, bruto, degradacoes: list[str]) -> float:
+        """Uma cobrança de R$ 0,00 ou negativa não é uma cobrança.
+
+        Sem isto, um valor negativo atravessava o parser, virava LTV negativo,
+        e-Profit negativo e — porque o pipeline segue até o fim — um deal no
+        HubSpot com valor negativo. Melhor recusar na borda.
+        """
+        if valor > 0:
+            return valor
+        logger.warning(
+            "[PIX] Valor não-positivo (%r → %.2f) — uma cobrança de R$ 0,00 ou "
+            "negativa não é uma cobrança.", bruto, valor,
+        )
+        degradacoes.append(DEGRADACAO_VALOR_NAO_POSITIVO)
+        return valor
 
     @staticmethod
     def _extrair_status(raw_payload: dict, dados: dict, degradacoes: list[str]) -> str:
         """Nome do evento do PSP → status normalizado, com três tentativas.
 
         1. `EVENT_STATUS_MAP` pelo nome do evento (caminho feliz).
-        2. Status CRU do objeto, com o mapa certo para o campo de onde veio —
-           é o que conserta o P0-4. Antes, o fallback comparava o status cru do
-           PSP contra `PIX_STATUSES`, que só tem tokens internos em português:
+        2. Status da **cobrança** (`status`, `charge_status`, `payment_status`).
+           É o que conserta o P0-4: antes, o fallback comparava o status cru do
+           PSP contra `PIX_STATUSES`, que só tem tokens internos em português —
            `"failed"` nunca casava, virava `desconhecido`, e a cobrança falhada
            sumia com HTTP 200. O branch era código morto.
-        3. Token interno da CRAI, para o PSP que já fala o dialeto de saída.
+        3. Status da **autorização** (`authorization_status`), só depois.
+        4. Token interno da CRAI, para o PSP que já fala o dialeto de saída.
+
+        **A ordem entre 2 e 3 importa e já esteve errada.** O campo
+        `authorization_status` descreve o CONTRATO de recorrência, que continua
+        aprovado enquanto o pagador não revoga; `status` descreve o QUE
+        ACONTECEU nesta cobrança. Ler a autorização primeiro fazia um payload
+        com `authorization_status: "approved"` e `status: "failed"` — que é a
+        forma mais comum, e é literalmente o formato da fixture de referência
+        deste repositório — virar `autorizacao_concedida`, sem degradação e sem
+        warning. A cobrança falhada sumia de novo, e de um jeito pior que o
+        P0-4 original, que ao menos logava.
+
+        Cada campo é consultado no seu mapa primeiro e no outro depois: PSPs
+        existem que mandam `revoked` no campo `status`, e perder isso foi o
+        preço de dividir o mapa único em dois.
         """
         evento = _primeiro_preenchido(
             raw_payload, "event", "event_type", "type", default="",
@@ -409,28 +472,32 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         if status:
             return status
 
-        autorizacao = str(_primeiro_preenchido(
-            dados, "automatic_pix.authorization_status", "authorization_status",
-            default="",
-        )).strip().lower()
-        if autorizacao:
-            status = STATUS_CRU_AUTORIZACAO.get(autorizacao)
-            if status:
-                return status
-
         cobranca = str(_primeiro_preenchido(
             dados, "status", "charge_status", "payment_status", default="",
         )).strip().lower()
         if cobranca:
-            status = STATUS_CRU_COBRANCA.get(cobranca)
+            status = (STATUS_CRU_COBRANCA.get(cobranca)
+                      or STATUS_CRU_AUTORIZACAO.get(cobranca))
             if status:
                 return status
             if cobranca in PIX_STATUSES:
                 return cobranca
 
+        autorizacao = str(_primeiro_preenchido(
+            dados, "automatic_pix.authorization_status", "authorization_status",
+            default="",
+        )).strip().lower()
+        if autorizacao:
+            status = (STATUS_CRU_AUTORIZACAO.get(autorizacao)
+                      or STATUS_CRU_COBRANCA.get(autorizacao))
+            if status:
+                return status
+            if autorizacao in PIX_STATUSES:
+                return autorizacao
+
         logger.warning(
-            "[PIX] Evento não reconhecido (event=%r, authorization_status=%r, status=%r)",
-            evento, autorizacao, cobranca,
+            "[PIX] Evento não reconhecido (event=%r, status=%r, authorization_status=%r)",
+            evento, cobranca, autorizacao,
         )
         degradacoes.append(DEGRADACAO_STATUS_DESCONHECIDO)
         return STATUS_DESCONHECIDO
