@@ -158,6 +158,11 @@ DEGRADACOES_BLOQUEANTES = frozenset({
 MOTIVO_LOTE_NAO_SUPORTADO = "lote_nao_suportado"
 MOTIVO_PAYLOAD_NAO_E_OBJETO = "payload_nao_e_objeto"
 MOTIVO_SEM_IDENTIFICACAO = "evento_sem_identificacao"
+# Valor que não serve como cobrança: ilegível, não-finito, de magnitude
+# implausível ou não-positivo. Usado pelos endpoints que sintetizam o evento em
+# vez de recebê-lo do PSP — eles não têm a lista `degradacoes` do parser, mas
+# têm que recusar exatamente o mesmo conjunto de valores.
+MOTIVO_VALOR_NAO_UTILIZAVEL = "valor_nao_utilizavel"
 
 
 class PayloadPixInvalido(Exception):
@@ -209,6 +214,34 @@ _LIXO_MONETARIO = str.maketrans("", "", "R$  \t\n")
 # são plausíveis. Ver `_para_float`.
 _GRUPO_DE_MILHAR_AMBIGUO = re.compile(r"^[+-]?\d{1,3}[.,]\d{3}$")
 
+# Teto de magnitude plausível para uma cobrança de assinatura, em reais.
+#
+# `math.isfinite` não basta. Ele aceita `1e300`, que é finito em float64 e vira
+# `inf` no `float32` do sklearn três nós adiante — reproduzindo o P0-1 (HTTP 500
+# a partir de webhook assinado) pelo caminho que a recusa de `inf`/`NaN` não
+# cobre: magnitude finita, mas absurda.
+#
+# R$ 1 trilhão é quatro ordens de grandeza acima do maior contrato de SaaS B2B
+# concebível e ainda seis ordens abaixo do ponto em que a aritmética de float32
+# começa a perder precisão. Qualquer coisa acima disso é payload corrompido ou
+# hostil, não cobrança: recusar é a leitura correta, e a recusa é barata (422,
+# que o PSP retenta).
+VALOR_MAXIMO_PLAUSIVEL = 1e12
+
+
+def _valor_utilizavel(valor: float) -> Optional[float]:
+    """Último portão de `_para_float`: finito **e** de magnitude plausível."""
+    if not math.isfinite(valor):
+        return None
+    if abs(valor) > VALOR_MAXIMO_PLAUSIVEL:
+        logger.warning(
+            "[PIX] Valor %r excede o teto de magnitude plausível (R$ %.0f). "
+            "Finito, mas absurdo: estouraria o float32 do modelo adiante. "
+            "Recusando.", valor, VALOR_MAXIMO_PLAUSIVEL,
+        )
+        return None
+    return valor
+
 
 def _para_float(bruto) -> Optional[float]:
     """Converte para float qualquer forma plausível de valor monetário.
@@ -232,13 +265,28 @@ def _para_float(bruto) -> Optional[float]:
     `NaN`, e qualquer um deles atravessando o parser reproduz o P0-1 um andar
     adiante (o sklearn levanta `ValueError` e o FastAPI devolve 500).
 
-    **Nunca levanta.** Quem chama decide se o `None` vira degradação ou recusa.
+    E recusa **magnitude implausível** (`VALOR_MAXIMO_PLAUSIVEL`), que é o
+    mesmo defeito por outra porta: `1e300` é finito, passa por `math.isfinite`
+    e só vira `inf` no `float32` do sklearn, longe daqui. Ser finito não basta;
+    precisa ser um valor de cobrança.
+
+    **Nunca levanta** — nem `ValueError`, nem `OverflowError` (um inteiro JSON
+    de 401 dígitos chega como `int` de precisão arbitrária e derruba `float()`).
+    Quem chama decide se o `None` vira degradação ou recusa.
     """
     if bruto is None or isinstance(bruto, bool):
         return None
     if isinstance(bruto, (int, float)):
-        valor = float(bruto)
-        return valor if math.isfinite(valor) else None
+        try:
+            valor = float(bruto)
+        except (OverflowError, ValueError):
+            # `json.loads` produz `int` de precisão arbitrária: um inteiro de
+            # 401 dígitos chega aqui inteiro e `float()` levanta OverflowError.
+            # Sem este except, a docstring abaixo é falsa e o 500 volta.
+            logger.warning("[PIX] Valor numérico grande demais para converter "
+                           "(%d dígitos) — recusando.", len(str(bruto)))
+            return None
+        return _valor_utilizavel(valor)
     if not isinstance(bruto, str):
         return None
 
@@ -263,9 +311,9 @@ def _para_float(bruto) -> Optional[float]:
 
     try:
         valor = float(texto)
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
-    return valor if math.isfinite(valor) else None
+    return _valor_utilizavel(valor)
 
 
 class PaymentGatewayAdapter(ABC):

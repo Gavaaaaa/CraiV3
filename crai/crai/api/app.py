@@ -29,12 +29,14 @@ from ..churn_voluntary.state import ChurnVoluntaryState
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
     MOTIVO_SEM_IDENTIFICACAO,
+    MOTIVO_VALOR_NAO_UTILIZAVEL,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
     STATUS_AUTORIZACAO_CONCEDIDA,
     STATUS_AUTORIZACAO_REVOGADA,
     PayloadPixInvalido,
     PixAutomaticoAdapter,
+    _para_float,
 )
 from ..security.webhook_verification import (
     verify_stripe_signature,
@@ -303,14 +305,32 @@ class SimulatePixFalha(BaseModel):
 async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
     """Cobrança recorrente de Pix Automático que falhou, sem PSP real."""
     _require_simulation_env()
+
+    # O valor passa pelos MESMOS portões do webhook assinado.
+    #
+    # Sintetizar o evento aqui não o torna confiável: `payload.valor` vem de
+    # fora igual ao do webhook, e o Pydantic aceita `nan`, `inf` e `1e300` num
+    # campo `float`. Sem esta checagem o endpoint da demo cria negócio de
+    # `R$ -500,00` e de `R$ nan` no CRM, e devolve 500 com `1e300` — os defeitos
+    # P0-5 e N-10 inteiros, pela porta que a apresentação de fato usa.
+    valor = _para_float(payload.valor)
+    if valor is None or valor <= 0:
+        logger.warning("[PIX] /simulate/pix-falhado recusado — valor %r não é "
+                       "uma cobrança utilizável.", payload.valor)
+        raise HTTPException(status_code=422, detail={
+            "motivo": MOTIVO_VALOR_NAO_UTILIZAVEL,
+            "detalhe": f"valor recebido: {payload.valor!r}",
+        })
+    valor = round(valor, 2)
+
     evento = {
         "e2e_id": f"E{payload.ispb_pagador}{payload.id_recorrencia}",
-        "valor": payload.valor,
+        "valor": valor,
         "status": STATUS_COBRANCA_FALHADA,
         "ispb_pagador": payload.ispb_pagador,
         "id_recorrencia": payload.id_recorrencia,
-        # Evento sintetizado aqui: por construção não passou por nenhuma
-        # degradação de parsing.
+        # Sintetizado após a validação acima: chega aqui sem degradação porque
+        # o que degradaria já foi recusado, não porque ninguém olhou.
         "degradacoes": [],
     }
     # Mesma derivação de identidade do webhook real: se o simulador usasse o
@@ -323,7 +343,7 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
 
     await _run_involuntary_pipeline(
         event=evento, payment_method="pix_automatico",
-        customer_id=customer_id, amount=payload.valor,
+        customer_id=customer_id, amount=valor,
         invoice_id=evento["e2e_id"],
     )
     return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})

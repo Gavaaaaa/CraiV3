@@ -408,3 +408,82 @@ class TestUmDefaultSoParaPaymentMethod:
         estado = _estado("pix_automatico")
         del estado["payment_method"]
         assert route_after_decision(estado) == "trigger_dunning"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# P0-6 — REGRESSÃO COMPORTAMENTAL, NÃO PROVA DE SÍMBOLO
+#
+# Nasceu da re-auditoria A1-r2. Os testes de `TestThreadIdNuncaColide` chamam
+# `app_module._thread_id` diretamente: no commit anterior isso levanta
+# `AttributeError` e o teste "falha" por o símbolo ser novo, não por a colisão
+# existir. Isso não é prova de regressão — é prova de que a função nasceu aqui.
+#
+# Esta classe não menciona `_thread_id`. Entra pelo webhook assinado e observa
+# o `thread_id` que chega ao `MemorySaver`, que é o que de fato separa a
+# memória de um cliente da do outro. No baseline os dois pagadores anônimos
+# recebem `"rec_desconhecida"` e o teste falha por IGUALDADE.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestP0_6RegressaoPeloWebhook:
+    """Dois pagadores anônimos distintos não podem dividir checkpoint."""
+
+    @staticmethod
+    def _assinar(corpo: bytes, segredo: bytes = b"s3cr3t") -> dict:
+        ts = int(time.time())
+        mac = hmac.new(segredo, f"{ts}.".encode() + corpo, hashlib.sha256).hexdigest()
+        return {"x-pix-signature": f"t={ts},v1={mac}"}
+
+    @staticmethod
+    def _corpo(e2e: str, ispb: str, valor: float) -> bytes:
+        """Cobrança falhada SEM id_recorrencia — o caso do P0-6."""
+        return json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"e2e_id": e2e, "ispb_pagador": ispb, "valor": valor,
+                     "status": "failed"},
+        }).encode()
+
+    def _thread_ids_entregues(self, monkeypatch, eventos) -> list:
+        """Manda cada evento pelo webhook e devolve os thread_id capturados."""
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s3cr3t")
+        capturados = []
+
+        async def fake_ainvoke(state, config=None, *a, **kw):
+            capturados.append((config or {}).get("configurable", {}).get("thread_id"))
+            return dict(state)
+
+        monkeypatch.setattr(app_module.crai_agent, "ainvoke", fake_ainvoke)
+
+        with TestClient(app_module.app) as c:
+            for corpo in eventos:
+                c.post("/webhooks/pix-automatico", content=corpo,
+                       headers=self._assinar(corpo))
+        return capturados
+
+    def test_dois_pagadores_anonimos_nao_dividem_checkpoint(self, monkeypatch):
+        """O defeito P0-6 na sua forma original, medido no ponto que importa."""
+        ids = self._thread_ids_entregues(monkeypatch, [
+            self._corpo("E_PAGADOR_A", "60701190", 299.90),
+            self._corpo("E_PAGADOR_B", "00000000", 149.90),
+        ])
+
+        assert len(ids) == 2, (
+            f"os dois eventos deveriam chegar ao pipeline; chegaram {len(ids)}")
+        assert ids[0] != ids[1], (
+            f"P0-6 VIVO: dois pagadores distintos dividiram o checkpoint {ids[0]!r} "
+            "— o segundo evento retomaria o estado do primeiro")
+        assert all(i for i in ids), f"thread_id vazio entregue ao MemorySaver: {ids}"
+
+    def test_o_mesmo_pagador_mantem_o_seu_checkpoint(self, monkeypatch):
+        """O contrário também precisa valer, senão o cliente perde a memória."""
+        corpo = self._corpo("E_PAGADOR_A", "60701190", 299.90)
+        ids = self._thread_ids_entregues(monkeypatch, [corpo, corpo])
+        assert len(ids) == 2
+        assert ids[0] == ids[1]
+
+    def test_literal_rec_desconhecida_nao_chega_ao_memorysaver(self, monkeypatch):
+        """O default degenerado do baseline não pode voltar por caminho nenhum."""
+        ids = self._thread_ids_entregues(monkeypatch, [
+            self._corpo("E_X", "111", 10.0),
+            self._corpo("E_Y", "222", 20.0),
+        ])
+        assert "rec_desconhecida" not in ids

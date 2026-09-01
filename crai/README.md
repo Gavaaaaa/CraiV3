@@ -115,7 +115,7 @@ criado no HubSpot, sem quebrar o pipeline.
 
 ## Dívida técnica conhecida (roadmap pós-demo)
 
-Itens levantados na auditoria dos sprints de 31/08–03/09 e **deliberadamente
+Itens levantados nas auditorias adversariais A1 e A1-r2 dos sprints de 31/08–03/09 e **deliberadamente
 não corrigidos antes da demo**, por serem risco maior que ganho nessa janela.
 Estão aqui para não virarem dívida esquecida.
 
@@ -125,3 +125,9 @@ Estão aqui para não virarem dívida esquecida.
 | **P2-11** | `integrations/hubspot_crm.py` | Duplica inline o digest md5 estável de `seed_por_cliente` (`ml/synthetic_data.py`) em vez de importá-lo. Mesma decisão de projeto escrita em dois lugares. | Baixo risco, mas toca o id que aparece na demo. |
 | **P2-13** | `integrations/payment_gateway.py::store_encrypted_pix_key` | Read-modify-write no cofre de chaves Pix sem lock. | Não é chamado no pipeline ativo hoje. Vira P0 no dia em que a conciliação entrar em produção. |
 | — | `ml/synthetic_data.py` | `tenure_months` e a probabilidade-base de recuperação (`p = 0.5`) continuam **não calibrados** — não existe fonte pública para nenhum dos dois. | Declarado em `docs/DATA_CARD.md`, seções 5 e 6. É limitação assumida, não descuido. |
+| **N-8** | `agent/workflow.py` | `float(confidence)` fica **fora** do `try` que protege a chamada do Módulo 3: se o modelo devolver algo não numérico em `confidence`, a exceção escapa. | Não dispara com os modelos atuais. **Vira P0 no Sprint 4**, que é o próximo a mexer no retorno do Módulo 3. |
+| **N-9** | `integrations/payment_gateway.py::_resolver_envelope` | `{"data": [<não-dict>]}` — lista de 1 elemento que não é objeto — cai no ramo do envelope em vez de ser recusada como lote. | Recusado adiante pelo portão de valor (422), então não produz decisão errada. Fecha junto com o próximo toque no envelope. |
+| **N-11** | `integrations/payment_gateway.py` | `str()` sobre estrutura (dict/list) num campo de identificação produz um identificador em vez de recusar. | Só afeta payload malformado que já é recusado pelo valor. |
+| **N-12** | `test_pipeline.py` | `UnicodeEncodeError` no console padrão do Windows; só roda com `PYTHONIOENCODING=utf-8`. | Pré-existente. **Tem que ser resolvido dentro do `demo_runner.py` no Sprint 5** — o teste de ambiente limpo do gate GA2 depende disso. |
+| **N-6 (resíduo)** | `integrations/payment_gateway.py::store_encrypted_pix_key` | Descarta a lista `degradacoes` que recebe, em vez de registrá-la. | Fora do caminho do pipeline ativo, como o P2-13. |
+| **§4.6** | `crai/models/` | Os binários em disco são de um treino anterior: **AUC 0,6797, abaixo do piso [0,70; 0,92]** dos gates G3/G4, e `train_metrics.json` com schema anterior ao commit `4109d84`. | **Fecha no Sprint 4**, que retreina os três módulos com os 15.000 do Sprint 3. Até lá, a demo carrega modelo que não passa no próprio gate. |

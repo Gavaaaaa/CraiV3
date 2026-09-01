@@ -894,3 +894,110 @@ class TestA1DegradacaoTemLeitor:
         asyncio.run(diagnose_failure(estado))
 
         assert "[QUALIDADE]" in capsys.readouterr().out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A1-r2 — MAGNITUDE FINITA MAS ABSURDA (P0-1, o caminho que sobrou)
+#
+# A correção do N-2 fechou `Infinity` e `NaN`. Não fechou magnitude finita:
+# `1e300` passa por `math.isfinite`, chega ao `float32` do sklearn três nós
+# adiante e vira `inf` — mesmo 500, outra porta. E um inteiro JSON de 401
+# dígitos derrubava o próprio `_para_float` com `OverflowError`, contradizendo
+# a docstring que promete "nunca levanta".
+# ══════════════════════════════════════════════════════════════════════════
+
+INT_GIGANTE = int("9" * 401)
+
+
+class TestA1R2MagnitudeImplausivel:
+    """Ser finito não basta: precisa ser um valor de cobrança."""
+
+    def test_para_float_nunca_levanta_com_inteiro_gigante(self):
+        """A docstring promete que nunca levanta. Antes, levantava."""
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(INT_GIGANTE) is None
+
+    @pytest.mark.parametrize("valor", [1e300, -1e300, 1e13, "1e300"])
+    def test_para_float_recusa_magnitude_implausivel(self, valor):
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(valor) is None
+
+    def test_valores_plausiveis_continuam_passando(self):
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(299.90) == 299.90
+        assert conv("1.299,90") == 1299.90
+        assert conv(1e11) == 1e11      # R$ 100 bi ainda é plausível
+
+    @pytest.mark.parametrize("campo,valor", [
+        ("valor", 1e300),
+        ("valor", -1e300),
+        ("total_cents", 1e300),
+    ])
+    def test_webhook_recusa_com_422_e_nunca_500(self, client, campo, valor):
+        """O portão de qualidade tem que pegar isto ANTES do modelo."""
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {campo: valor, "id_recorrencia": "RN_mag"},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code < 500, f"HTTP {r.status_code} — P0-1 vivo por magnitude"
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+    def test_webhook_recusa_inteiro_gigante_sem_500(self, client):
+        """Inteiro de 401 dígitos: `json.loads` entrega `int` de precisão
+        arbitrária, e `float()` sobre ele levanta OverflowError."""
+        corpo = ('{"event":"automatic_pix.charge_failed","data":'
+                 '{"valor":' + "9" * 401 + ',"id_recorrencia":"RN_big"}}').encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code < 500, f"HTTP {r.status_code} — OverflowError escapou"
+        assert r.status_code == 422
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A1-r2 — /simulate/pix-falhado TEM QUE TER OS MESMOS PORTÕES
+#
+# É o endpoint que a demo usa. Sintetizava `degradacoes: []` e passava
+# `payload.valor` cru: `-500` criava negócio de R$ -500,00 no CRM, `NaN` criava
+# negócio de R$ nan, e `1e300` devolvia 500. O P0-5 e o N-10 inteiros, na porta
+# que a banca vai ver funcionando.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestA1R2SimuladorTemOsMesmosPortoes:
+
+    @pytest.fixture
+    def sim_client(self, monkeypatch):
+        monkeypatch.setenv("ENV", "demo")
+        chamadas = []
+
+        async def fake_involuntary(event, payment_method="card", **kwargs):
+            chamadas.append(kwargs.get("amount"))
+
+        monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
+        with TestClient(app_module.app) as c:
+            c.pipeline_calls = chamadas
+            yield c
+
+    @pytest.mark.parametrize("valor", [-500.0, 0.0, float("nan"), float("inf"), 1e300])
+    def test_valor_inutilizavel_e_recusado_com_422(self, sim_client, valor):
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_sim", "valor": valor, "ispb_pagador": "60701190"})
+        assert r.status_code < 500, f"HTTP {r.status_code} com valor={valor!r}"
+        assert r.status_code == 422, (
+            f"valor={valor!r} entrou no pipeline da demo (HTTP {r.status_code})")
+        assert sim_client.pipeline_calls == [], (
+            f"pipeline rodou com amount={sim_client.pipeline_calls}")
+
+    def test_valor_legitimo_continua_passando(self, sim_client):
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_sim", "valor": 299.90, "ispb_pagador": "60701190"})
+        assert r.status_code == 200
+        assert sim_client.pipeline_calls == [299.90]
