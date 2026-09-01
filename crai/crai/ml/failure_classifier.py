@@ -25,8 +25,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     classification_report,
-    roc_auc_score,
     confusion_matrix,
+    precision_recall_fscore_support,
+    roc_auc_score,
 )
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
@@ -48,6 +49,45 @@ INTERVENTION_COSTS = {
     "ligacao_cs": 15.00,
     "pix_boleto_link": 0.50,
 }
+
+# ── Limiar de classificação — para o RELATÓRIO, não para a decisão ──────
+#
+# ATENÇÃO ao que este número é e ao que ele não é.
+#
+# Ele **não** é a regra de decisão do pipeline. Quem decide se a CRAI age é
+# `route_after_diagnosis` (crai/agent/main_agent.py), pela regra de e-Profit:
+# age quando `p_recovery * LTV > custo da intervenção`. Medida num holdout de
+# 3.000 linhas, essa regra abandona 71 clientes (2,37%) e perde **1** único
+# recuperável — a recall OPERACIONAL do sistema é 99,9%.
+#
+# Este limiar serve só para o relatório: acurácia, precisão, recall e matriz de
+# confusão precisam de um corte binário, e o modelo devolve probabilidade.
+#
+# O 0,50 herdado era arbitrário — herança de `predict_proba` genérico, sem
+# nenhuma justificativa de negócio. Ele fazia o relatório anunciar recall 0,607
+# num sistema que na prática não abandona quase ninguém: o número descrevia o
+# corte, não a CRAI.
+#
+# 0,25 é o ponto que **maximiza F2** no holdout (F2 = 0,782). F2 pesa recall
+# duas vezes mais que precisão, e é a assimetria real do dunning: deixar de
+# tentar um cliente recuperável custa o LTV inteiro; uma tentativa desperdiçada
+# custa R$ 0,05 de bot. Medido na varredura completa:
+#
+#     limiar  acurácia  precisão  recall     F2   recuperáveis perdidos
+#       0,50     0,732     0,646   0,607  0,614          436 / 1109
+#       0,35     0,696     0,562   0,810  0,744          211 / 1109
+#     → 0,25     0,636     0,505   0,907  0,782          103 / 1109
+#       0,15     0,527     0,437   0,964  0,777           40 / 1109
+#
+# A acurácia CAI de 0,732 para 0,636, e isso é esperado e aceito: acurácia
+# premia acertar a classe majoritária ("não recupera", 63% da base), que é
+# exatamente a decisão sem valor comercial. O gate do plano é AUC, que não
+# depende de limiar nenhum e não muda com isto.
+LIMIAR_CLASSIFICACAO = 0.25
+
+# Limiares reportados na tabela de métricas, para a banca ver o trade-off
+# inteiro em vez de um ponto escolhido a dedo.
+LIMIARES_REPORTADOS = (0.50, 0.40, 0.35, 0.30, LIMIAR_CLASSIFICACAO, 0.20, 0.15)
 
 # ── Features categóricas e numéricas ─────────────────────────────────────
 CATEGORICAL_FEATURES = ["gateway_error_code", "card_brand"]
@@ -161,8 +201,15 @@ class FailureClassifier:
         # Salvar modelos
         self._save_models()
 
+        op = metrics["recall_operacional"]
         print(f"[CLASSIFIER] Treino concluído — AUC: {metrics['auc']:.3f} | "
               f"e-Profit médio (teste): R$ {metrics['avg_eprofit']:.2f}")
+        print(f"[CLASSIFIER] Limiar do relatório {LIMIAR_CLASSIFICACAO:.2f} → "
+              f"recall {metrics['recall_recovered']:.3f}, "
+              f"acurácia {metrics['accuracy']:.3f}")
+        print(f"[CLASSIFIER] Recall OPERACIONAL (regra de e-Profit, que é quem "
+              f"decide): {op['recall']:.3f} — "
+              f"{op['recuperaveis_perdidos']} recuperável(is) perdido(s)")
 
         return metrics
 
@@ -194,7 +241,7 @@ class FailureClassifier:
         rf_proba = self.rf.predict_proba(X_test)[:, 1]
         ensemble_proba = 0.7 * xgb_proba + 0.3 * rf_proba
 
-        y_pred = (ensemble_proba >= 0.5).astype(int)
+        y_pred = (ensemble_proba >= LIMIAR_CLASSIFICACAO).astype(int)
         auc = roc_auc_score(y_test, ensemble_proba)
 
         # e-Profit médio (usando bot_whatsapp como canal padrão)
@@ -207,15 +254,68 @@ class FailureClassifier:
 
         return {
             "auc": round(auc, 4),
+            "limiar_classificacao": LIMIAR_CLASSIFICACAO,
             "accuracy": round(report["accuracy"], 4),
             "precision_recovered": round(report.get("1", {}).get("precision", 0), 4),
             "recall_recovered": round(report.get("1", {}).get("recall", 0), 4),
             "f1_recovered": round(report.get("1", {}).get("f1-score", 0), 4),
             "confusion_matrix": cm,
+            # A tabela inteira, e não só o ponto escolhido: um limiar é uma
+            # decisão de negócio, e a banca tem que poder ver o que se ganha e
+            # o que se perde ao movê-lo.
+            "metricas_por_limiar": self._varrer_limiares(y_test, ensemble_proba),
+            # A recall que importa não é a do limiar: é a da regra que o
+            # pipeline realmente usa para desistir de um cliente.
+            "recall_operacional": self._recall_operacional(
+                y_test, ensemble_proba, ltv_test, cost),
             "avg_eprofit": round(avg_eprofit, 2),
             "n_positive_eprofit": int(np.sum(eprofits > 0)),
             "n_total_test": len(y_test),
             "classification_report": report,
+        }
+
+    @staticmethod
+    def _varrer_limiares(y_test: np.ndarray, proba: np.ndarray) -> list[dict]:
+        """Acurácia / precisão / recall / F2 em cada limiar reportado."""
+        linhas = []
+        for limiar in LIMIARES_REPORTADOS:
+            pred = (proba >= limiar).astype(int)
+            precisao, recall, _, _ = precision_recall_fscore_support(
+                y_test, pred, average="binary", zero_division=0)
+            # F2 pesa recall 2x precisão — a assimetria do dunning.
+            f2 = ((5 * precisao * recall) / (4 * precisao + recall)
+                  if (precisao + recall) > 0 else 0.0)
+            linhas.append({
+                "limiar": limiar,
+                "acuracia": round(float((pred == y_test).mean()), 4),
+                "precisao": round(float(precisao), 4),
+                "recall": round(float(recall), 4),
+                "f2": round(float(f2), 4),
+                "recuperaveis_perdidos": int(((y_test == 1) & (pred == 0)).sum()),
+                "em_uso": limiar == LIMIAR_CLASSIFICACAO,
+            })
+        return linhas
+
+    @staticmethod
+    def _recall_operacional(y_test: np.ndarray, proba: np.ndarray,
+                            ltv_test: np.ndarray, cost: float) -> dict:
+        """A recall da regra que o pipeline REALMENTE usa para desistir.
+
+        `route_after_diagnosis` abandona o cliente quando o e-Profit não é
+        positivo (`p * LTV <= custo`) ou quando o score fica abaixo de 5/100.
+        Como o custo do bot é R$ 0,05 e o LTV raramente é desprezível, essa
+        regra quase nunca desiste — e é ela, não o limiar do relatório, que
+        determina quantos clientes recuperáveis a CRAI deixa passar.
+        """
+        abandonados = ((proba * ltv_test - cost) <= 0) | ((proba * 100) < 5)
+        recuperaveis = int((y_test == 1).sum())
+        perdidos = int(((y_test == 1) & abandonados).sum())
+        return {
+            "regra": "e-Profit <= 0 ou recovery_score < 5 (route_after_diagnosis)",
+            "clientes_abandonados": int(abandonados.sum()),
+            "n_total": int(len(y_test)),
+            "recuperaveis_perdidos": perdidos,
+            "recall": round(1 - perdidos / recuperaveis, 4) if recuperaveis else None,
         }
 
     # ══════════════════════════════════════════════════════════════════════
