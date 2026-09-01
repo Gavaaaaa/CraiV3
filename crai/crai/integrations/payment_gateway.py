@@ -136,6 +136,10 @@ DEGRADACAO_VALOR_AUSENTE = "valor_ausente"
 DEGRADACAO_VALOR_ILEGIVEL = "valor_ilegivel"
 DEGRADACAO_VALOR_NAO_POSITIVO = "valor_nao_positivo"
 DEGRADACAO_STATUS_DESCONHECIDO = "status_desconhecido"
+# Campo de identificação que veio como estrutura (dict/list) em vez de escalar.
+# NÃO é bloqueante: o evento segue pelo caminho de identificação ausente, que
+# já sabe recusar quando não sobra nada (ver `_thread_id` em api/app.py).
+DEGRADACAO_IDENTIFICACAO_ILEGIVEL = "identificacao_ilegivel"
 
 DEGRADACOES_CONHECIDAS = frozenset({
     DEGRADACAO_ENVELOPE_AUSENTE,
@@ -144,6 +148,7 @@ DEGRADACOES_CONHECIDAS = frozenset({
     DEGRADACAO_VALOR_ILEGIVEL,
     DEGRADACAO_VALOR_NAO_POSITIVO,
     DEGRADACAO_STATUS_DESCONHECIDO,
+    DEGRADACAO_IDENTIFICACAO_ILEGIVEL,
 })
 
 # Degradações que impedem o evento de entrar no pipeline de recuperação: sem
@@ -226,7 +231,39 @@ _GRUPO_DE_MILHAR_AMBIGUO = re.compile(r"^[+-]?\d{1,3}[.,]\d{3}$")
 # começa a perder precisão. Qualquer coisa acima disso é payload corrompido ou
 # hostil, não cobrança: recusar é a leitura correta, e a recusa é barata (422,
 # que o PSP retenta).
+#
+# O teto é em REAIS, e vale igual nos dois caminhos: o campo em reais e o campo
+# em centavos, este último **depois** da divisão por 100. Checar só o número
+# cru daria a `total_cents` um teto de R$ 10 bilhões e a `valor` um de R$ 1
+# trilhão — dois limites para a mesma regra, dependendo de qual campo o PSP usa.
 VALOR_MAXIMO_PLAUSIVEL = 1e12
+
+
+def _texto_de_identificacao(bruto, campo: str, degradacoes: list[str]) -> str:
+    """Coage a texto **apenas** o que é escalar; o resto vira vazio (N-11).
+
+    `str()` sobre um dict ou uma lista sempre devolve alguma coisa — e essa
+    coisa vira identidade. Um `id_recorrencia: {"a": 1}` produzia o thread_id
+    literal `"{'a': 1}"`, que o `MemorySaver` aceita como qualquer outro: o
+    checkpoint de um cliente passa a ser nomeado por uma estrutura que ninguém
+    controla, e colide com quem mandar essa mesma string em texto.
+
+    Devolvendo vazio, o campo cai no caminho já definido para identificação
+    ausente: e2e anônimo, ou 422 quando não sobra nada que identifique o
+    pagador. Recusar é o comportamento correto; inventar um id, não.
+    """
+    if bruto is None:
+        return ""
+    if isinstance(bruto, (str, int, float)) and not isinstance(bruto, bool):
+        return str(bruto)
+    logger.warning(
+        "[PIX] Campo de identificação %r veio como %s, não como escalar — "
+        "descartado em vez de virar identidade por `str()`.",
+        campo, type(bruto).__name__,
+    )
+    if DEGRADACAO_IDENTIFICACAO_ILEGIVEL not in degradacoes:
+        degradacoes.append(DEGRADACAO_IDENTIFICACAO_ILEGIVEL)
+    return ""
 
 
 def _valor_utilizavel(valor: float) -> Optional[float]:
@@ -368,22 +405,22 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         dados = self._resolver_envelope(raw_payload, degradacoes)
 
         normalizado = {
-            "e2e_id": str(_primeiro_preenchido(
+            "e2e_id": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "pix.end_to_end_id", "pix.e2e_id", "end_to_end_id", "e2e_id",
                 default="",
-            )),
+            ), "e2e_id", degradacoes),
             "valor": self._extrair_valor(dados, degradacoes),
             "status": self._extrair_status(raw_payload, dados, degradacoes),
-            "ispb_pagador": str(_primeiro_preenchido(
+            "ispb_pagador": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "pix.payer.ispb", "payer.ispb", "debtor.ispb",
                 "pix.debtor_ispb", "ispb_pagador", "ispb",
                 default="",
-            )),
-            "id_recorrencia": str(_primeiro_preenchido(
+            ), "ispb_pagador", degradacoes),
+            "id_recorrencia": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "automatic_pix.recurrence_id", "automatic_pix.id",
                 "recurrence_id", "id_recorrencia", "recurrence.id",
                 default="",
-            )),
+            ), "id_recorrencia", degradacoes),
             "degradacoes": degradacoes,
         }
 
@@ -427,6 +464,23 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                 degradacoes.append(DEGRADACAO_LOTE_DE_1)
                 return dados[0]
 
+            if dados:
+                # Lista NÃO VAZIA cujo conteúdo não é objeto (N-9). Cair no
+                # nível raiz aqui seria trocar de fonte de dados em silêncio —
+                # exatamente o P0-3, que este método existe para fechar:
+                # `data: ["texto"]` com um `valor` solto na raiz produzia uma
+                # cobrança falhada válida, com `pipeline: true`, a partir de um
+                # payload que ninguém sabe ler.
+                #
+                # `data: []` é outra coisa e continua caindo na raiz: lista
+                # vazia é envelope ausente, não lote malformado — é o
+                # comportamento que o Sprint 1 fixou para o P0-3.
+                raise PayloadPixInvalido(
+                    MOTIVO_PAYLOAD_NAO_E_OBJETO,
+                    f"'data' é uma lista cujo conteúdo não é objeto "
+                    f"({type(dados[0]).__name__}) — não há evento para normalizar",
+                )
+
         logger.warning(
             "[PIX] Envelope 'data' ausente ou inutilizável (%s) — lendo do nível raiz.",
             type(dados).__name__,
@@ -452,8 +506,17 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                                "degradado para 0.0", bruto_centavos)
                 degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
                 return 0.0
+            # O teto de magnitude é declarado em REAIS. Aplicá-lo só antes da
+            # divisão deixaria este caminho com um teto 100× menor que o do
+            # campo em reais — dois limites diferentes para a mesma regra.
+            reais_de_centavos = _valor_utilizavel(round(centavos / 100, 2))
+            if reais_de_centavos is None:
+                logger.warning("[PIX] Campo de centavos (%r) fora da faixa "
+                               "plausível — valor degradado para 0.0", bruto_centavos)
+                degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+                return 0.0
             return PixAutomaticoAdapter._validar_positivo(
-                round(centavos / 100, 2), bruto_centavos, degradacoes)
+                reais_de_centavos, bruto_centavos, degradacoes)
 
         bruto_reais = _primeiro_preenchido(dados, "pix.valor", "valor", "amount", "total")
         if bruto_reais is None:

@@ -36,6 +36,8 @@ from crai.ml.failure_classifier import (
 # Mesma disciplina já aplicada em tests/test_payment_gateway.py.
 LIMIAR_CLASSIFICACAO = getattr(classifier_module, "LIMIAR_CLASSIFICACAO", 0.25)
 RECALL_MINIMO = getattr(classifier_module, "RECALL_MINIMO", 0.90)
+LIMIARES_REPORTADOS = getattr(
+    classifier_module, "LIMIARES_REPORTADOS", (0.50, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15))
 
 
 def escolher_limiar(*args, **kwargs):
@@ -420,12 +422,18 @@ class TestEscolhaDoLimiar:
         assert maiores, "grade sem nenhum limiar acima do escolhido"
         assert all(m["recall"] < RECALL_MINIMO for m in maiores)
 
-    def test_recall_nao_cresce_quando_o_limiar_cresce(self, classificador_treinado):
-        """Sanidade da varredura: recall é monótono não-crescente no limiar."""
+    def test_a_varredura_cobre_a_grade_declarada(self, classificador_treinado):
+        """A tabela reportada tem que ser a grade inteira, sem furos.
+
+        (Substituiu um teste de monotonicidade do recall, que a auditoria A1-r3
+        apontou como tautológico: baixar o limiar só pode aumentar o conjunto
+        de positivos, então recall não-crescente é verdade por construção, não
+        uma propriedade do código.)
+        """
         _, metrics, _ = classificador_treinado
-        linhas = sorted(metrics["metricas_por_limiar"], key=lambda m: m["limiar"])
-        recalls = [m["recall"] for m in linhas]
-        assert recalls == sorted(recalls, reverse=True), recalls
+        limiares = sorted(m["limiar"] for m in metrics["metricas_por_limiar"])
+        assert limiares == sorted(LIMIARES_REPORTADOS)
+        assert sum(m["em_uso"] for m in metrics["metricas_por_limiar"]) == 1
 
     def test_regra_devolve_none_quando_nada_alcanca_o_minimo(self):
         """Sem limiar aceitável, devolve None — não arredonda o critério."""

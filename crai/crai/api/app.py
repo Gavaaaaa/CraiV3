@@ -146,6 +146,59 @@ def _thread_id(evento: dict) -> Optional[str]:
     return anonimo
 
 
+def _valor_de_simulacao(bruto, campo: str = "valor") -> float:
+    """Portão de valor dos endpoints `/simulate/*`, igual ao do webhook.
+
+    Os endpoints de simulação sintetizam o evento em vez de recebê-lo do PSP,
+    então não têm a lista `degradacoes` do parser — mas recebem número de fora
+    igual ao webhook, e o Pydantic aceita `nan`, `inf` e `1e300` num campo
+    `float`. Cada endpoint que fazia a própria checagem (ou nenhuma) reabriu o
+    P0-5 por uma porta diferente. Este é o único lugar onde a regra mora.
+
+    **Arredonda antes de validar**, na mesma ordem do `_extrair_valor` do
+    gateway. A ordem inversa deixava passar `0 < valor < 0.005`: o valor era
+    positivo na checagem, virava `0.0` no arredondamento, e a demo criava
+    negócio de **R$ 0,00** no CRM enquanto o webhook recusava o mesmo número
+    com 422.
+
+    Raises:
+        HTTPException: 422 quando o valor não serve como cobrança.
+    """
+    valor = _para_float(bruto)
+    if valor is not None:
+        valor = round(valor, 2)
+    if valor is None or valor <= 0:
+        logger.warning("[SIM] Campo %r recusado — %r não é uma cobrança "
+                       "utilizável.", campo, bruto)
+        raise HTTPException(status_code=422, detail={
+            "motivo": MOTIVO_VALOR_NAO_UTILIZAVEL,
+            "campo": campo,
+            "detalhe": f"valor recebido: {bruto!r}",
+        })
+    return valor
+
+
+def _contador_de_simulacao(bruto, campo: str, maximo: int = 100_000) -> int:
+    """Portão dos campos de CONTAGEM dos `/simulate/*` (dias, usos, tentativas).
+
+    Mesmo problema do valor, outro tipo: `days_since_last` é `int`, e um
+    inteiro JSON de 401 dígitos atravessa o Pydantic intacto e estoura mais
+    adiante, com o negócio já criado no CRM. Contadores de produto vivem em
+    dezenas ou centenas; o teto é generoso de propósito e só existe para barrar
+    o absurdo.
+    """
+    numero = _para_float(bruto)
+    if numero is None or numero < 0 or numero > maximo:
+        logger.warning("[SIM] Contador %r recusado — %r fora de [0, %d].",
+                       campo, bruto, maximo)
+        raise HTTPException(status_code=422, detail={
+            "motivo": MOTIVO_VALOR_NAO_UTILIZAVEL,
+            "campo": campo,
+            "detalhe": f"valor recebido: {bruto!r}",
+        })
+    return int(numero)
+
+
 def _require_simulation_env() -> None:
     """Endpoints /simulate/* só existem fora de produção."""
     env = os.getenv("ENV", "production").strip().lower()
@@ -287,6 +340,9 @@ class SimulatePayment(BaseModel):
 async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
     """Falha de cartão simulada — mesmo tratamento do webhook real: só registra."""
     _require_simulation_env()
+    # `_build_fake_stripe_event` faz `int(amount * 100)`: com `nan` ou `inf`
+    # isso levanta ValueError e o FastAPI devolve 500.
+    payload.amount = _valor_de_simulacao(payload.amount, "amount")
     _registrar_cartao_desativado(_build_fake_stripe_event(payload))
     return JSONResponse({
         "status": "registrado", "pipeline": False,
@@ -313,15 +369,7 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
     # campo `float`. Sem esta checagem o endpoint da demo cria negócio de
     # `R$ -500,00` e de `R$ nan` no CRM, e devolve 500 com `1e300` — os defeitos
     # P0-5 e N-10 inteiros, pela porta que a apresentação de fato usa.
-    valor = _para_float(payload.valor)
-    if valor is None or valor <= 0:
-        logger.warning("[PIX] /simulate/pix-falhado recusado — valor %r não é "
-                       "uma cobrança utilizável.", payload.valor)
-        raise HTTPException(status_code=422, detail={
-            "motivo": MOTIVO_VALOR_NAO_UTILIZAVEL,
-            "detalhe": f"valor recebido: {payload.valor!r}",
-        })
-    valor = round(valor, 2)
+    valor = _valor_de_simulacao(payload.valor)
 
     evento = {
         "e2e_id": f"E{payload.ispb_pagador}{payload.id_recorrencia}",
@@ -383,8 +431,13 @@ class SimulateChurnRisk(BaseModel):
 async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
     _require_simulation_env()
     props = {
-        "days_since_last":   payload.days_since_last,
-        "features_used_30d": payload.features_used_30d,
+        # Contadores validados antes de entrar no pipeline: sem isto, um
+        # inteiro de 401 dígitos atravessa o Pydantic e estoura lá dentro —
+        # com o negócio já criado no HubSpot antes do erro.
+        "days_since_last":   _contador_de_simulacao(
+            payload.days_since_last, "days_since_last"),
+        "features_used_30d": _contador_de_simulacao(
+            payload.features_used_30d, "features_used_30d"),
         "on_site_now":       payload.on_site_now,
         "billing_profile":   payload.billing_profile,
     }
