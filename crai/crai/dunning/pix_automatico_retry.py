@@ -190,7 +190,15 @@ class PixAutomaticoRetryPolicy:
             )
 
             if confiavel and na_janela:
-                return self._ancorar_na_liquidez(quando, inicio, prazo_final, restantes), ORIGEM_PAYDAY
+                datas = self._ancorar_na_liquidez(quando, inicio, prazo_final, restantes)
+                if datas:
+                    return datas, ORIGEM_PAYDAY
+                # Rede de segurança do P1-7: com a janela aberta, zero tentativa
+                # nunca é resposta válida. Antes do Sprint 2 este caminho
+                # devolvia [] e o cliente ia direto para dunning.
+                logger.warning("[PIX-RETRY] %s: ancoragem vazia — caindo para "
+                               "fallback uniforme.", customer_id)
+                return self._distribuir_uniforme(inicio, prazo_final, restantes), ORIGEM_FALLBACK
 
             motivo = (
                 f"confiança {confianca:.0%} < {self.confianca_minima:.0%}"
@@ -214,28 +222,63 @@ class PixAutomaticoRetryPolicy:
             return None
 
     @staticmethod
-    def _ancorar_na_liquidez(
-        previsto: datetime, inicio: datetime, prazo_final: datetime, restantes: int,
-    ) -> list[datetime]:
-        """Concentra as tentativas a partir do dia previsto de liquidez.
+    def _dias_da_janela(inicio: datetime, prazo_final: datetime) -> int:
+        """Quantos passos de 1 dia cabem em [inicio, prazo_final].
 
-        Sempre para frente: antes da entrada de dinheiro não há saldo, então
-        adiantar a tentativa só queima uma das três. Uma por dia a partir do dia
-        previsto, parando no prazo — se não couberem as 3, agenda menos.
+        Conta por `timedelta`, e **não** por data do calendário. Quando `agora`
+        tem hora diferente da do vencimento, `inicio` e `prazo_final` deixam de
+        compartilhar o horário: contar por data devolveria um dia a mais e a
+        última tentativa cairia depois do prazo — violação do BACEN.
         """
-        datas = []
-        atual = max(previsto, inicio)
-        while len(datas) < restantes and atual <= prazo_final:
-            datas.append(atual)
-            atual = atual + timedelta(days=1)
-        return datas
+        return (prazo_final - inicio).days
 
-    @staticmethod
+    @classmethod
+    def _ancorar_na_liquidez(
+        cls, previsto: datetime, inicio: datetime, prazo_final: datetime, restantes: int,
+    ) -> list[datetime]:
+        """Concentra as tentativas em torno do dia previsto de liquidez.
+
+        A preferência continua sendo **para frente**: antes da entrada de
+        dinheiro há menos saldo, então a tentativa vale mais depois do payday.
+        Mas quando não cabem `restantes` dias para frente até o prazo, o bloco
+        **recua** para trás, ocupando os dias livres entre `inicio` e o dia
+        previsto (P1-8).
+
+        O racional é assimétrico e é o ponto todo: uma tentativa antes do payday
+        tem probabilidade menor de recuperar, mas **maior que zero**; descartá-la
+        tem probabilidade exatamente zero. As 3 tentativas são um direito
+        regulatório do recebedor, não um orçamento a economizar.
+
+        As datas herdam o **horário de `inicio`**, não o de `previsto`. O Payday
+        Engine prevê o DIA em que entra dinheiro e devolve uma hora convencional
+        (10h) que não carrega informação — a mesma razão pela qual `na_janela` já
+        comparava por data. Herdar o horário de `inicio` alinha o agendamento à
+        janela do recebedor e é o que faz a contagem fechar exatamente.
+        """
+        dias_disponiveis = cls._dias_da_janela(inicio, prazo_final)
+        if dias_disponiveis < 0:
+            return []
+
+        # Cabem no máximo (dias_disponiveis + 1) tentativas com 1 dia de intervalo.
+        cabem = min(restantes, dias_disponiveis + 1)
+
+        # Dia previsto, em offsets a partir de `inicio`, preso à janela.
+        offset_previsto = (previsto.date() - inicio.date()).days
+        offset_previsto = max(0, min(offset_previsto, dias_disponiveis))
+
+        # O bloco começa no dia previsto; se ele não couber inteiro até o prazo,
+        # recua o mínimo necessário — é aí que o preenchimento para trás entra.
+        ultimo_inicio_possivel = dias_disponiveis + 1 - cabem
+        inicio_bloco = min(offset_previsto, ultimo_inicio_possivel)
+
+        return [inicio + timedelta(days=inicio_bloco + i) for i in range(cabem)]
+
+    @classmethod
     def _distribuir_uniforme(
-        inicio: datetime, prazo_final: datetime, restantes: int,
+        cls, inicio: datetime, prazo_final: datetime, restantes: int,
     ) -> list[datetime]:
         """Espalha as tentativas pelos dias restantes, nunca a menos de 1 dia."""
-        dias_disponiveis = (prazo_final.date() - inicio.date()).days
+        dias_disponiveis = cls._dias_da_janela(inicio, prazo_final)
         # Cabem no máximo (dias_disponiveis + 1) tentativas com 1 dia de intervalo.
         n = min(restantes, dias_disponiveis + 1)
         if n <= 1:

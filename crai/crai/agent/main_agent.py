@@ -52,7 +52,10 @@ def route_after_decision(state: AgentState) -> str:
     if state.get("estrategia") != "retry_automatico":
         return "trigger_dunning"   # mensagem_pagamento: contato personalizado via LLM
 
-    metodo = state.get("payment_method")
+    # Mesmo default de `decide_recovery` (workflow.py): um state sem
+    # payment_method é tratado como cartão nos dois lugares. Dois defaults para
+    # o mesmo campo ausente faziam o mesmo state seguir dois caminhos (P2-12).
+    metodo = state.get("payment_method", "card")
     if metodo == "pix_automatico":
         return "schedule_retry_pix"
 

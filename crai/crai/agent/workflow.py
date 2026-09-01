@@ -37,6 +37,7 @@ async def diagnose_failure(state: AgentState) -> AgentState:
     """Diagnostica causa da falha via ensemble XGBoost+RF com e-Profit e SHAP."""
     features = _extract_features(
         state["payment_event"], state["amount"], state.get("payment_method", "card"),
+        customer_id=state["customer_id"],
     )
     result = _classifier.predict(features)
 
@@ -101,6 +102,12 @@ async def check_anomaly(state: AgentState) -> AgentState:
 async def infer_payday(state: AgentState) -> AgentState:
     if state["failure_cause"] != "insufficient_funds":
         return {**state, "optimal_retry_at": None}
+    # TODO(pós-demo): infer_payday roda 2x por recuperação — este nó e, de novo,
+    # dentro de PixAutomaticoRetryPolicy._consultar_payday. E os outputs
+    # gravados aqui (optimal_retry_at, confidence, profile_type) não são lidos
+    # por nenhum nó ativo: a política consulta o modelo por conta própria.
+    # NÃO refatorar antes da demo — o ganho é performance, o risco é quebrar o
+    # caminho feliz. Ver P2-10 no roadmap do README.
     window = await _payday.predict_next_window(state["customer_id"])
     print(f"[AGENT] Payday ({window.get('method', 'heuristic')}): "
           f"{window['timestamp'].strftime('%d/%m %H:%M')} | perfil: {window['profile']} | "
@@ -258,10 +265,18 @@ async def update_roi_dashboard(state: AgentState) -> AgentState:
 CAUSA_PIX_FALHA = "insufficient_funds"
 
 
-def _extract_features(event: dict, amount: float, payment_method: str = "card") -> dict:
-    """Extrai as 11 features + LTV para o classificador, conforme a origem do evento."""
+def _extract_features(
+    event: dict, amount: float, payment_method: str = "card",
+    customer_id: str = "",
+) -> dict:
+    """Extrai as 11 features + LTV para o classificador, conforme a origem do evento.
+
+    `customer_id` é a semente do perfil sintético. Ele vem de fora, e não de
+    dentro do evento, porque é o mesmo id que identifica o checkpoint do
+    LangGraph — ver `crai/api/app.py::_thread_id` (P0-6b).
+    """
     if payment_method == "pix_automatico":
-        return _features_pix(event, amount)
+        return _features_pix(event, amount, customer_id)
     return _features_cartao(event, amount)
 
 
@@ -280,15 +295,20 @@ def _features_cartao(event: dict, amount: float) -> dict:
     }
 
 
-def _features_pix(event: dict, amount: float) -> dict:
+def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
     """Features a partir do evento JÁ normalizado de Pix Automático.
 
-    O evento normalizado tem só 5 campos e nenhum deles identifica o pagador —
-    a chave Pix nunca chega até aqui. O identificador usado é o da autorização
-    de recorrência, que é opaco.
+    O evento normalizado tem cinco campos de dado e nenhum deles identifica o
+    pagador — a chave Pix nunca chega até aqui. O identificador usado é o da
+    autorização de recorrência, que é opaco.
+
+    A semente do perfil é o `customer_id`, e não `event["id_recorrencia"]`
+    (P0-6b): para um pagador anônimo o id da recorrência é string vazia
+    enquanto o resto do pipeline usa o id derivado do evento, e o mesmo webhook
+    acabava gerando dois perfis sintéticos diferentes.
     """
     invoice_amount = event.get("valor") or amount
-    perfil = _perfil_simulado(event.get("id_recorrencia", ""), invoice_amount)
+    perfil = _perfil_simulado(customer_id or event.get("id_recorrencia", ""), invoice_amount)
 
     return {
         **perfil,
