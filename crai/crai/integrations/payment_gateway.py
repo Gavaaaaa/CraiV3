@@ -17,12 +17,27 @@ O parsing é deliberadamente tolerante a variações de nome de campo (ver
 `_primeiro_preenchido`): o PSP definitivo ainda não foi fechado pela equipe, e
 o que precisa permanecer estável é o schema de SAÍDA, não o de entrada.
 
-PRIVACIDADE — o schema normalizado contém APENAS cinco campos:
+TOLERANTE NÃO É SILENCIOSO — a regra do Sprint 1
+------------------------------------------------
+Toda degradação aplicada durante o parsing é registrada em `logger.warning`
+**e** marcada no evento normalizado, no campo `degradacoes`. O pipeline nunca
+recebe um default sem saber que é um default. E o que este módulo não sabe
+interpretar ele **recusa** (`PayloadPixInvalido` → HTTP 422), em vez de
+entregar um evento inventado — diagnosticar uma cobrança de R$ 0 é pior que
+devolver 422, porque o e-Profit vai a zero e o churn involuntário legítimo é
+descartado sem rastro.
+
+PRIVACIDADE — o schema normalizado contém cinco campos de DADO:
 
     e2e_id, valor, status, ispb_pagador, id_recorrencia
 
-A chave Pix do pagador (CPF / telefone / e-mail) **nunca** entra nele. Quando
-precisa ser guardada para conciliação, vai cifrada por
+…mais um sexto campo, `degradacoes`, que é **metadado de qualidade do
+parsing**: uma lista de rótulos fixos, tirados de `DEGRADACOES_CONHECIDAS`.
+Nenhum valor vindo do payload entra nele, então a promessa de privacidade
+continua valendo sobre os cinco.
+
+A chave Pix do pagador (CPF / telefone / e-mail) **nunca** entra no schema.
+Quando precisa ser guardada para conciliação, vai cifrada por
 `PixAutomaticoAdapter.store_encrypted_pix_key()`, num arquivo segregado, e não
 tem nenhum caminho de código até crai/ml/ ou crai/agent/.
 """
@@ -31,6 +46,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Optional
 
 from ..security.tokenization import encrypt_sensitive_field
 
@@ -75,6 +91,83 @@ EVENT_STATUS_MAP = {
     "recurrence.charge_failed":              STATUS_COBRANCA_FALHADA,
 }
 
+# ── Status CRU do PSP → status normalizado ───────────────────────────────
+# Nem todo PSP manda nome de evento; muitos mandam só o status do objeto. Sem
+# este mapa, `failed` nunca casava contra PIX_STATUSES (que só tem tokens
+# internos em português) e TODA cobrança falhada desses PSPs virava
+# `desconhecido` → HTTP 200 {"pipeline": false}, silenciosamente.
+#
+# São DOIS mapas, e não um, porque o nome do campo carrega a semântica:
+# `authorization_status: "approved"` é a AUTORIZAÇÃO concedida, não uma
+# cobrança confirmada. Achatar os dois no mesmo mapa transformaria toda
+# autorização aprovada numa cobrança paga que nunca aconteceu.
+STATUS_CRU_COBRANCA = {
+    "failed": STATUS_COBRANCA_FALHADA,
+    "declined": STATUS_COBRANCA_FALHADA,
+    "rejected": STATUS_COBRANCA_FALHADA,
+    "refused": STATUS_COBRANCA_FALHADA,
+    "error": STATUS_COBRANCA_FALHADA,
+    "unpaid": STATUS_COBRANCA_FALHADA,
+    "paid": STATUS_COBRANCA_CONFIRMADA,
+    "succeeded": STATUS_COBRANCA_CONFIRMADA,
+    "success": STATUS_COBRANCA_CONFIRMADA,
+    "approved": STATUS_COBRANCA_CONFIRMADA,
+    "settled": STATUS_COBRANCA_CONFIRMADA,
+    "confirmed": STATUS_COBRANCA_CONFIRMADA,
+}
+
+STATUS_CRU_AUTORIZACAO = {
+    "approved": STATUS_AUTORIZACAO_CONCEDIDA,
+    "authorized": STATUS_AUTORIZACAO_CONCEDIDA,
+    "active": STATUS_AUTORIZACAO_CONCEDIDA,
+    "created": STATUS_AUTORIZACAO_CONCEDIDA,
+    "revoked": STATUS_AUTORIZACAO_REVOGADA,
+    "cancelled": STATUS_AUTORIZACAO_REVOGADA,
+    "canceled": STATUS_AUTORIZACAO_REVOGADA,
+    "expired": STATUS_AUTORIZACAO_REVOGADA,
+}
+
+# ── Qualidade do parsing (campo `degradacoes`) ───────────────────────────
+DEGRADACAO_ENVELOPE_AUSENTE = "envelope_ausente"
+DEGRADACAO_LOTE_DE_1 = "lote_de_1"
+DEGRADACAO_VALOR_AUSENTE = "valor_ausente"
+DEGRADACAO_VALOR_ILEGIVEL = "valor_ilegivel"
+DEGRADACAO_STATUS_DESCONHECIDO = "status_desconhecido"
+
+DEGRADACOES_CONHECIDAS = frozenset({
+    DEGRADACAO_ENVELOPE_AUSENTE,
+    DEGRADACAO_LOTE_DE_1,
+    DEGRADACAO_VALOR_AUSENTE,
+    DEGRADACAO_VALOR_ILEGIVEL,
+    DEGRADACAO_STATUS_DESCONHECIDO,
+})
+
+# Degradações que impedem o evento de entrar no pipeline de recuperação: sem
+# saber o valor, não há LTV, não há e-Profit e não há decisão defensável.
+DEGRADACOES_BLOQUEANTES = frozenset({
+    DEGRADACAO_VALOR_AUSENTE,
+    DEGRADACAO_VALOR_ILEGIVEL,
+})
+
+# ── Motivos de recusa (viram HTTP 422 na borda) ──────────────────────────
+MOTIVO_LOTE_NAO_SUPORTADO = "lote_nao_suportado"
+MOTIVO_PAYLOAD_NAO_E_OBJETO = "payload_nao_e_objeto"
+
+
+class PayloadPixInvalido(Exception):
+    """Payload que a CRAI recusa processar.
+
+    Recusar é uma decisão de projeto, não uma falha: um lote processado pela
+    metade ou um payload que não é objeto JSON não têm normalização correta
+    possível, e inventar uma é pior que devolver 422 para o PSP retentar.
+    """
+
+    def __init__(self, motivo: str, detalhe: str = ""):
+        self.motivo = motivo
+        self.detalhe = detalhe
+        super().__init__(f"{motivo}: {detalhe}" if detalhe else motivo)
+
+
 # Campos do payload que carregam a chave Pix do pagador. Existem só para serem
 # EXCLUÍDOS do schema normalizado e cifrados à parte — nunca copiados adiante.
 CAMPOS_CHAVE_PIX = ("pix_key", "chave", "chave_pix", "key", "payer_key")
@@ -99,6 +192,53 @@ def _primeiro_preenchido(fonte: dict, *caminhos: str, default=None):
     return default
 
 
+# Símbolo de moeda, espaço comum e espaço não-quebrável (PSPs que formatam para
+# exibição costumam mandar   entre "R$" e o número).
+_LIXO_MONETARIO = str.maketrans("", "", "R$  \t\n")
+
+
+def _para_float(bruto) -> Optional[float]:
+    """Converte para float qualquer forma plausível de valor monetário.
+
+    Aceita `None`, `int`, `float`, e strings em pt-BR (`"299,90"`,
+    `"1.299,90"`, `"R$ 1.299,90"`) ou en-US (`"299.90"`, `"1,299.90"`).
+    O separador decimal é decidido por qual dos dois sinais aparece **por
+    último** — o outro é tratado como separador de milhar e removido.
+
+    **Nunca levanta.** Devolve `None` quando não consegue ler; quem chama
+    decide se isso vira degradação ou recusa. Levantar aqui era o P0-1: um
+    `ValueError` dentro do parser vira HTTP 500 e provoca tempestade de retry
+    no PSP.
+
+    Limite conhecido e aceito: `"1.299"` é ambíguo (mil duzentos e noventa e
+    nove em pt-BR, um vírgula duzentos e noventa e nove em en-US). Sem locale
+    declarado pelo PSP não há como decidir; fica lido como `1.299`, que é a
+    interpretação literal do texto.
+    """
+    if bruto is None or isinstance(bruto, bool):
+        return None
+    if isinstance(bruto, (int, float)):
+        return float(bruto)
+    if not isinstance(bruto, str):
+        return None
+
+    texto = bruto.translate(_LIXO_MONETARIO)
+    if not texto:
+        return None
+
+    ultima_virgula = texto.rfind(",")
+    ultimo_ponto = texto.rfind(".")
+    if ultima_virgula > ultimo_ponto:
+        texto = texto.replace(".", "").replace(",", ".")
+    elif ultimo_ponto > ultima_virgula:
+        texto = texto.replace(",", "")
+
+    try:
+        return float(texto)
+    except ValueError:
+        return None
+
+
 class PaymentGatewayAdapter(ABC):
     """Contrato de qualquer PSP: entrega sempre o mesmo schema normalizado."""
 
@@ -107,8 +247,9 @@ class PaymentGatewayAdapter(ABC):
         """Normaliza um evento de Pix Automático do PSP.
 
         Returns:
-            dict com exatamente as chaves e2e_id, valor, status,
-            ispb_pagador e id_recorrencia.
+            dict com as chaves de dado e2e_id, valor, status, ispb_pagador e
+            id_recorrencia, mais `degradacoes` — a lista de defaults que
+            precisaram ser aplicados durante o parsing (vazia = evento íntegro).
         """
 
     def parse_card_event(self, raw_payload: dict) -> dict:
@@ -131,18 +272,31 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             raw_payload: corpo do webhook do PSP, já desserializado
 
         Returns:
-            {e2e_id, valor, status, ispb_pagador, id_recorrencia} — e nada mais.
-            A chave Pix do pagador é deliberadamente descartada aqui.
+            {e2e_id, valor, status, ispb_pagador, id_recorrencia, degradacoes}.
+            Os cinco primeiros são dado; `degradacoes` é a lista (possivelmente
+            vazia) dos defaults que precisaram ser aplicados. A chave Pix do
+            pagador é deliberadamente descartada.
+
+        Raises:
+            PayloadPixInvalido: payload que não é objeto JSON, ou lote com mais
+                de um evento. Vira HTTP 422 na borda.
         """
-        dados = raw_payload.get("data") or raw_payload
+        if not isinstance(raw_payload, dict):
+            raise PayloadPixInvalido(
+                MOTIVO_PAYLOAD_NAO_E_OBJETO,
+                f"corpo do webhook é {type(raw_payload).__name__}, esperado objeto JSON",
+            )
+
+        degradacoes: list[str] = []
+        dados = self._resolver_envelope(raw_payload, degradacoes)
 
         normalizado = {
             "e2e_id": str(_primeiro_preenchido(
                 dados, "pix.end_to_end_id", "pix.e2e_id", "end_to_end_id", "e2e_id",
                 default="",
             )),
-            "valor": self._extrair_valor(dados),
-            "status": self._extrair_status(raw_payload, dados),
+            "valor": self._extrair_valor(dados, degradacoes),
+            "status": self._extrair_status(raw_payload, dados, degradacoes),
             "ispb_pagador": str(_primeiro_preenchido(
                 dados, "pix.payer.ispb", "payer.ispb", "debtor.ispb",
                 "pix.debtor_ispb", "ispb_pagador", "ispb",
@@ -153,32 +307,101 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                 "recurrence_id", "id_recorrencia", "recurrence.id",
                 default="",
             )),
+            "degradacoes": degradacoes,
         }
 
         logger.info(
-            "[PIX] Evento normalizado: status=%s | e2e=%s | recorrencia=%s | ISPB=%s",
+            "[PIX] Evento normalizado: status=%s | e2e=%s | recorrencia=%s | "
+            "ISPB=%s | degradacoes=%s",
             normalizado["status"], normalizado["e2e_id"][:16],
             normalizado["id_recorrencia"], normalizado["ispb_pagador"],
+            degradacoes or "nenhuma",
         )
         return normalizado
 
     @staticmethod
-    def _extrair_valor(dados: dict) -> float:
-        """Valor em reais. PSPs costumam expor centavos (`*_cents`)."""
-        centavos = _primeiro_preenchido(
-            dados, "total_cents", "amount_cents", "pix.amount_cents", "valor_centavos",
-        )
-        if centavos is not None:
-            return round(float(centavos) / 100, 2)
+    def _resolver_envelope(raw_payload: dict, degradacoes: list[str]) -> dict:
+        """Decide, de forma determinística, de onde os campos são lidos.
 
-        reais = _primeiro_preenchido(
-            dados, "pix.valor", "valor", "amount", "total", default=0,
+        O acesso anterior — um `get("data")` encadeado com `or` no envelope —
+        tinha dois defeitos que dependiam do humor do PSP:
+
+          - `data: [{...}]` (lote) → o `or` não dispara, o parser lê os campos
+            de uma LISTA e devolve o normalizado inteiro em default. O pipeline
+            rodava em cima de um evento vazio como se fosse válido (P0-2).
+          - `data: {}` → o `or` dispara e o parser lê o ENVELOPE; `data: {...}`
+            faz ele ler o `data`. Duas fontes diferentes para o mesmo webhook,
+            escolhidas por o PSP mandar o campo vazio ou ausente (P0-3).
+        """
+        dados = raw_payload.get("data")
+
+        if isinstance(dados, dict) and dados:
+            return dados
+
+        if isinstance(dados, list):
+            if len(dados) > 1:
+                raise PayloadPixInvalido(
+                    MOTIVO_LOTE_NAO_SUPORTADO,
+                    f"{len(dados)} eventos num único payload — processar um lote "
+                    f"pela metade é pior que recusá-lo inteiro",
+                )
+            if len(dados) == 1 and isinstance(dados[0], dict):
+                logger.warning("[PIX] Envelope veio como lote de 1 — desempacotado.")
+                degradacoes.append(DEGRADACAO_LOTE_DE_1)
+                return dados[0]
+
+        logger.warning(
+            "[PIX] Envelope 'data' ausente ou inutilizável (%s) — lendo do nível raiz.",
+            type(dados).__name__,
         )
-        return round(float(reais), 2)
+        degradacoes.append(DEGRADACAO_ENVELOPE_AUSENTE)
+        return raw_payload
 
     @staticmethod
-    def _extrair_status(raw_payload: dict, dados: dict) -> str:
-        """Mapeia o nome do evento do PSP para o status normalizado."""
+    def _extrair_valor(dados: dict, degradacoes: list[str]) -> float:
+        """Valor em reais. PSPs costumam expor centavos (`*_cents`).
+
+        Nunca levanta e nunca devolve um `0.0` mudo: quando o valor não pôde
+        ser lido, o zero vem acompanhado de degradação + warning, e a borda
+        recusa o evento antes que ele entre no pipeline (P0-1 e P0-5).
+        """
+        bruto_centavos = _primeiro_preenchido(
+            dados, "total_cents", "amount_cents", "pix.amount_cents", "valor_centavos",
+        )
+        if bruto_centavos is not None:
+            centavos = _para_float(bruto_centavos)
+            if centavos is not None:
+                return round(centavos / 100, 2)
+            logger.warning("[PIX] Campo de centavos ilegível (%r) — valor degradado para 0.0",
+                           bruto_centavos)
+            degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+            return 0.0
+
+        bruto_reais = _primeiro_preenchido(dados, "pix.valor", "valor", "amount", "total")
+        if bruto_reais is None:
+            logger.warning("[PIX] Nenhum campo de valor no payload — valor degradado para 0.0")
+            degradacoes.append(DEGRADACAO_VALOR_AUSENTE)
+            return 0.0
+
+        reais = _para_float(bruto_reais)
+        if reais is None:
+            logger.warning("[PIX] Valor ilegível (%r) — valor degradado para 0.0", bruto_reais)
+            degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+            return 0.0
+        return round(reais, 2)
+
+    @staticmethod
+    def _extrair_status(raw_payload: dict, dados: dict, degradacoes: list[str]) -> str:
+        """Nome do evento do PSP → status normalizado, com três tentativas.
+
+        1. `EVENT_STATUS_MAP` pelo nome do evento (caminho feliz).
+        2. Status CRU do objeto, com o mapa certo para o campo de onde veio —
+           é o que conserta o P0-4. Antes, o fallback comparava o status cru do
+           PSP contra `PIX_STATUSES`, que só tem tokens internos em português:
+           `"failed"` nunca casava, virava `desconhecido`, e a cobrança falhada
+           sumia com HTTP 200. O branch era código morto.
+        3. Token interno da CRAI, para o PSP que já fala o dialeto de saída.
+        """
         evento = _primeiro_preenchido(
             raw_payload, "event", "event_type", "type", default="",
         )
@@ -186,14 +409,30 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         if status:
             return status
 
-        # Alguns PSPs não mandam nome de evento, só o status do objeto.
-        bruto = str(_primeiro_preenchido(
-            dados, "automatic_pix.authorization_status", "status", default="",
+        autorizacao = str(_primeiro_preenchido(
+            dados, "automatic_pix.authorization_status", "authorization_status",
+            default="",
         )).strip().lower()
-        if bruto in PIX_STATUSES:
-            return bruto
+        if autorizacao:
+            status = STATUS_CRU_AUTORIZACAO.get(autorizacao)
+            if status:
+                return status
 
-        logger.warning("[PIX] Evento não reconhecido (event=%r, status=%r)", evento, bruto)
+        cobranca = str(_primeiro_preenchido(
+            dados, "status", "charge_status", "payment_status", default="",
+        )).strip().lower()
+        if cobranca:
+            status = STATUS_CRU_COBRANCA.get(cobranca)
+            if status:
+                return status
+            if cobranca in PIX_STATUSES:
+                return cobranca
+
+        logger.warning(
+            "[PIX] Evento não reconhecido (event=%r, authorization_status=%r, status=%r)",
+            evento, autorizacao, cobranca,
+        )
+        degradacoes.append(DEGRADACAO_STATUS_DESCONHECIDO)
         return STATUS_DESCONHECIDO
 
     # ── Conciliação: chave Pix cifrada, fora do caminho do pipeline ──────
@@ -212,8 +451,17 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             EncryptionKeyMissing: se CRAI_ENCRYPTION_KEY não estiver definida.
                 Falha explícita é melhor que persistir em texto puro.
             ValueError: se o payload não contiver chave Pix.
+            PayloadPixInvalido: se o payload não for objeto JSON ou for um lote.
         """
-        dados = raw_payload.get("data") or raw_payload
+        if not isinstance(raw_payload, dict):
+            raise PayloadPixInvalido(
+                MOTIVO_PAYLOAD_NAO_E_OBJETO,
+                f"corpo é {type(raw_payload).__name__}, esperado objeto JSON",
+            )
+        # Mesma resolução de envelope do parser: um único lugar decide de onde
+        # os campos são lidos, senão o cofre e o pipeline podem discordar sobre
+        # qual evento estão olhando.
+        dados = self._resolver_envelope(raw_payload, [])
         chave = _primeiro_preenchido(
             dados,
             *[f"pix.payer.{c}" for c in CAMPOS_CHAVE_PIX],

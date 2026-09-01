@@ -49,3 +49,7 @@ Thumbs.db
 
 # Relatorios locais de acompanhamento (nao fazem parte do codigo)
 relatorio_*.txt
+
+# Cobertura
+.coverage
+htmlcov/
