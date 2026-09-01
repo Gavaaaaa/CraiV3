@@ -14,6 +14,7 @@ correta — ver crai/agent/main_agent.py.
 
 import os
 import json
+import hashlib
 import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -73,6 +74,36 @@ def _reject_unsigned(request: Request, origem: str) -> HTTPException:
     """401 padrão para webhook sem assinatura válida, registrando a origem."""
     logger.warning(f"[SECURITY] Webhook {origem} rejeitado (401) — IP {_client_ip(request)}")
     return HTTPException(status_code=401, detail="Assinatura de webhook inválida")
+
+
+def _thread_id(evento: dict) -> str:
+    """Identidade do checkpoint do LangGraph para um evento de Pix.
+
+    O `thread_id` do `MemorySaver` é o que separa a memória de um cliente da do
+    outro (ver `crai/agent/main_agent.py`). Usar o literal `"rec_desconhecida"`
+    quando `id_recorrencia` vinha vazio fazia **todos** os pagadores anônimos
+    caírem no mesmo checkpoint: o segundo evento retomava o estado do primeiro
+    (P0-6).
+
+    Aqui o id anônimo é derivado do próprio evento. Colisão passa a acontecer
+    só quando dois eventos são realmente indistinguíveis — e aí compartilhar o
+    checkpoint é o comportamento correto, não um acidente.
+
+    `sha256`, e não o `hash()` embutido: para strings, o hash do Python é
+    randomizado por processo (PYTHONHASHSEED), o que daria um thread_id
+    diferente a cada execução e quebraria o determinismo da demo.
+    """
+    rec = str(evento.get("id_recorrencia") or "").strip()
+    if rec:
+        return rec
+
+    base = f"{evento.get('e2e_id', '')}|{evento.get('ispb_pagador', '')}|{evento.get('valor', 0)}"
+    anonimo = "rec_anon_" + hashlib.sha256(base.encode()).hexdigest()[:16]
+    logger.warning(
+        "[PIX] Evento sem id de recorrência — checkpoint anônimo %s derivado do "
+        "próprio evento (e2e/ISPB/valor).", anonimo,
+    )
+    return anonimo
 
 
 def _require_simulation_env() -> None:
@@ -152,7 +183,7 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
         payment_method="pix_automatico",
         # O identificador da autorização de recorrência é opaco: identifica o
         # contrato de cobrança, não a pessoa. A chave Pix nunca chega aqui.
-        customer_id=evento["id_recorrencia"] or "rec_desconhecida",
+        customer_id=_thread_id(evento),
         amount=evento["valor"],
         invoice_id=evento["e2e_id"] or "e2e_desconhecido",
     )

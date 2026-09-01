@@ -114,16 +114,28 @@ class TestPrazoDeSeteDias:
             assert t.quando <= prazo
 
     @pytest.mark.asyncio
-    async def test_previsao_perto_do_fim_agenda_menos_tentativas(self):
-        """Se a liquidez só chega no 6º dia, não cabem 3 tentativas — agenda as que couberem."""
+    async def test_previsao_perto_do_fim_nao_desperdica_tentativa(self):
+        """P1-8 — regressão.
+
+        Antes do Sprint 2 este teste afirmava o BUG: com a liquidez prevista
+        para o 6º dia, o ancoramento andava só para frente, batia no prazo e
+        agendava 2 das 3. Cada tentativa descartada é receita não recuperada, e
+        as 3 são um direito regulatório, não um orçamento a economizar.
+
+        Agora o bloco de tentativas recua para trás quando não cabe para
+        frente: ainda concentrado na liquidez, mas usando as 3.
+        """
         prazo = VENCIMENTO + timedelta(days=JANELA_DIAS)
         previsto = prazo - timedelta(days=1)
         p = policy(PaydayMock(quando=previsto, confidence=0.95))
 
         tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO, agora=AGORA)
 
-        assert 0 < len(tentativas) < MAX_TENTATIVAS
+        assert len(tentativas) == MAX_TENTATIVAS
         assert all(t.quando <= prazo for t in tentativas)
+        # O bloco recuou o mínimo para caber — e o dia da liquidez continua
+        # dentro dele, que é o ponto de ancorar em vez de distribuir.
+        assert previsto.date() in {t.quando.date() for t in tentativas}
 
     @pytest.mark.asyncio
     async def test_janela_expirada_nao_agenda_nada(self):
@@ -277,3 +289,144 @@ class TestValorOriginal:
         with pytest.raises(PixRetryPolicyViolation) as exc:
             await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO, valor=1.00, agora=AGORA)
         assert "299.90" in str(exc.value) and "1.00" in str(exc.value)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SPRINT 2 — NENHUMA TENTATIVA DESPERDIÇADA (P1-7, P1-8)
+#
+# As 3 tentativas da janela de 7 dias são um DIREITO do recebedor. Descartar
+# uma delas tem probabilidade de recuperação exatamente zero; agendá-la num
+# dia menos provável tem probabilidade menor, mas maior que zero.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _dias_da_janela(inicio: datetime, prazo_final: datetime) -> int:
+    """Quantos passos de 1 dia cabem em [inicio, prazo_final].
+
+    Conta por timedelta, e não por data do calendário: quando `agora` tem hora
+    diferente da do vencimento, `inicio` e `prazo_final` têm horas diferentes, e
+    contar por data faria a última tentativa cair depois do prazo.
+    """
+    return (prazo_final - inicio).days
+
+
+class TestNenhumaTentativaDesperdicada:
+    """P1-7 e P1-8: o ancoramento nunca devolve menos do que cabe na janela."""
+
+    @pytest.mark.asyncio
+    async def test_previsao_no_ultimo_dia_em_hora_tardia_nao_zera(self):
+        """P1-7 — regressão. Repro do plano: vencimento 01/09 09h, payday
+        previsto para 08/09 21h (último dia da janela, hora posterior ao
+        prazo_final das 09h).
+
+        Antes: `_ancorar_na_liquidez` começava em 08/09 21h, que já é > prazo,
+        o laço não rodava nenhuma vez, `_escolher_datas` devolvia [] e o
+        cliente — com previsão confiável e 6 dias livres — recebia ZERO
+        tentativas e ia direto para dunning.
+        """
+        vencimento = datetime(2026, 9, 1, 9, 0)
+        agora = vencimento
+        previsto = datetime(2026, 9, 8, 21, 0)
+        prazo = vencimento + timedelta(days=JANELA_DIAS)
+
+        p = policy(PaydayMock(quando=previsto, confidence=0.95))
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=vencimento, agora=agora)
+
+        assert len(tentativas) == MAX_TENTATIVAS
+        assert all(t.quando <= prazo for t in tentativas)
+        assert all(t.quando >= vencimento + timedelta(days=1) for t in tentativas)
+
+    @pytest.mark.asyncio
+    async def test_previsao_no_dia_6_de_7_agenda_as_tres(self):
+        """P1-8 — regressão. O caso que aparecia na tela da demo: RN_maria_001
+        com 0 tentativas usadas recebia 2/3."""
+        previsto = VENCIMENTO + timedelta(days=6)
+        p = policy(PaydayMock(quando=previsto, confidence=0.95))
+
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO,
+                                      tentativas_usadas=0, agora=AGORA)
+
+        assert len(tentativas) == MAX_TENTATIVAS
+
+    @pytest.mark.asyncio
+    async def test_previsao_no_primeiro_dia_respeita_todas_as_invariantes(self):
+        previsto = VENCIMENTO + timedelta(days=1)
+        inicio = max(AGORA, VENCIMENTO + timedelta(days=1))
+        prazo = VENCIMENTO + timedelta(days=JANELA_DIAS)
+        p = policy(PaydayMock(quando=previsto, confidence=0.95))
+
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO, agora=AGORA)
+
+        assert len(tentativas) == MAX_TENTATIVAS
+        assert all(inicio <= t.quando <= prazo for t in tentativas)
+        for anterior, seguinte in zip(tentativas, tentativas[1:]):
+            assert (seguinte.quando - anterior.quando) >= timedelta(days=1)
+
+    @pytest.mark.asyncio
+    async def test_datas_saem_em_ordem_crescente(self):
+        """`_validar` percorre a lista em ordem para checar o intervalo mínimo:
+        se o preenchimento para trás não reordenasse, ela acusaria violação."""
+        previsto = VENCIMENTO + timedelta(days=6)
+        p = policy(PaydayMock(quando=previsto, confidence=0.95))
+
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO, agora=AGORA)
+
+        assert [t.quando for t in tentativas] == sorted(t.quando for t in tentativas)
+        assert [t.numero for t in tentativas] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dia_previsto", range(0, JANELA_DIAS + 1))
+    @pytest.mark.parametrize("usadas", [0, 1, 2, 3])
+    async def test_invariante_parametrico(self, dia_previsto, usadas):
+        """O invariante do Sprint 2, em todas as combinações.
+
+        Para todo payday previsto de `inicio` até `prazo_final` e todo
+        tentativas_usadas em {0,1,2,3}: o total agendado é exatamente
+        min(3 - usadas, dias_disponiveis + 1), e `_validar` nunca levanta.
+        """
+        previsto = VENCIMENTO + timedelta(days=dia_previsto)
+        inicio = max(AGORA, VENCIMENTO + timedelta(days=1))
+        prazo = VENCIMENTO + timedelta(days=JANELA_DIAS)
+        esperado = min(MAX_TENTATIVAS - usadas, _dias_da_janela(inicio, prazo) + 1)
+
+        p = policy(PaydayMock(quando=previsto, confidence=0.95))
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO,
+                                      tentativas_usadas=usadas, agora=AGORA)
+
+        assert len(tentativas) == esperado
+        assert usadas + len(tentativas) <= MAX_TENTATIVAS
+        assert all(inicio <= t.quando <= prazo for t in tentativas)
+        for anterior, seguinte in zip(tentativas, tentativas[1:]):
+            assert (seguinte.quando - anterior.quando) >= timedelta(days=1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hora_agora", [0, 7, 12, 18, 23])
+    async def test_hora_de_agora_nao_empurra_tentativa_alem_do_prazo(self, hora_agora):
+        """Borda de horário: quando `agora` tem hora diferente da do
+        vencimento, `inicio` e `prazo_final` deixam de compartilhar o horário.
+
+        Contar os dias disponíveis pelo calendário faria a última tentativa
+        cair depois do prazo — violação do BACEN em cima da mesa da banca.
+        """
+        vencimento = datetime(2026, 9, 1, 9, 0)
+        agora = datetime(2026, 9, 2, hora_agora, 0)
+        prazo = vencimento + timedelta(days=JANELA_DIAS)
+
+        for payday in (None, PaydayMock(quando=vencimento + timedelta(days=5),
+                                        confidence=0.95)):
+            tentativas = await policy(payday).schedule(
+                "RN_1", VALOR, vencimento=vencimento, agora=agora)
+            assert tentativas
+            assert all(t.quando <= prazo for t in tentativas)
+
+    @pytest.mark.asyncio
+    async def test_ancoragem_vazia_cai_no_fallback_em_vez_de_zerar(self):
+        """Rede de segurança declarada: se por qualquer motivo o ancoramento
+        devolver lista vazia com a janela ainda aberta, o fallback uniforme
+        assume. Zero tentativa nunca é resposta válida com janela aberta."""
+        p = policy(PaydayMock(quando=VENCIMENTO + timedelta(days=2), confidence=0.95))
+        p._ancorar_na_liquidez = lambda *a, **k: []
+
+        tentativas = await p.schedule("RN_1", VALOR, vencimento=VENCIMENTO, agora=AGORA)
+
+        assert len(tentativas) == MAX_TENTATIVAS
+        assert all(t.origem == ORIGEM_FALLBACK for t in tentativas)

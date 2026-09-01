@@ -237,3 +237,108 @@ class TestLegacyCardIsolado:
         assert "schedule_retry_pix" in nos
         assert "schedule_retry_card" not in nos
         assert "schedule_retry" not in nos
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SPRINT 2 — DOIS CLIENTES NUNCA COMPARTILHAM CHECKPOINT (P0-6)
+#
+# O `thread_id` do MemorySaver é a identidade da conversa no LangGraph. Com
+# `id_recorrencia` vazio, todos os pagadores anônimos caíam no literal
+# "rec_desconhecida" — mesmo thread_id, mesmo checkpoint — e o segundo evento
+# retomava o estado do primeiro.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestThreadIdNuncaColide:
+    """A identidade do checkpoint tem que vir do evento, não de um literal."""
+
+    def test_id_de_recorrencia_presente_e_usado_como_esta(self):
+        evento = {"e2e_id": "E1", "valor": 299.90, "ispb_pagador": "60701190",
+                  "id_recorrencia": "RN2026083100001", "degradacoes": []}
+        assert app_module._thread_id(evento) == "RN2026083100001"
+
+    def test_dois_pagadores_anonimos_diferentes_nao_colidem(self):
+        """O caso do P0-6: dois eventos sem id de recorrência e com valores
+        diferentes são dois clientes distintos — não podem dividir estado."""
+        a = {"e2e_id": "E_a", "valor": 299.90, "ispb_pagador": "60701190",
+             "id_recorrencia": "", "degradacoes": []}
+        b = {"e2e_id": "E_b", "valor": 149.00, "ispb_pagador": "00000000",
+             "id_recorrencia": "", "degradacoes": []}
+
+        assert app_module._thread_id(a) != app_module._thread_id(b)
+
+    def test_muda_so_o_valor_ja_basta_para_separar(self):
+        a = {"e2e_id": "E_x", "valor": 299.90, "ispb_pagador": "60701190",
+             "id_recorrencia": ""}
+        b = {**a, "valor": 300.00}
+        assert app_module._thread_id(a) != app_module._thread_id(b)
+
+    def test_eventos_realmente_identicos_compartilham_checkpoint(self):
+        """Não é bug: se dois eventos são indistinguíveis, tratá-los como o
+        mesmo cliente é o comportamento correto — e o único disponível."""
+        evento = {"e2e_id": "E_y", "valor": 10.0, "ispb_pagador": "1",
+                  "id_recorrencia": ""}
+        assert app_module._thread_id(evento) == app_module._thread_id(dict(evento))
+
+    def test_id_anonimo_e_deterministico_entre_processos(self):
+        """Precisa ser sha256, não `hash()`: o hash embutido do Python é
+        randomizado por processo para strings."""
+        evento = {"e2e_id": "E_z", "valor": 55.5, "ispb_pagador": "9",
+                  "id_recorrencia": ""}
+        assert app_module._thread_id(evento) == (
+            "rec_anon_" + hashlib.sha256(b"E_z|9|55.5").hexdigest()[:16])
+
+    def test_id_anonimo_e_reconhecivel_no_log(self):
+        evento = {"e2e_id": "E_w", "valor": 1.0, "ispb_pagador": "2",
+                  "id_recorrencia": "  "}
+        assert app_module._thread_id(evento).startswith("rec_anon_")
+
+    def test_rec_desconhecida_nunca_mais_e_thread_id(self):
+        """O literal pode continuar existindo em log ou comentário, mas não
+        pode voltar a ser a identidade de um checkpoint."""
+        import inspect
+
+        fonte = inspect.getsource(app_module)
+        for linha in fonte.splitlines():
+            if "rec_desconhecida" in linha and not linha.strip().startswith("#"):
+                assert "customer_id=" not in linha, (
+                    f"'rec_desconhecida' voltou a ser thread_id: {linha.strip()}")
+
+
+class TestPerfilSinteticoUsaUmIdSo:
+    """P0-6b: o mesmo evento não pode gerar dois perfis sintéticos."""
+
+    def test_features_pix_semeia_pelo_customer_id(self):
+        """`_features_pix` usava `event["id_recorrencia"]` (string vazia no
+        caso anônimo) enquanto o resto do pipeline usava `customer_id` — dois
+        perfis diferentes para o mesmo evento."""
+        evento = {"e2e_id": "E1", "valor": 299.90, "ispb_pagador": "60701190",
+                  "id_recorrencia": "", "degradacoes": []}
+
+        pelo_customer = workflow_module._extract_features(
+            evento, 299.90, "pix_automatico", customer_id="rec_anon_abc123")
+        pelo_vazio = workflow_module._extract_features(
+            evento, 299.90, "pix_automatico", customer_id="")
+
+        assert pelo_customer["tenure_months"] != pelo_vazio["tenure_months"] or \
+            pelo_customer["payment_history_score"] != pelo_vazio["payment_history_score"]
+
+    def test_mesmo_customer_id_da_sempre_o_mesmo_perfil(self):
+        evento = {"e2e_id": "E1", "valor": 299.90, "ispb_pagador": "60701190",
+                  "id_recorrencia": "RN_1", "degradacoes": []}
+        a = workflow_module._extract_features(evento, 299.90, "pix_automatico",
+                                              customer_id="RN_1")
+        b = workflow_module._extract_features(evento, 299.90, "pix_automatico",
+                                              customer_id="RN_1")
+        assert a == b
+
+
+class TestUmDefaultSoParaPaymentMethod:
+    """P2-12: `route_after_decision` e `decide_recovery` concordam."""
+
+    def test_payment_method_ausente_cai_no_mesmo_default(self):
+        estado = _estado("pix_automatico")
+        del estado["payment_method"]
+
+        # decide_recovery já usava "card"; o router usava None. Com dois
+        # defaults, o mesmo state ausente podia seguir dois caminhos.
+        assert route_after_decision(estado) == "trigger_dunning"
