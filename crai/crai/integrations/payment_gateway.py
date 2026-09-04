@@ -266,21 +266,29 @@ def _texto_de_identificacao(bruto, campo: str, degradacoes: list[str]) -> str:
     return ""
 
 
-def _valor_utilizavel(valor: float) -> Optional[float]:
-    """Último portão de `_para_float`: finito **e** de magnitude plausível."""
+def _valor_utilizavel(valor: float, teto: float = VALOR_MAXIMO_PLAUSIVEL) -> Optional[float]:
+    """Último portão de `_para_float`: finito **e** de magnitude plausível.
+
+    `teto` existe porque o campo em centavos é comparado **na sua própria
+    unidade**. O teto do projeto é declarado em reais; um payload em centavos
+    carrega números 100× maiores para o mesmo dinheiro, então recusá-lo contra
+    o teto em reais recusaria R$ 10 bilhões achando que recusa R$ 1 trilhão.
+    Quem chama a partir do caminho de centavos passa `teto` já convertido.
+    """
     if not math.isfinite(valor):
         return None
-    if abs(valor) > VALOR_MAXIMO_PLAUSIVEL:
+    if abs(valor) > teto:
         logger.warning(
-            "[PIX] Valor %r excede o teto de magnitude plausível (R$ %.0f). "
-            "Finito, mas absurdo: estouraria o float32 do modelo adiante. "
-            "Recusando.", valor, VALOR_MAXIMO_PLAUSIVEL,
+            "[PIX] Valor %r excede o teto de magnitude plausível (%.0f na "
+            "unidade do campo; teto do projeto R$ %.0f). Finito, mas absurdo: "
+            "estouraria o float32 do modelo adiante. Recusando.",
+            valor, teto, VALOR_MAXIMO_PLAUSIVEL,
         )
         return None
     return valor
 
 
-def _para_float(bruto) -> Optional[float]:
+def _para_float(bruto, teto: float = VALOR_MAXIMO_PLAUSIVEL) -> Optional[float]:
     """Converte para float qualquer forma plausível de valor monetário.
 
     Aceita `None`, `int`, `float`, e strings em pt-BR (`"299,90"`,
@@ -323,7 +331,7 @@ def _para_float(bruto) -> Optional[float]:
             logger.warning("[PIX] Valor numérico grande demais para converter "
                            "(%d dígitos) — recusando.", len(str(bruto)))
             return None
-        return _valor_utilizavel(valor)
+        return _valor_utilizavel(valor, teto)
     if not isinstance(bruto, str):
         return None
 
@@ -350,7 +358,7 @@ def _para_float(bruto) -> Optional[float]:
         valor = float(texto)
     except (ValueError, OverflowError):
         return None
-    return _valor_utilizavel(valor)
+    return _valor_utilizavel(valor, teto)
 
 
 class PaymentGatewayAdapter(ABC):
@@ -500,7 +508,15 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             dados, "total_cents", "amount_cents", "pix.amount_cents", "valor_centavos",
         )
         if bruto_centavos is not None:
-            centavos = _para_float(bruto_centavos)
+            # O teto é passado JÁ CONVERTIDO para centavos. Sem isso o
+            # `_para_float` aplicava o teto em reais sobre um número em
+            # centavos e recusava tudo acima de R$ 10 bilhões — 100× mais
+            # apertado que o campo em reais, para a mesma regra. E a checagem
+            # logo abaixo, que existe justamente para igualar os dois, virava
+            # ramo morto: nada que sobrevivesse a 1e12 centavos podia exceder
+            # 1e12 reais depois de dividido por 100.
+            centavos = _para_float(bruto_centavos,
+                                   teto=VALOR_MAXIMO_PLAUSIVEL * 100)
             if centavos is None:
                 logger.warning("[PIX] Campo de centavos ilegível (%r) — valor "
                                "degradado para 0.0", bruto_centavos)
@@ -543,7 +559,7 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         if valor > 0:
             return valor
         logger.warning(
-            "[PIX] Valor não-positivo (%r → %.2f) — uma cobrança de R$ 0,00 ou "
+            "[PIX] Valor não-positivo (%r -> %.2f) — uma cobrança de R$ 0,00 ou "
             "negativa não é uma cobrança.", bruto, valor,
         )
         degradacoes.append(DEGRADACAO_VALOR_NAO_POSITIVO)

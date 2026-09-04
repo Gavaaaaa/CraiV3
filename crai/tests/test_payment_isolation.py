@@ -29,6 +29,7 @@ from crai.agent import workflow as workflow_module
 from crai.agent.main_agent import build_crai_graph, route_after_decision
 from crai.agent.workflow import decide_recovery, schedule_retry_pix
 from crai.api import app as app_module
+from crai.dunning.pix_automatico_retry import MAX_TENTATIVAS as MAX_TENTATIVAS_PIX
 
 VALOR = 299.90
 STRIPE_SECRET = "whsec_teste_fase3"
@@ -487,3 +488,104 @@ class TestP0_6RegressaoPeloWebhook:
             self._corpo("E_Y", "222", 20.0),
         ])
         assert "rec_desconhecida" not in ids
+
+
+class TestA1R4LimiteBacenAtravessaOsWebhooks:
+    """O limite de 3 tentativas tem que valer entre invocações, não dentro de uma.
+
+    Defeito encontrado na auditoria A1-r4. `_run_involuntary_pipeline` escrevia
+    `"retry_count": retries_done` (0, porque o caminho Pix nunca preenche esse
+    parâmetro) no dicionário de entrada do `ainvoke`. O `ainvoke` aplica a
+    entrada como atualização sobre o checkpoint do `thread_id`, então toda
+    chave presente sobrescreve o que estava lá — e o contador que
+    `schedule_retry_pix` tinha acabado de gravar voltava a zero a cada webhook.
+
+    Medido em `8ee67ae`: três webhooks assinados do mesmo `id_recorrencia`
+    agendavam 3 + 3 + 3 = **nove** tentativas na mesma janela de 7 dias, as
+    nove numeradas 1, 2, 3. O limite do BACEN é 3.
+
+    Por que a varredura de 212.992 combinações da rodada 3 não pegou: ela
+    exercitava `PixAutomaticoRetryPolicy.schedule()` isoladamente, e a política
+    **estava certa** — ela recebia `tentativas_usadas=0` e respondia
+    corretamente com 3. O defeito não estava na política, estava em quem a
+    chamava. Por isso este teste entra pelo webhook e conta o total agendado
+    ao longo de várias invocações, em vez de inspecionar uma só.
+    """
+
+    @staticmethod
+    def _assinar(corpo: bytes, segredo: bytes = b"s3cr3t") -> dict:
+        ts = int(time.time())
+        mac = hmac.new(segredo, f"{ts}.".encode() + corpo, hashlib.sha256).hexdigest()
+        return {"x-pix-signature": f"t={ts},v1={mac}"}
+
+    def _agendadas_em_sequencia(self, monkeypatch, id_recorrencia, quantos):
+        """Manda `quantos` webhooks idênticos e devolve o que a política agendou.
+
+        Não faz mock do `crai_agent`: o defeito vive exatamente na fronteira
+        entre a borda e o checkpoint, e um agente falso apagaria o checkpoint
+        junto com o bug.
+        """
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s3cr3t")
+        lotes = []
+        original = workflow_module._pix_retry.schedule
+
+        async def espiao(**kwargs):
+            tentativas = await original(**kwargs)
+            lotes.append(tentativas)
+            return tentativas
+
+        monkeypatch.setattr(workflow_module._pix_retry, "schedule", espiao)
+
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "e2e_id": f"E{id_recorrencia}",
+            "valor": VALOR,
+            "id_recorrencia": id_recorrencia,
+        }).encode()
+
+        with TestClient(app_module.app) as c:
+            for _ in range(quantos):
+                resposta = c.post("/webhooks/pix-automatico", content=corpo,
+                                  headers=self._assinar(corpo))
+                assert resposta.status_code == 200, resposta.text
+        return lotes
+
+    def test_tres_webhooks_do_mesmo_cliente_nao_estouram_a_janela(self, monkeypatch):
+        lotes = self._agendadas_em_sequencia(monkeypatch, "RN_r4_janela_a", 3)
+        total = sum(len(lote) for lote in lotes)
+
+        assert total <= MAX_TENTATIVAS_PIX, (
+            f"LIMITE BACEN VIOLADO: {total} tentativas agendadas na mesma janela "
+            f"de 7 dias para o mesmo id_recorrencia (máximo {MAX_TENTATIVAS_PIX}). "
+            f"Lotes por invocação: {[len(l) for l in lotes]}"
+        )
+
+    def test_o_numero_da_tentativa_nunca_se_repete(self, monkeypatch):
+        """Numeração repetida é a assinatura do contador zerado.
+
+        Vale como asserção independente: mesmo que alguém no futuro limite o
+        total por outro caminho, duas tentativas nº 1 na mesma janela
+        continuariam sendo um contador que não avançou.
+        """
+        lotes = self._agendadas_em_sequencia(monkeypatch, "RN_r4_janela_b", 3)
+        numeros = [t.numero for lote in lotes for t in lote]
+
+        assert len(numeros) == len(set(numeros)), (
+            f"numeração repetida na mesma janela: {numeros} — o contador do "
+            "checkpoint foi sobrescrito pela entrada do ainvoke"
+        )
+
+    def test_o_segundo_webhook_ve_a_janela_ja_gasta(self, monkeypatch):
+        """A consequência positiva: o cliente cai na mensagem personalizada.
+
+        Depois do primeiro webhook o checkpoint guarda 3 tentativas
+        comprometidas, então `decide_recovery` barra o segundo evento antes do
+        nó de agendamento — que é o comportamento que o Sprint 2 documentou.
+        """
+        lotes = self._agendadas_em_sequencia(monkeypatch, "RN_r4_janela_c", 2)
+
+        assert len(lotes) == 1, (
+            f"o nó de agendamento foi alcançado {len(lotes)} vezes; a partir da "
+            "segunda o cliente já não tem tentativa disponível e deveria ser "
+            "barrado em decide_recovery"
+        )

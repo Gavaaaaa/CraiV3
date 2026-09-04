@@ -487,13 +487,34 @@ async def _run_involuntary_pipeline(
     customer_id: str,
     amount: float,
     invoice_id: str,
-    retries_done: int = 0,
+    retries_done: Optional[int] = None,
 ) -> None:
     """Monta o state inicial e roda o grafo de churn involuntário.
 
     `payment_method` é preenchido AQUI, na entrada, antes de qualquer nó de
     decisão — é o que permite ao grafo escolher a política de retentativa certa
     sem nunca precisar inferir a origem do evento depois.
+
+    **`retry_count` é omitido de propósito quando `retries_done is None`**, e
+    esse é o ponto inteiro desta função. O `ainvoke` aplica o dicionário de
+    entrada como *atualização* sobre o checkpoint do `thread_id`: toda chave
+    presente aqui SOBRESCREVE o que o checkpoint guardava. Enquanto esta função
+    escrevia `"retry_count": 0` incondicionalmente, cada novo webhook do mesmo
+    `id_recorrencia` zerava o contador que `schedule_retry_pix` tinha acabado
+    de gravar — e três webhooks do mesmo cliente agendavam 3 + 3 + 3 = **nove**
+    tentativas na mesma janela de 7 dias, todas numeradas 1, 2, 3. O limite do
+    BACEN é 3. O checkpoint guardava o número certo; era a entrada que o
+    apagava.
+
+    Omitir a chave preserva o valor acumulado no checkpoint. Para um cliente
+    sem checkpoint a chave simplesmente não existe, e os nós já leem com
+    `state.get("retry_count", 0)`.
+
+    `retries_done` continua aceito para a origem em que o contador é **externo
+    e autoritativo** — o `attempt_count` do Stripe, quando a recobrança de
+    cartão voltar ao pipeline ativo. Aí a verdade vem de fora e deve mesmo
+    sobrescrever o checkpoint. No Pix o recebedor é quem conta, e quem conta é
+    o checkpoint.
     """
     initial: AgentState = {
         "payment_event": event, "payment_method": payment_method,
@@ -504,11 +525,16 @@ async def _run_involuntary_pipeline(
         "is_anomalous": None, "reconstruction_error": None, "anomaly_explanation": None,
         "optimal_retry_at": None,
         "estrategia": None, "raciocinio": None,
-        "confidence": None, "profile_type": None, "retry_count": retries_done, "next_retry_at": None,
+        "confidence": None, "profile_type": None, "next_retry_at": None,
         "retry_exhausted": False, "recovered": False, "pix_retry_schedule": None,
         "dunning_sent": False,
         "channel": None, "metodo_pagamento": None, "message_sent": None,
     }
+    # Só entra na atualização quando a origem tem um contador autoritativo;
+    # caso contrário o checkpoint mantém o que já acumulou (ver docstring).
+    if retries_done is not None:
+        initial["retry_count"] = retries_done
+
     config = {"configurable": {"thread_id": customer_id}}
     await crai_agent.ainvoke(initial, config)
 

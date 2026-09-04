@@ -1118,7 +1118,18 @@ class TestA1R3N9ListaQueNaoEObjeto:
 
 
 class TestA1R3TetoIgualNosDoisCaminhos:
-    """O teto é em reais e vale igual em `valor` e em `total_cents`."""
+    """Guardas de fronteira — **não** são a regressão que o nome promete.
+
+    A auditoria A1-r4 mediu: as duas funções abaixo passam idênticas em
+    `b9388d5`, o commit que elas supostamente validavam. 1e12 e 1e15 centavos
+    já caíam do lado certo antes da mudança, porque a mudança de `8ee67ae` era
+    ramo morto. Um teste que passa antes e depois não prova correção — é a
+    regra do plano, e a mensagem de commit as apresentou como prova mesmo
+    assim.
+
+    Ficam, porque travar a fronteira tem valor próprio. Mas a prova de que o
+    teto é o mesmo nas duas unidades está em `TestA1R4TetoIgualNasDuasUnidades`.
+    """
 
     def test_centavos_usa_o_mesmo_teto_em_reais(self, client):
         """1e12 centavos = R$ 10 bilhões: plausível, tem que passar."""
@@ -1139,6 +1150,89 @@ class TestA1R3TetoIgualNosDoisCaminhos:
         r = client.post("/webhooks/pix-automatico", content=corpo,
                         headers={"x-pix-signature": pix_header(corpo)})
         assert r.status_code == 422
+
+
+class TestA1R4TetoIgualNasDuasUnidades:
+    """O mesmo dinheiro tem que atravessar os dois campos, ou o teto é dois.
+
+    Defeito da auditoria A1-r4. `_extrair_valor` chamava `_para_float` sobre o
+    campo em centavos **sem converter o teto de unidade**. Como `_para_float`
+    já recusa acima de 1e12, o campo em centavos ficava limitado a 1e12
+    centavos = R$ 10 bilhões, enquanto o campo em reais aceitava R$ 1 trilhão:
+    **dois tetos, 100× diferentes, para a mesma regra de negócio**. E a
+    checagem acrescentada em `8ee67ae` logo depois da divisão por 100 nunca
+    disparava — nada que sobrevivesse a 1e12 centavos podia exceder 1e12 reais
+    depois de dividido por 100. Ramo morto documentado como correção.
+
+    Medido em `8ee67ae`, por busca binária sobre o maior valor aceito:
+        via 'valor'       : R$ 1.000.000.000.000
+        via 'total_cents' : R$    10.000.000.000
+        razão             : 100,0x
+
+    `1e12` abaixo é o literal de `VALOR_MAXIMO_PLAUSIVEL`, escrito à mão pela
+    mesma razão que o resto deste arquivo escreve os rótulos à mão.
+    """
+
+    TETO_REAIS = 1e12
+
+    @staticmethod
+    def _valor_lido(campo: str, bruto) -> tuple:
+        degradacoes: list = []
+        valor = PixAutomaticoAdapter._extrair_valor({campo: bruto}, degradacoes)
+        return valor, degradacoes
+
+    def test_cem_bilhoes_passa_pelos_dois_campos(self):
+        """R$ 100 bi está abaixo do teto declarado: os dois campos têm que ler."""
+        alvo = self.TETO_REAIS / 10
+
+        por_reais, degr_reais = self._valor_lido("valor", alvo)
+        por_centavos, degr_centavos = self._valor_lido("total_cents", alvo * 100)
+
+        assert por_reais == alvo, f"campo em reais recusou {alvo}: {degr_reais}"
+        assert por_centavos == alvo, (
+            f"TETO ASSIMÉTRICO: R$ {alvo:,.0f} passa por 'valor' e é recusado por "
+            f"'total_cents' ({degr_centavos}) — a mesma regra com dois limites, "
+            "dependendo de qual campo o PSP usou"
+        )
+
+    def test_a_fronteira_e_a_mesma_nas_duas_unidades(self):
+        """Exatamente no teto: aceito nos dois. Acima: recusado nos dois."""
+        no_teto_reais, _ = self._valor_lido("valor", self.TETO_REAIS)
+        no_teto_cents, degr = self._valor_lido("total_cents", self.TETO_REAIS * 100)
+
+        assert no_teto_reais == self.TETO_REAIS
+        assert no_teto_cents == self.TETO_REAIS, (
+            f"o valor exatamente no teto é aceito em reais e recusado em "
+            f"centavos ({degr})"
+        )
+
+        acima = self.TETO_REAIS * 10
+        assert self._valor_lido("valor", acima)[0] == 0.0
+        assert self._valor_lido("total_cents", acima * 100)[0] == 0.0
+
+    def test_o_maior_valor_aceito_e_o_mesmo_nos_dois_campos(self):
+        """Busca binária: a razão entre os dois tetos tem que ser 1, não 100."""
+        def maior_aceito(campo: str, em_centavos: bool) -> float:
+            baixo, alto = 0.0, self.TETO_REAIS * 1_000
+            for _ in range(120):
+                meio = (baixo + alto) / 2
+                valor, _degr = self._valor_lido(
+                    campo, meio * 100 if em_centavos else meio)
+                if valor == 0.0:
+                    alto = meio
+                else:
+                    baixo = meio
+            return baixo
+
+        teto_reais = maior_aceito("valor", em_centavos=False)
+        teto_cents = maior_aceito("total_cents", em_centavos=True)
+
+        assert teto_cents > 0, "nenhum valor passou pelo campo em centavos"
+        razao = teto_reais / teto_cents
+        assert 0.99 < razao < 1.01, (
+            f"tetos diferentes: R$ {teto_reais:,.0f} via 'valor' contra "
+            f"R$ {teto_cents:,.0f} via 'total_cents' ({razao:,.1f}x de diferença)"
+        )
 
 
 class TestA1R3N11IdentidadeNaoEEstrutura:

@@ -247,7 +247,7 @@ class FailureClassifier:
         op = metrics["recall_operacional"]
         print(f"[CLASSIFIER] Treino concluído — AUC: {metrics['auc']:.3f} | "
               f"e-Profit médio (teste): R$ {metrics['avg_eprofit']:.2f}")
-        print(f"[CLASSIFIER] Limiar do relatório {LIMIAR_CLASSIFICACAO:.2f} → "
+        print(f"[CLASSIFIER] Limiar do relatório {LIMIAR_CLASSIFICACAO:.2f} -> "
               f"recall {metrics['recall_recovered']:.3f}, "
               f"acurácia {metrics['accuracy']:.3f}")
         print(f"[CLASSIFIER] Recall OPERACIONAL (regra de e-Profit, que é quem "

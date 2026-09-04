@@ -90,7 +90,7 @@ def baixar_sgs() -> dict[int, int]:
         alvo = DATA_REAL / f"bacen_sgs_{serie}.json"
         alvo.write_text(json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
         contagens[serie] = len(dados)
-        print(f"[DADOS] SGS {serie}: {len(dados)} observações → {alvo.name}")
+        print(f"[DADOS] SGS {serie}: {len(dados)} observações -> {alvo.name}")
     return contagens
 
 
@@ -112,7 +112,7 @@ def montar_populacao(origem: Path) -> pd.DataFrame:
     bruto = len(df)
     df = df[~df["payment_type"].isin(TIPOS_EXCLUIDOS)]
     df = df[df["payment_value"] > 0]
-    print(f"[DADOS] população: {bruto} → {len(df)} linhas após filtro "
+    print(f"[DADOS] população: {bruto} -> {len(df)} linhas após filtro "
           f"(tipo indefinido / valor zero)")
 
     # O identificador do cliente não entra na amostra: só a UF, que é agregada.
@@ -225,7 +225,7 @@ def main(argv=None) -> int:
     (DATA_REAL / "PROVENIENCIA.json").write_text(
         json.dumps(proveniencia, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"\n[DADOS] amostra: {len(amostra)} linhas → {destino}")
+    print(f"\n[DADOS] amostra: {len(amostra)} linhas -> {destino}")
     print(f"[DADOS] sha256: {sha_amostra}")
     print(f"[DADOS] mix: {proveniencia['amostra']['mix_payment_type']}")
     return 0
