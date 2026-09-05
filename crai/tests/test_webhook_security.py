@@ -1042,3 +1042,51 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
             "mostra, que é a razão pela qual o N-7 foi corrigido no lado "
             "involuntário"
         )
+
+
+class TestA1R11NomeDoDealNaoFundeClientes:
+    """O nome do deal não pode truncar a identidade a ponto de fundi-la.
+
+    Achado da verificação dirigida A1-r11, e regressão do commit anterior:
+    `hubspot_crm.py` montava o nome com `state["user_id"][:12]`. Quando a
+    identidade passou a ser qualificada pela origem (`user:` / `anon:`), os 5
+    caracteres do prefixo comeram quase metade do orçamento, e
+    `usr_demo_001` / `usr_demo_002` — que são os ids DEFAULT da própria API —
+    passaram a produzir o mesmo `dealname`.
+
+    Truncar identificador em largura fixa é colisão esperando acontecer: o
+    orçamento é constante e o prefixo é novo. A correção tira o truncamento,
+    que era arbitrário — o HubSpot não limita `dealname` a 12 caracteres.
+
+    Escopo honesto: isto não funde estado de cliente. Contato, histórico de
+    canal e checkpoint continuam separados, e em modo real os deals são
+    objetos distintos; o que colidia era o RÓTULO (e o id simulado, que nenhuma
+    decisão lê). Por isso a A1-r11 classificou como 🟠 e liberou o gate. Está
+    corrigido mesmo assim porque é uma linha e aparece na tela da demo.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ids_que_so_diferem_no_fim_geram_deals_distintos(self):
+        from crai.integrations.hubspot_crm import HubSpotCRM
+
+        crm = HubSpotCRM()
+        nomes = []
+        original = crm.create_deal
+
+        async def espiao(name, **kw):
+            nomes.append(name)
+            return await original(name, **kw)
+
+        crm.create_deal = espiao
+        for identidade in ("user:usr_demo_001", "user:usr_demo_002"):
+            await crm.register_retention_cycle({
+                "user_id": identidade, "risk_score": 0.9,
+                "event": "Cancellation Page Viewed", "offer_type": "desconto_10",
+                "channel": "email", "offer_sent": True, "retained": True,
+            })
+
+        assert len(set(nomes)) == 2, (
+            f"dois clientes distintos produziram o mesmo nome de deal: {nomes}. "
+            "O nome trunca a identidade em largura fixa, e o prefixo de origem "
+            "consome parte do orçamento"
+        )

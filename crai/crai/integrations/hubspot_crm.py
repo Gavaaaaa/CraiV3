@@ -106,7 +106,15 @@ class HubSpotCRM:
         else:
             stage = "risk_detected"
 
-        deal_name = f"Retenção {state['user_id'][:12]} — risco {state['risk_score']:.0%}"
+        # Sem truncar. O `[:12]` daqui existia para encurtar o nome do deal, e
+        # truncar identificador em largura fixa é colisão esperando acontecer:
+        # quando a identidade passou a ser qualificada pela origem
+        # (`user:` / `anon:`, ver `_identidade_voluntaria`), os 5 caracteres do
+        # prefixo comeram quase metade do orçamento e `usr_demo_001` e
+        # `usr_demo_002` — os ids DEFAULT da API — passaram a produzir o mesmo
+        # nome. O HubSpot não limita o tamanho do `dealname` a 12 caracteres;
+        # o limite era arbitrário e custava a identidade.
+        deal_name = f"Retenção {state['user_id']} — risco {state['risk_score']:.0%}"
         deal_id = await self.create_deal(
             name=deal_name, pipeline="crai_retention", stage=stage,
             props={
