@@ -90,7 +90,7 @@ async def run_voluntary_scenario(name, user_id, event, props):
 
     initial: ChurnVoluntaryState = {
         "user_id": user_id, "event": event, "props": props,
-        "risk_score": 0.0, "profile": "CLT", "offer_type": None,
+        "risk_score": 0.0, "profile": "CLT", "criticality": "padrao", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,

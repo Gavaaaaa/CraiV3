@@ -15,6 +15,7 @@ class ChurnVoluntaryState(TypedDict):
     # Tom da mensagem, não desvio de fluxo: risco crítico sai com tom de alto
     # cuidado. Nunca aciona humano.
     is_critical: bool
+    criticality: str          # critico | alto | padrao
 
     # Oferta (Multi-Armed Bandit)
     offer_type: Optional[str]

@@ -14,7 +14,12 @@ from langgraph.checkpoint.memory import MemorySaver
 from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
-from .risk_scorer import calculate_risk, classify_profile
+from .risk_scorer import (
+    calculate_risk,
+    classify_criticality,
+    classify_profile,
+    mrr_utilizavel,
+)
 from .offer_bandit import OfferBandit, is_critical_risk
 from ..integrations.hubspot_crm import HubSpotCRM
 
@@ -39,12 +44,21 @@ OFFER_LABELS = {
 async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     risk = calculate_risk(state["event"], state["props"])
     profile = classify_profile(state["props"])
-    print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} | perfil: {profile}")
-    return {**state, "risk_score": risk, "profile": profile}
+    criticality = classify_criticality(risk, state["props"].get("mrr"))
+    print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} "
+          f"| perfil: {profile} | criticidade: {criticality}")
+    return {**state, "risk_score": risk, "profile": profile, "criticality": criticality}
 
 
 async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
-    mrr = state["props"].get("mrr")  # quando o evento Segment traz o plano
+    # `props` é payload bruto do Segment e `mrr` entra em aritmética dentro do
+    # bandit (`MESES_LTV_RETIDO * mrr`, `0.10 * 3 * mrr`). Cru, um `mrr:"2500"`
+    # vindo de webhook ASSINADO devolvia HTTP 500 — medido nas três formas
+    # ("2500", [2500], {"v":1}). É o P0-5/P0-1 por outra porta: a borda validava
+    # `billing_profile` e deixava `mrr` passar. Sem número utilizável, o bandit
+    # usa o MRR típico do perfil, que é o que ele já fazia quando o evento não
+    # trazia plano nenhum.
+    mrr = mrr_utilizavel(state["props"].get("mrr"))
     offer = _bandit.choose_offer(state["profile"], state["risk_score"], mrr=mrr)
     p_estimado = _bandit.conversion_rates(state["profile"]).get(offer, 0.0)
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
@@ -77,12 +91,80 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     return {**state, "channel": channel, "on_site_now": on_site}
 
 
-async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
-    offer_label = OFFER_LABELS.get(state["offer_type"], "uma oferta especial")
-    prompt = f"""Gere uma mensagem curta de retenção para um cliente que demonstrou risco de cancelar.
-Evento: {state['event']} | Canal: {state['channel']} | Oferta: {offer_label}
+def _assinatura() -> str:
+    """Nome que assina a mensagem crítica, ou vazio.
+
+    Sem `CRAI_CS_SIGNATURE_NAME` no ambiente, a mensagem sai SEM assinatura. Um
+    nome inventado é uma pessoa que não existe assinando uma promessa de
+    cuidado — e a primeira resposta do cliente vai procurar por ela.
+    """
+    return os.getenv("CRAI_CS_SIGNATURE_NAME", "").strip()
+
+
+def _instrucao_de_assinatura() -> str:
+    nome = _assinatura()
+    if not nome:
+        return ("Não assine com nome de pessoa nenhuma: não há um nome real "
+                "configurado e inventar um seria mentir sobre quem fala.")
+    return f'Assine na última linha, exatamente assim: "— {nome}, time CRAI".'
+
+
+def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str) -> str:
+    """O prompt muda com a criticidade; o resto do nó, não.
+
+    A oferta já foi escolhida pelo bandit e não muda aqui — criticidade é tom,
+    não decisão. As três variantes compartilham o mesmo cabeçalho de contexto
+    para que a diferença fique no que se pede, não no que se informa.
+    """
+    contexto = (f"Evento: {state['event']} | Canal: {state['channel']} "
+                f"| Oferta: {offer_label}")
+    fecho = "Sem culpar o cliente, no máximo 3 frases, português brasileiro natural.\nRetorne APENAS a mensagem."
+
+    criticality = state.get("criticality", "padrao")
+
+    if criticality == "critico":
+        return f"""Gere uma mensagem curta de retenção para um cliente em situação CRÍTICA — risco muito alto de cancelar, ou conta de alto valor.
+{contexto}
+Tom pessoal e de alto cuidado: reconheça o valor da relação, sem bajular e sem prometer o que não foi oferecido.
+Apresente a oferta como uma solução pensada para este cliente, não como promoção genérica.
+{_instrucao_de_assinatura()}
+{fecho}"""
+
+    if criticality == "alto":
+        return f"""Gere uma mensagem curta de retenção para um cliente com risco ALTO de cancelar.
+{contexto}
+Tom atencioso e proativo: deixe claro que percebemos o movimento dele antes de ele precisar pedir.
+Apresente a oferta como personalizada e diga que ela vale pelos próximos 7 dias.
+{fecho}"""
+
+    # O prompt "padrao" é o texto de antes do Sprint 2, palavra por palavra: o
+    # caso comum não podia mudar de comportamento junto com os dois novos.
+    return f"""Gere uma mensagem curta de retenção para um cliente que demonstrou risco de cancelar.
+{contexto}
 Tom empático, sem culpar o cliente, no máximo 3 frases, português brasileiro natural.
 Retorne APENAS a mensagem."""
+
+
+def _fallback_de_retencao(criticality: str, offer_label: str) -> str:
+    """Texto de emergência quando a Claude API não responde.
+
+    O cliente crítico é justamente quem não pode receber o texto genérico —
+    então o fallback também tem as duas variantes. Ele só não tem como
+    personalizar, e por isso não promete nada que dependa de contexto.
+    """
+    if criticality == "critico":
+        base = ("Sua conta é importante para a gente e não queremos te perder. "
+                f"Preparamos {offer_label} — responda aqui e a gente resolve junto.")
+        nome = _assinatura()
+        return f"{base}\n— {nome}, time CRAI" if nome else base
+
+    return f"Antes de você ir, que tal {offer_label}? Estamos aqui para ajudar."
+
+
+async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    offer_label = OFFER_LABELS.get(state["offer_type"], "uma oferta especial")
+    criticality = state.get("criticality", "padrao")
+    prompt = _prompt_de_retencao(state, offer_label)
     try:
         response = await claude.messages.create(
             model="claude-sonnet-4-20250514", max_tokens=200,
@@ -90,8 +172,8 @@ Retorne APENAS a mensagem."""
         )
         message = response.content[0].text.strip()
     except Exception as e:
-        print(f"[CHURN-VOL] Claude API indisponível ({e}) — fallback")
-        message = f"Antes de você ir, que tal {offer_label}? Estamos aqui para ajudar."
+        print(f"[CHURN-VOL] Claude API indisponível ({e}) — fallback ({criticality})")
+        message = _fallback_de_retencao(criticality, offer_label)
     return {**state, "message": message}
 
 
