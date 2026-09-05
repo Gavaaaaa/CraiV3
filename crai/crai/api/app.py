@@ -282,10 +282,26 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     outros três eventos são registrados: autorização concedida/revogada e
     cobrança confirmada não são falha de pagamento.
 
-    Três formas de recusar, todas com log (Sprint 1):
-      400  corpo que não é JSON
-      422  payload que o adapter não sabe normalizar (lote, não-objeto)
+    Formas de recusar, todas com log:
+      400  corpo que não é JSON válido
+      400  corpo que é JSON mas **não é um objeto** (lista, número, string,
+           `null`) — a recusa é do envelope, antes de haver evento
+      400  corpo aninhado além do que o parser suporta
+      422  corpo que É um objeto e o adapter não sabe normalizar (lote de
+           eventos, `data` com conteúdo não-objeto) — motivo
+           `payload_nao_e_objeto` ou `lote_nao_suportado`
       422  cobrança falhada cujo VALOR não pôde ser lido
+      422  evento sem `id_recorrencia` e sem `e2e_id` (P0-6)
+
+    **Mudança de contrato declarada na A1-r9:** até `deb23be`, um corpo JSON
+    não-objeto (`[]`, `5`, `"texto"`) devolvia **422** com motivo
+    `payload_nao_e_objeto`, porque a rota tinha o próprio `json.loads` e
+    entregava qualquer coisa ao adapter. Ao adotar o portão comum
+    `_objeto_json_do_corpo` — que é o que fechou o 500 por aninhamento —
+    esses casos passaram a **400**, alinhados com os webhooks de Stripe e
+    Segment. É a resposta certa: um corpo que não é objeto é envelope
+    malformado, não entidade semanticamente inválida. O 422 do adapter
+    continua valendo para o corpo que É objeto e ainda assim não normaliza.
     """
     raw = await request.body()
     if not verify_pix_automatico_signature(
@@ -507,7 +523,7 @@ async def segment_webhook(request: Request) -> JSONResponse:
     # raciocínio do P0-6, no webhook de Pix).
     # As duas identidades vivem em ESPAÇOS DE NOME SEPARADOS. `userId` e
     # `anonymousId` são atribuídos por sistemas diferentes — o seu backend e o
-    # SDK do navegador — e nada impede que coincidam. Sem o prefixo, um
+    # SDK do navegador — e nada impede que coincidam. Sem separação, um
     # visitante anônimo cujo id calhasse de ser igual ao `userId` de um cliente
     # identificado herdava o checkpoint dele: medido, o segundo evento
     # SOBRESCREVEU o estado do primeiro (perfil CLT virou PJ). É o P0-6 por
@@ -515,7 +531,7 @@ async def segment_webhook(request: Request) -> JSONResponse:
     # cliente, não só não-vazio.
     identificado = _campo_com_forma(payload, "userId", (str,), "SEGMENT")
     anonimo = _campo_com_forma(payload, "anonymousId", (str,), "SEGMENT")
-    user_id = identificado or (f"anon:{anonimo}" if anonimo else None)
+    user_id = identificado or anonimo
     if not user_id:
         logger.warning("[SEGMENT] Evento sem userId e sem anonymousId — 422")
         raise HTTPException(status_code=422, detail={
@@ -529,7 +545,13 @@ async def segment_webhook(request: Request) -> JSONResponse:
         _campo_com_forma(props, "billing_profile", (str,), "SEGMENT")
     _recusar_inteiro_grande_demais(props, "SEGMENT")
 
-    await _run_voluntary_pipeline(user_id=user_id, event=evento, props=props)
+    # A identidade que o negócio vê é o id cru; a chave do checkpoint é a
+    # dupla (campo, valor). Ver `_thread_id_voluntario`.
+    await _run_voluntary_pipeline(
+        user_id=user_id, event=evento, props=props,
+        thread_id=_thread_id_voluntario(
+            "userId" if identificado else "anonymousId", user_id),
+    )
     return JSONResponse({"status": "ok"})
 
 
@@ -871,7 +893,26 @@ async def _run_involuntary_pipeline(
         await crai_agent.ainvoke(initial, config)
 
 
-async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
+def _thread_id_voluntario(campo: str, valor: str) -> str:
+    """Identidade do checkpoint de um evento de churn voluntário.
+
+    O prefixo `anon:` — primeira tentativa desta separação — resolvia metade do
+    problema. `anon:` + `anonymousId="vitima"` dá a mesma string que um
+    `userId` literalmente igual a `"anon:vitima"`, e essa é a direção PIOR: o
+    `anonymousId` é o campo que o visitante escolhe. Medido antes desta
+    correção: o evento anônimo sobrescreveu o estado do cliente identificado.
+
+    Serializar a dupla `(campo, valor)` como JSON torna o mapeamento injetivo:
+    o JSON escapa o conteúdo, então nenhum valor de um campo consegue produzir
+    a codificação de outro. É a mesma disciplina — e pelo mesmo motivo — que
+    `_thread_id` já usa no webhook de Pix, onde concatenar com `|` deixava
+    `e2e="E123|999"` colidir com `ispb="999|60701190"` (P0-6).
+    """
+    return json.dumps([campo, valor], ensure_ascii=False, sort_keys=True)
+
+
+async def _run_voluntary_pipeline(user_id: str, event: str, props: dict,
+                                  thread_id: Optional[str] = None):
     initial: ChurnVoluntaryState = {
         "user_id": user_id, "event": event, "props": props,
         "risk_score": 0.0, "profile": "CLT", "offer_type": None,
@@ -879,7 +920,12 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False, "escalated_to_human": False,
     }
-    config = {"configurable": {"thread_id": user_id}}
+    # `user_id` é a identidade do NEGÓCIO — vai para o state e para o HubSpot.
+    # `thread_id` é a chave do CHECKPOINT, que precisa ser única por origem da
+    # identidade. Separá-las evita que o prefixo de desambiguação vaze para o
+    # nome do contato no CRM. Sem `thread_id` (origem `/simulate/*`), a
+    # identidade é a própria chave, como sempre foi.
+    config = {"configurable": {"thread_id": thread_id or user_id}}
     await voluntary_churn_agent.ainvoke(initial, config)
 
 

@@ -9,6 +9,33 @@
 
 ---
 
+> # ⬜ ESTADO DA CALIBRAÇÃO — LEIA ANTES DE QUALQUER SEÇÃO
+>
+> **Nenhum parâmetro medido neste documento está no gerador ainda.** As fontes
+> foram levantadas, os números foram calculados e estão corretos — mas
+> `crai/ml/synthetic_data.py` continua com os valores inventados. A calibração
+> é a tarefa do **Sprint 3**, que está parado pelo gate GA1 (ver `sprints.md`).
+>
+> Medido em `94cd8f6`:
+>
+> | O documento afirma | O gerador tem |
+> |---|---|
+> | valor `μ = 4,5824 · σ = 0,8883` (§2.2) | `rng.lognormal(mean=5.8, sigma=0.7)` |
+> | clip `R$ 0,99 – R$ 1.312,67` (§2.3) | `clip(49.90, 9999.90)` |
+> | sazonalidade por histograma empírico (§2.2) | `peak_days = [5,10,15,20,30]` e `_hour_distribution()` |
+> | `calibracao.json → calibrado.tenure = false` (§5) | **o arquivo não existe** |
+>
+> Leia todo verbo no presente das seções 2, 3, 4 e 5 como **"passa a"**, não
+> como "é". Cada seção repete este aviso no ponto exato.
+>
+> **Correção da auditoria A1-r9.** A rodada anterior corrigiu esta mesma classe
+> de afirmação — mas só na §6, porque a nota de correção apontava para as
+> seções erradas (dizia "seção 5" para o que é §2.2, e "seção 4" para o que é
+> §2.1). O ponteiro errado deixou §2.2, §2.3 e §5 continuarem afirmando a
+> calibração como fato consumado.
+
+---
+
 ## 1. A verdade desconfortável, dita primeiro
 
 **Não existe base pública — brasileira ou estrangeira — com o rótulo que a CRAI
@@ -86,6 +113,10 @@ O mix da amostra reproduz o da população (73,9 / 19,0 / 5,6 / 1,5%) dentro de
 
 ### 2.2 Papel na CRAI — três marginais medidas, não chutadas
 
+> ⬜ **Medidas, e ainda não aplicadas.** Os três números abaixo estão
+> corretos e vêm da amostra real; o gerador ainda não os usa. Verbos no
+> presente descrevem o Sprint 3, não o código de hoje.
+
 1. **Valor** → substitui a lognormal hardcoded de `synthetic_data.py`
    (`mean=5.8, sigma=0.7`), que era palpite, por **μ = 4,5824 · σ = 0,8883**.
 2. **Mix de meio de pagamento** → sustenta com número real o argumento de que o
@@ -99,16 +130,17 @@ O mix da amostra reproduz o da população (73,9 / 19,0 / 5,6 / 1,5%) dentro de
 - **É e-commerce B2C, não SaaS B2B por assinatura.** Não tem `tenure`, não tem
   recorrência, e **não tem rótulo de recuperação**. Serve como **âncora de
   distribuição, jamais como ground truth**.
-- **Consequência direta e incômoda da calibração do valor:** a mediana real da
+- ⬜ **Consequência direta e incômoda da calibração do valor** — quando ela
+  acontecer, no Sprint 3: a mediana real da
   Olist é **R$ 100,57**, não os ~R$ 330 que a lognormal chutada produzia. Ao
   calibrar, o dataset sintético passa a ter **ticket de e-commerce brasileiro**,
   e deixa de ter ticket de SaaS B2B. Isso é uma perda de aderência ao domínio —
   e ainda assim é a escolha certa: um parâmetro medido e declarado vale mais que
   um parâmetro inventado que *parecia* certo. **Quando houver cliente-piloto,
   esta é a primeira coisa a trocar.**
-- **Os limites de corte (`clip`) do valor sintético passam a ser a faixa
-  observada na âncora** (R$ 0,99 – R$ 1.312,67), e não os antigos R$ 49,90 –
-  R$ 9.999,90. Sem isso, com μ = 4,58 uma fatia grande da distribuição bateria
+- ⬜ **Os limites de corte (`clip`) do valor sintético passarão a ser a faixa
+  observada na âncora** (R$ 0,99 – R$ 1.312,67), no lugar dos R$ 49,90 –
+  R$ 9.999,90 **que ainda estão no código**. Sem isso, com μ = 4,58 uma fatia grande da distribuição bateria
   no piso de R$ 49,90 e criaria um pico artificial exatamente ali.
 - **A sazonalidade horária é de e-commerce.** Se algum material da CRAI afirma
   sazonalidade horária **do Pix** citando o BACEN, está errado — a base de Pix do
@@ -149,8 +181,11 @@ O mix da amostra reproduz o da população (73,9 / 19,0 / 5,6 / 1,5%) dentro de
 **Status: NÃO USADA.** O IBM Telco Customer Churn era o item explicitamente
 mais dispensável do plano (primeiro da ordem de sacrifício). Consequência
 declarada: **`tenure_months` permanece NÃO CALIBRADO** — segue com a mistura
-exponencial + uniforme escrita à mão em `synthetic_data.py`. Está marcado como
-`false` em `calibracao.json → calibrado.tenure`.
+exponencial + uniforme escrita à mão em `synthetic_data.py`.
+
+⬜ O plano é registrar isso como `false` em `calibracao.json → calibrado.tenure`
+— **arquivo que ainda não existe**, porque o script que o gera é do Sprint 3.
+Enquanto isso, a declaração desta limitação é este parágrafo, e só ele.
 
 ---
 
@@ -164,7 +199,7 @@ exponencial + uniforme escrita à mão em `synthetic_data.py`. Está marcado com
 >
 > | O que o texto afirmava | O que existe |
 > |---|---|
-> | gerador calibrado por MLE | `synthetic_data.py` ainda usa `rng.lognormal(mean=5.8, sigma=0.7)` — o palpite que a seção 5 diz ter sido substituído |
+> | gerador calibrado por MLE | `synthetic_data.py` ainda usa `rng.lognormal(mean=5.8, sigma=0.7)` — o palpite que a **§2.2** diz ter sido substituído |
 > | `PARAMS` alimentando o gerador | o símbolo não existe no módulo |
 > | `crai/models/calibracao.json` | não existe |
 > | `data/synthetic/treino_15000.parquet` | não existe |
@@ -173,7 +208,7 @@ exponencial + uniforme escrita à mão em `synthetic_data.py`. Está marcado com
 > | `python -m crai.scripts.calibrar_parametros` | o script não existe |
 >
 > O que EXISTE hoje: `crai/scripts/preparar_amostra_real.py`, os números da
-> amostra real (seção 4, conferidos), e este documento. A calibração em si é a
+> amostra real (**§2.1**, conferidos), e este documento. A calibração em si é a
 > tarefa do Sprint 3, que está **parado pelo gate GA1** — ver `sprints.md`.
 >
 > Consequência prática: os modelos em `crai/models/` foram treinados pelo

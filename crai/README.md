@@ -88,7 +88,7 @@ crai/
 ├── scripts/
 │   ├── train_all.py                 # Treina os 3 modelos: python -m crai.scripts.train_all
 │   └── preparar_amostra_real.py     # Amostra real -> parâmetros de calibração
-├── tests/                           # 419 testes
+├── tests/                           # a suíte (rode `pytest tests/ -q` para a contagem)
 ├── test_pipeline.py                 # Demo dos 9 cenários (rode com PYTHONIOENCODING=utf-8)
 └── requirements.txt
 ```
@@ -161,7 +161,7 @@ criado no HubSpot, sem quebrar o pipeline.
 
 ## Dívida técnica conhecida (roadmap pós-demo)
 
-Itens levantados nas auditorias adversariais A1 e suas re-rodadas (r2 a r5) dos sprints de 31/08–04/09 e **deliberadamente
+Itens levantados nas auditorias adversariais A1 e suas re-rodadas (r2 a r9) dos sprints de 31/08–05/09 e **deliberadamente
 não corrigidos antes da demo**, por serem risco maior que ganho nessa janela.
 Estão aqui para não virarem dívida esquecida.
 

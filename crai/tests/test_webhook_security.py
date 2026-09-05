@@ -56,7 +56,7 @@ def client(monkeypatch):
     async def fake_involuntary(event, payment_method="card", **kwargs):
         chamadas.append(("involuntary", payment_method))
 
-    async def fake_voluntary(user_id, event, props):
+    async def fake_voluntary(user_id, event, props, thread_id=None):
         chamadas.append(("voluntary", user_id))
 
     monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
@@ -779,6 +779,14 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
 
     É o P0-6 por outra porta: o `thread_id` precisa ser único por cliente, não
     apenas não-vazio.
+
+    **Atualizado na A1-r9.** A primeira correção prefixava o id anônimo com
+    `anon:`, e isso separava numa direção só: `userId="anon:vitima"` produzia a
+    mesma chave que `anonymousId="vitima"` — e essa é a direção pior, porque o
+    `anonymousId` é o campo que o visitante escolhe. Os testes abaixo passaram
+    a exercer o INVARIANTE (dois eventos, dois checkpoints) via
+    `_thread_id_voluntario`, em vez de fixar a string do prefixo: o que precisa
+    valer é o isolamento, não a forma da chave.
     """
 
     @pytest.fixture
@@ -798,35 +806,134 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
                                   "content-type": "application/json"})
         assert r.status_code == 200, r.text
 
-    def test_id_anonimo_nao_herda_o_checkpoint_do_identificado(self, cliente_real):
-        from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
+    # Os pares abaixo quebram um esquema de prefixo simples. O terceiro é o
+    # mais duro: o `userId` é literalmente a codificação que a chave usa para
+    # o campo anônimo.
+    COLISOES = [
+        ("colisao_r8_teste", "colisao_r8_teste"),
+        ("anon:vitima", "vitima"),
+        ('["anonymousId", "x"]', "x"),
+    ]
 
-        colisao = "colisao_r8_teste"
-        self._enviar(cliente_real, "userId", colisao,
-                     "Cancellation Page Viewed", "CLT")
-        self._enviar(cliente_real, "anonymousId", colisao,
-                     "Session Started", "PJ")
+    def _chaves_usadas(self, cliente, monkeypatch, uid, aid):
+        """Os `thread_id` que o pipeline REALMENTE usou nos dois eventos.
 
-        identificado = voluntary_churn_agent.get_state(
-            {"configurable": {"thread_id": colisao}}).values
+        Espiona o `ainvoke` em vez de importar o construtor da chave. A
+        diferença decide se o teste vale: importar `_thread_id_voluntario`
+        levantaria `ImportError` no commit anterior, onde o símbolo não existe
+        — e um `ImportError` prova ausência de símbolo, não falha de
+        comportamento. Espionando, o mesmo teste roda nas duas pontas e o que
+        ele mede é a CHAVE que cada evento recebeu.
+        """
+        from crai.churn_voluntary import voluntary_agent as va
 
-        assert identificado.get("event") == "Cancellation Page Viewed", (
-            "o evento anônimo sobrescreveu o checkpoint do cliente "
-            f"identificado: {identificado.get('event')!r}. Os dois ids vêm de "
-            "sistemas diferentes e podem coincidir — sem prefixo, coincidir "
-            "significa dividir o mesmo estado"
+        chaves = []
+        original = va.voluntary_churn_agent.ainvoke
+
+        async def espiao(entrada, config=None, **kw):
+            chaves.append(config["configurable"]["thread_id"])
+            return await original(entrada, config, **kw)
+
+        monkeypatch.setattr(va.voluntary_churn_agent, "ainvoke", espiao)
+        self._enviar(cliente, "userId", uid, "Cancellation Page Viewed", "CLT")
+        self._enviar(cliente, "anonymousId", aid, "Session Started", "PJ")
+        return chaves
+
+    @pytest.mark.parametrize("uid,aid", COLISOES)
+    def test_identidades_distintas_nao_dividem_checkpoint(
+            self, cliente_real, monkeypatch, uid, aid):
+        chaves = self._chaves_usadas(cliente_real, monkeypatch, uid, aid)
+
+        assert len(chaves) == 2, f"esperados 2 eventos, houve {len(chaves)}"
+        assert chaves[0] != chaves[1], (
+            f"userId={uid!r} e anonymousId={aid!r} caíram no MESMO checkpoint "
+            f"({chaves[0]!r}). Os dois ids vêm de sistemas diferentes e podem "
+            "coincidir; a chave precisa ser injetiva, não apenas prefixada — "
+            "um prefixo separa numa direção só, e a direção que ele deixa "
+            "aberta é justamente a do campo que o visitante escolhe"
         )
 
-    def test_o_evento_anonimo_tem_checkpoint_proprio(self, cliente_real):
+    @pytest.mark.parametrize("uid,aid", COLISOES)
+    def test_cada_identidade_guarda_o_proprio_evento(
+            self, cliente_real, monkeypatch, uid, aid):
         """A outra metade: isolar não pode virar descartar."""
         from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
 
-        anonimo = "so_anonimo_r8"
-        self._enviar(cliente_real, "anonymousId", anonimo,
-                     "Cancellation Page Viewed", "PJ")
+        chave_uid, chave_aid = self._chaves_usadas(
+            cliente_real, monkeypatch, uid, aid)
 
-        estado = voluntary_churn_agent.get_state(
-            {"configurable": {"thread_id": f"anon:{anonimo}"}}).values
-        assert estado.get("event") == "Cancellation Page Viewed", (
-            f"o evento anônimo não gravou estado em `anon:{anonimo}`: {estado}"
+        do_identificado = voluntary_churn_agent.get_state(
+            {"configurable": {"thread_id": chave_uid}}).values
+        do_anonimo = voluntary_churn_agent.get_state(
+            {"configurable": {"thread_id": chave_aid}}).values
+
+        assert do_identificado.get("event") == "Cancellation Page Viewed", (
+            f"o checkpoint do identificado guardou "
+            f"{do_identificado.get('event')!r}"
+        )
+        assert do_anonimo.get("event") == "Session Started", (
+            f"o checkpoint do anônimo guardou {do_anonimo.get('event')!r}"
+        )
+
+    def test_a_chave_do_checkpoint_e_injetiva_em_muitos_pares(
+            self, cliente_real, monkeypatch):
+        """A propriedade, não só os pares que alguém pensou em escrever.
+
+        Varre valores adversariais nos dois campos e exige que TODAS as
+        chaves resultantes sejam distintas.
+        """
+        from crai.churn_voluntary import voluntary_agent as va
+
+        valores = ("x", "anon:x", '["anonymousId", "x"]', '["userId", "x"]',
+                   "a:b", '"x"')
+        chaves = []
+        original = va.voluntary_churn_agent.ainvoke
+
+        async def espiao(entrada, config=None, **kw):
+            chaves.append(config["configurable"]["thread_id"])
+            return await original(entrada, config, **kw)
+
+        monkeypatch.setattr(va.voluntary_churn_agent, "ainvoke", espiao)
+        identidades = [(campo, valor)
+                       for campo in ("userId", "anonymousId")
+                       for valor in valores]
+        for campo, valor in identidades:
+            self._enviar(cliente_real, campo, valor, "Session Started", "CLT")
+
+        repetidas = [ident for ident, chave in zip(identidades, chaves)
+                     if chaves.count(chave) > 1]
+        assert not repetidas, (
+            f"identidades distintas produziram a mesma chave: {repetidas}"
+        )
+
+    def test_a_desambiguacao_nao_vaza_para_o_negocio(self, cliente_real):
+        """A identidade que o CRM vê é o id do cliente, não a chave interna.
+
+        Escrito como catraca, mas é PROVA DE REGRESSÃO: reprova em `94cd8f6`
+        com `o pipeline recebeu ['anon:visitante_r9']`. O prefixo `anon:` não
+        só separava mal — ele vazava para a identidade do negócio, e o contato
+        criado no HubSpot ia se chamar `anon:visitante_r9`. Deixo a nota aqui
+        porque rotular errado um teste é o defeito que a A1-r4 já cobrou uma
+        vez neste projeto.
+        """
+        from crai.api import app as app_module
+
+        vistos = []
+        original = app_module._run_voluntary_pipeline
+
+        async def espiao(user_id, event, props, **kw):
+            vistos.append(user_id)
+            return await original(user_id, event, props, **kw)
+
+        app_module._run_voluntary_pipeline = espiao
+        try:
+            self._enviar(cliente_real, "anonymousId", "visitante_r9",
+                         "Cancellation Page Viewed", "PJ")
+        finally:
+            app_module._run_voluntary_pipeline = original
+
+        assert vistos == ["visitante_r9"], (
+            f"o pipeline recebeu {vistos!r} como identidade do cliente; "
+            "esperado ['visitante_r9']. A chave do checkpoint é interna e não "
+            "pode virar o nome do contato no CRM"
         )
