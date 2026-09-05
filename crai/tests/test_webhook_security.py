@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from crai.api import app as app_module
+from crai.integrations.payment_gateway import MOTIVO_SEM_IDENTIFICACAO
 from crai.security.webhook_verification import (
     REPLAY_TOLERANCE_SECONDS,
     verify_pix_automatico_signature,
@@ -353,9 +354,11 @@ class TestA1R6BordaAssinadaNaoDerrubaAApi:
     assinatura confere.
 
     Medido em `8786d82`, com assinatura VÁLIDA e o pipeline REAL (sem stub):
-    **11 payloads davam HTTP 500 em `/webhooks/segment` e 5 em
-    `/webhooks/stripe`** — 16 no total. Cinco dos sete tracebacks distintos
-    morriam dentro de `crai/api/app.py`, ou seja, na própria borda.
+    **11 payloads davam HTTP 500 em `/webhooks/segment` e 6 em
+    `/webhooks/stripe`** — 17 no total, que é o número que
+    `test_nenhum_payload_torto_produz_5xx` imprime ao reprovar naquele commit.
+    (A auditoria A1-r7 corrigiu esta contagem: a versão anterior desta
+    docstring dizia 5 e 16, desmentida pela saída do teste ao lado.)
 
     O objetivo declarado do Sprint 1 é textual: *"nenhum payload de PSP, por
     mais torto que seja, derruba a API ou entra no pipeline em silêncio."*
@@ -486,3 +489,130 @@ class TestA1R6BordaAssinadaNaoDerrubaAApi:
         r = cliente_real.post("/webhooks/segment", content=corpo,
                               headers=self._h_segment(corpo))
         assert r.status_code == 200, r.text
+
+class TestA1R7AGuardaNaoPodeSerODefeito:
+    """A blindagem da r6 tinha três buracos, dois deles nela mesma.
+
+    A rodada 6 fechou 17 payloads assinados que davam 500. A rodada 7 mostrou
+    que a própria guarda era atravessável:
+
+    1. `_recusar_inteiro_grande_demais` só era chamada no Segment. No Stripe,
+       `amount_due: 2**2000` passava pela checagem de TIPO (é `int`) e
+       estourava em `invoice.get("amount_due", 0) / 100` com `OverflowError`
+       — HTTP 500, num campo que a linha `N-15` do README declarava blindado.
+       Mesma classe de defeito fechada num webhook e aberta no outro.
+    2. A guarda era RECURSIVA sobre um objeto livre vindo do PSP. Um
+       `properties` com ~950 níveis de aninhamento derrubava a própria guarda
+       com `RecursionError` — 500. A guarda virava o vetor.
+    3. `userId` virou obrigatório e passou a recusar com 422 um evento
+       legítimo do Segment: o de visitante ainda não identificado, que chega
+       só com `anonymousId`.
+
+    Medido em `c7c6870`: 500, 500 e 422 respectivamente.
+    """
+
+    @pytest.fixture
+    def cliente_real(self, monkeypatch):
+        monkeypatch.setenv("SEGMENT_WEBHOOK_SECRET", SEGMENT_SECRET)
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", STRIPE_SECRET)
+        with TestClient(app_module.app, raise_server_exceptions=False) as c:
+            yield c
+
+    @staticmethod
+    def _h_segment(corpo: bytes) -> dict:
+        return {"x-signature": segment_header(corpo),
+                "content-type": "application/json"}
+
+    @staticmethod
+    def _h_stripe(corpo: bytes) -> dict:
+        return {"stripe-signature": stripe_header(corpo),
+                "content-type": "application/json"}
+
+    def test_inteiro_gigante_no_stripe_nao_derruba_a_conta(self, cliente_real):
+        """`amount_due` entra numa divisão: o teto não é do JSON, é do float."""
+        corpo = json.dumps({
+            "type": "invoice.payment_failed",
+            "data": {"object": {"amount_due": 2 ** 2000}},
+        }).encode()
+        r = cliente_real.post("/webhooks/stripe", content=corpo,
+                              headers=self._h_stripe(corpo))
+
+        assert r.status_code == 422, (
+            f"`amount_due: 2**2000` devolveu {r.status_code}. O inteiro passa "
+            "pela checagem de tipo (é int) e estoura na divisão por 100 com "
+            "OverflowError — a guarda de magnitude precisa valer nos DOIS "
+            "webhooks, não só no Segment"
+        )
+        assert r.json()["detail"]["motivo"] == "inteiro_fora_do_alcance"
+
+    def test_inteiro_gigante_aninhado_no_stripe_tambem_e_recusado(self, cliente_real):
+        """`data` é objeto livre: o número pode não estar em `amount_due`."""
+        corpo = json.dumps({
+            "type": "invoice.payment_failed",
+            "data": {"object": {"metadata": {"seq": 2 ** 300}}},
+        }).encode()
+        r = cliente_real.post("/webhooks/stripe", content=corpo,
+                              headers=self._h_stripe(corpo))
+        assert r.status_code == 422, r.text
+
+    @pytest.mark.parametrize("niveis", [1200, 5000])
+    def test_payload_aninhado_demais_nao_derruba_a_propria_guarda(
+            self, cliente_real, niveis):
+        """A guarda não pode ser derrubável pelo que ela inspeciona.
+
+        O corpo é montado como TEXTO, sem `json.dumps`, porque construir a
+        estrutura em Python já estouraria a pilha do lado do teste — e o que
+        se mede aqui é o lado do servidor.
+        """
+        corpo = ('{"userId":"u","event":"Session Started","properties":'
+                 + '{"p":' * niveis + '{}' + '}' * niveis + '}').encode()
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+
+        assert r.status_code < 500, (
+            f"{niveis} níveis de aninhamento devolveram {r.status_code}. Uma "
+            "guarda recursiva sobre objeto livre do PSP é derrubável pelo "
+            "próprio payload: RecursionError vira 500"
+        )
+        assert r.status_code in (400, 422), r.text
+
+    def test_evento_do_segment_com_anonymous_id_e_aceito(self, cliente_real):
+        """Visitante não identificado é evento legítimo, não payload torto.
+
+        `userId` e `anonymousId` são as duas identidades do protocolo do
+        Segment. Exigir a primeira recusava com 422 quem ainda não se
+        identificou — que é justamente o candidato a churn voluntário.
+        """
+        corpo = json.dumps({
+            "anonymousId": "anon_r7_001", "event": "Cancellation Page Viewed",
+            "properties": {"on_site_now": True, "billing_profile": "CLT"},
+        }).encode()
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+
+        assert r.status_code == 200, (
+            f"evento com `anonymousId` e sem `userId` devolveu {r.status_code}: "
+            f"{r.text[:200]}"
+        )
+
+    def test_evento_sem_identidade_nenhuma_continua_recusado(self, cliente_real):
+        """Contrapeso: aceitar `anonymousId` não pode abrir a porta do P0-6.
+
+        Existe porque afrouxar a exigência de identidade é o erro natural ao
+        corrigir o teste acima, e sem identidade clientes distintos dividem o
+        mesmo checkpoint.
+
+        Precisão sobre o que ele prova: em `c7c6870` o STATUS já era 422 — o
+        que reprova lá é a asserção do MOTIVO, que passou de
+        `campo_obrigatorio_ausente` (um campo faltando) para
+        `evento_sem_identificacao` (nenhuma das duas identidades veio). A
+        mudança é real e é o ponto: o motivo agora descreve a regra, não o
+        campo. Mas não é o mesmo tipo de prova dos testes acima, e vale contar
+        como tal.
+        """
+        corpo = json.dumps({"event": "Session Started", "properties": {}}).encode()
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"]["motivo"] == MOTIVO_SEM_IDENTIFICACAO

@@ -388,6 +388,13 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     if "attempt_count" in fatura:
         _campo_com_forma(fatura, "attempt_count", (int,), "STRIPE",
                          nulo_e_ausente=False)
+    # A guarda de inteiro vale para os DOIS webhooks. Ela nasceu no Segment,
+    # onde o limite é o msgpack do checkpoint; aqui o limite aparece antes,
+    # em `_dados_stripe`: `invoice.get("amount_due", 0) / 100` levanta
+    # `OverflowError` — medido com `amount_due: 2**2000`, HTTP 500 — porque o
+    # resultado não cabe num float. Mesma classe de defeito, mesma guarda:
+    # fechá-la só num dos webhooks era metade da correção.
+    _recusar_inteiro_grande_demais(dados, "STRIPE", "data")
 
     if event.get("type") == "invoice.payment_failed":
         _registrar_cartao_desativado(event)
@@ -483,8 +490,23 @@ async def segment_webhook(request: Request) -> JSONResponse:
     # `userId` vira chave de dicionário e `billing_profile` vira chave do
     # bandit: qualquer coisa não-hashable ali estourava com `TypeError`
     # dentro de `offer_bandit.py`, três camadas abaixo da borda.
-    user_id = _campo_com_forma(payload, "userId", (str,), "SEGMENT",
-                               obrigatorio=True)
+    #
+    # `userId` OU `anonymousId`: são as duas identidades do protocolo do
+    # Segment, e um visitante que ainda não se identificou chega só com a
+    # segunda. Exigir `userId` recusava com 422 um evento perfeitamente
+    # legítimo — foi o que a auditoria A1-r7 mediu. O que a borda não pode
+    # aceitar é evento SEM nenhuma identidade: o `thread_id` do checkpoint sai
+    # daqui, e sem ele clientes distintos dividiriam o mesmo estado (é o mesmo
+    # raciocínio do P0-6, no webhook de Pix).
+    user_id = (_campo_com_forma(payload, "userId", (str,), "SEGMENT")
+               or _campo_com_forma(payload, "anonymousId", (str,), "SEGMENT"))
+    if not user_id:
+        logger.warning("[SEGMENT] Evento sem userId e sem anonymousId — 422")
+        raise HTTPException(status_code=422, detail={
+            "motivo": MOTIVO_SEM_IDENTIFICACAO,
+            "detalhe": ("evento sem `userId` e sem `anonymousId` — sem isso, "
+                        "clientes distintos dividiriam o mesmo checkpoint"),
+        })
     evento = _campo_com_forma(payload, "event", (str,), "SEGMENT", default="")
     props = _campo_com_forma(payload, "properties", (dict,), "SEGMENT", default={})
     if "billing_profile" in props:
@@ -557,6 +579,13 @@ def _objeto_json_do_corpo(raw: bytes, origem: str) -> dict:
         raise HTTPException(
             status_code=400,
             detail="Corpo do webhook contém Infinity/NaN, que não são JSON válido")
+    except RecursionError:
+        # O próprio `json.loads` estoura a pilha antes de qualquer validação,
+        # com aninhamento suficiente. Recusar é a resposta; deixar subir é 500.
+        logger.warning("[%s] Corpo assinado aninhado além do que o parser "
+                       "suporta — 400", origem)
+        raise HTTPException(status_code=400,
+                            detail="Corpo do webhook está aninhado demais")
 
     if not isinstance(corpo, dict):
         logger.warning("[%s] Corpo assinado é %s, não um objeto JSON — 400",
@@ -574,33 +603,60 @@ def _objeto_json_do_corpo(raw: bytes, origem: str) -> dict:
 LIMITE_INTEIRO_SERIALIZAVEL = 2 ** 63 - 1
 
 
+# Profundidade máxima de aninhamento aceita num objeto livre do payload.
+# Existe porque a guarda não pode ser derrubável pelo que ela guarda: um
+# `properties` com ~950 níveis fazia a varredura RECURSIVA estourar a pilha do
+# Python (`RecursionError`) e devolver 500 — a guarda virava o próprio vetor.
+# A varredura abaixo é ITERATIVA, então a pilha já não é o limite; este teto
+# existe para o outro lado, o custo: um payload absurdamente aninhado é
+# recusado em vez de percorrido. 100 níveis é ordens de grandeza acima de
+# qualquer `properties` real do Segment.
+PROFUNDIDADE_MAXIMA_DO_PAYLOAD = 100
+
+
 def _recusar_inteiro_grande_demais(valor, origem: str, caminho: str = "properties"):
     """Varre o payload atrás de inteiro fora do alcance do checkpoint.
 
     Medido: `{"properties": {"days_since_last": 2**200}}` com assinatura
-    válida devolvia HTTP 500. O mesmo com `features_used_30d` e `on_site_now`.
-    O JSON é válido, o campo tem o nome certo, e mesmo assim derruba — porque
-    o limite não é do JSON, é de quem grava o estado.
+    válida devolvia HTTP 500. O mesmo com `features_used_30d` e `on_site_now`,
+    e com `data.object.amount_due` no Stripe, onde o inteiro entra numa divisão
+    e levanta `OverflowError`. O JSON é válido, o campo tem o nome certo, e
+    mesmo assim derruba — porque o limite não é do JSON, é de quem grava o
+    estado (msgpack, 64 bits) e de quem faz a conta.
 
-    É recursivo porque `properties` é um objeto livre: o número pode estar em
-    qualquer profundidade, e barrar só o primeiro nível deixaria a porta aberta.
+    Percorre em qualquer profundidade porque `properties` e `data` são objetos
+    livres: o número pode estar em qualquer nível, e barrar só o primeiro
+    deixaria a porta aberta. **Iterativa**, com pilha explícita: a versão
+    recursiva desta função era derrubável pelo próprio payload que ela
+    inspeciona (`RecursionError` -> 500 a partir de ~950 níveis).
     """
-    if isinstance(valor, bool):
-        return
-    if isinstance(valor, int) and abs(valor) > LIMITE_INTEIRO_SERIALIZAVEL:
-        logger.warning("[%s] Inteiro fora do alcance do checkpoint em %s — 422",
-                       origem, caminho)
-        raise HTTPException(status_code=422, detail={
-            "motivo": "inteiro_fora_do_alcance", "campo": caminho,
-            "detalhe": (f"inteiros acima de {LIMITE_INTEIRO_SERIALIZAVEL} não "
-                        "cabem no checkpoint do agente"),
-        })
-    if isinstance(valor, dict):
-        for chave, item in valor.items():
-            _recusar_inteiro_grande_demais(item, origem, f"{caminho}.{chave}")
-    elif isinstance(valor, (list, tuple)):
-        for i, item in enumerate(valor):
-            _recusar_inteiro_grande_demais(item, origem, f"{caminho}[{i}]")
+    pilha = [(valor, caminho, 0)]
+    while pilha:
+        item, onde, nivel = pilha.pop()
+
+        if nivel > PROFUNDIDADE_MAXIMA_DO_PAYLOAD:
+            logger.warning("[%s] Payload aninhado além de %d níveis em %s — 422",
+                           origem, PROFUNDIDADE_MAXIMA_DO_PAYLOAD, onde)
+            raise HTTPException(status_code=422, detail={
+                "motivo": "payload_aninhado_demais", "campo": onde,
+                "detalhe": (f"mais de {PROFUNDIDADE_MAXIMA_DO_PAYLOAD} níveis "
+                            "de aninhamento"),
+            })
+
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int) and abs(item) > LIMITE_INTEIRO_SERIALIZAVEL:
+            logger.warning("[%s] Inteiro fora do alcance do checkpoint em %s — 422",
+                           origem, onde)
+            raise HTTPException(status_code=422, detail={
+                "motivo": "inteiro_fora_do_alcance", "campo": onde,
+                "detalhe": (f"inteiros acima de {LIMITE_INTEIRO_SERIALIZAVEL} não "
+                            "cabem no checkpoint do agente nem na conta de valor"),
+            })
+        if isinstance(item, dict):
+            pilha.extend((v, f"{onde}.{k}", nivel + 1) for k, v in item.items())
+        elif isinstance(item, (list, tuple)):
+            pilha.extend((v, f"{onde}[{i}]", nivel + 1) for i, v in enumerate(item))
 
 
 def _campo_com_forma(corpo: dict, campo: str, tipos: tuple, origem: str,
