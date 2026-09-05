@@ -545,12 +545,10 @@ async def segment_webhook(request: Request) -> JSONResponse:
         _campo_com_forma(props, "billing_profile", (str,), "SEGMENT")
     _recusar_inteiro_grande_demais(props, "SEGMENT")
 
-    # A identidade que o negócio vê é o id cru; a chave do checkpoint é a
-    # dupla (campo, valor). Ver `_thread_id_voluntario`.
     await _run_voluntary_pipeline(
-        user_id=user_id, event=evento, props=props,
-        thread_id=_thread_id_voluntario(
+        user_id=_identidade_voluntaria(
             "userId" if identificado else "anonymousId", user_id),
+        event=evento, props=props,
     )
     return JSONResponse({"status": "ok"})
 
@@ -578,7 +576,15 @@ async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
         "on_site_now":       payload.on_site_now,
         "billing_profile":   payload.billing_profile,
     }
-    await _run_voluntary_pipeline(payload.user_id, payload.event, props)
+    # Mesma qualificação do webhook. Sem isto, `/simulate/churn-risk` e o
+    # webhook do Segment produziriam identidades diferentes para o mesmo
+    # cliente, e o endpoint da demo deixaria de exercitar o código que a demo
+    # mostra. É o N-7 — já cobrado e fechado no lado involuntário, onde
+    # `/simulate/pix-falhado` passa pelo mesmo `_thread_id` do webhook.
+    await _run_voluntary_pipeline(
+        _identidade_voluntaria("userId", payload.user_id),
+        payload.event, props,
+    )
     return JSONResponse({"status": "pipeline_executado", "user_id": payload.user_id})
 
 
@@ -893,26 +899,48 @@ async def _run_involuntary_pipeline(
         await crai_agent.ainvoke(initial, config)
 
 
-def _thread_id_voluntario(campo: str, valor: str) -> str:
-    """Identidade do checkpoint de um evento de churn voluntário.
+# Prefixos das duas origens de identidade do churn voluntário. Têm o mesmo
+# comprimento e diferem no primeiro byte, o que torna o mapeamento
+# `(origem, valor) -> identidade` INJETIVO: `"user:" + A` nunca é igual a
+# `"anon:" + B`, qualquer que seja o conteúdo. É a propriedade que um prefixo
+# em um lado só não tem — `anon:` sozinho deixava `userId="anon:v"` colidir com
+# `anonymousId="v"`, e essa é a direção pior, porque o `anonymousId` é o campo
+# que o visitante escolhe.
+PREFIXO_IDENTIFICADO = "user:"
+PREFIXO_ANONIMO = "anon:"
 
-    O prefixo `anon:` — primeira tentativa desta separação — resolvia metade do
-    problema. `anon:` + `anonymousId="vitima"` dá a mesma string que um
-    `userId` literalmente igual a `"anon:vitima"`, e essa é a direção PIOR: o
-    `anonymousId` é o campo que o visitante escolhe. Medido antes desta
-    correção: o evento anônimo sobrescreveu o estado do cliente identificado.
 
-    Serializar a dupla `(campo, valor)` como JSON torna o mapeamento injetivo:
-    o JSON escapa o conteúdo, então nenhum valor de um campo consegue produzir
-    a codificação de outro. É a mesma disciplina — e pelo mesmo motivo — que
-    `_thread_id` já usa no webhook de Pix, onde concatenar com `|` deixava
-    `e2e="E123|999"` colidir com `ispb="999|60701190"` (P0-6).
+def _identidade_voluntaria(campo: str, valor: str) -> str:
+    """A identidade de um evento de churn voluntário. UMA, usada em todo lugar.
+
+    A tentativa anterior tinha DOIS conceitos: `user_id` (identidade do
+    negócio, crua) e `thread_id` (chave do checkpoint, desambiguada). A ideia
+    era não sujar o nome do contato no CRM com um prefixo. O efeito medido foi
+    o oposto do pretendido: a separação chegava ao `MemorySaver` e não chegava
+    a `_channel_history` nem ao HubSpot, que leem `state["user_id"]`. A colisão
+    não foi fechada — foi MOVIDA, para dois lugares onde antes não existia:
+
+        visitante anônimo 'vitima' converte por popup
+        cliente identificado 'vitima', FORA do site
+        -> recebia popup, porque herdou o histórico de canal do anônimo
+        -> e os dois viravam o mesmo contato e o mesmo deal no HubSpot
+
+    `_channel_history` decide o canal de saída: um id que já converteu antes
+    tem o canal anterior preferido sobre `on_site_now` e sobre o score de
+    risco. Contaminar essa chave manda a oferta de retenção por um canal que
+    não alcança o cliente — e a CRAI registra `retained` sobre uma mensagem
+    que ninguém viu.
+
+    Por isso volta a existir uma identidade só. O custo é o prefixo aparecer no
+    contato do HubSpot, e ele é o preço certo: um visitante anônimo e um
+    cliente identificado são duas entidades, e fundi-las no CRM é pior que um
+    nome feio. Está declarado no README.
     """
-    return json.dumps([campo, valor], ensure_ascii=False, sort_keys=True)
+    prefixo = PREFIXO_IDENTIFICADO if campo == "userId" else PREFIXO_ANONIMO
+    return prefixo + valor
 
 
-async def _run_voluntary_pipeline(user_id: str, event: str, props: dict,
-                                  thread_id: Optional[str] = None):
+async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
     initial: ChurnVoluntaryState = {
         "user_id": user_id, "event": event, "props": props,
         "risk_score": 0.0, "profile": "CLT", "offer_type": None,
@@ -920,12 +948,11 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict,
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False, "escalated_to_human": False,
     }
-    # `user_id` é a identidade do NEGÓCIO — vai para o state e para o HubSpot.
-    # `thread_id` é a chave do CHECKPOINT, que precisa ser única por origem da
-    # identidade. Separá-las evita que o prefixo de desambiguação vaze para o
-    # nome do contato no CRM. Sem `thread_id` (origem `/simulate/*`), a
-    # identidade é a própria chave, como sempre foi.
-    config = {"configurable": {"thread_id": thread_id or user_id}}
+    # A identidade JÁ chega qualificada (ver `_identidade_voluntaria`), e é a
+    # mesma coisa em todo lugar: no checkpoint, em `_channel_history` e no
+    # HubSpot. Ter duas formas da identidade foi exatamente o defeito que a
+    # A1-r10 mediu — a desambiguação chegava a um dos três consumidores.
+    config = {"configurable": {"thread_id": user_id}}
     await voluntary_churn_agent.ainvoke(initial, config)
 
 

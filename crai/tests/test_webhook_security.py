@@ -796,19 +796,28 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
             yield c
 
     @staticmethod
-    def _enviar(cliente, campo, valor, evento, perfil):
+    def _enviar(cliente, campo, valor, evento, perfil, on_site=True):
         corpo = json.dumps({
             campo: valor, "event": evento,
-            "properties": {"on_site_now": True, "billing_profile": perfil},
+            "properties": {"on_site_now": on_site, "billing_profile": perfil},
         }).encode()
         r = cliente.post("/webhooks/segment", content=corpo,
                          headers={"x-signature": segment_header(corpo),
                                   "content-type": "application/json"})
         assert r.status_code == 200, r.text
 
-    # Os pares abaixo quebram um esquema de prefixo simples. O terceiro é o
-    # mais duro: o `userId` é literalmente a codificação que a chave usa para
-    # o campo anônimo.
+    # Cobrança da A1-r10: só o SEGUNDO par reprovava em `94cd8f6`. Declarado
+    # par a par, porque chamar os três de "quebradores do esquema de prefixo"
+    # era falso para dois deles.
+    #
+    #   ids idênticos      — CATRACA. O prefixo `anon:` já separava este caso;
+    #                        está aqui para travá-lo contra a próxima mudança.
+    #   `anon:` no userId  — REGRESSÃO. É o par que reprovava em `94cd8f6`:
+    #                        `"anon:" + "vitima"` colide com `userId="anon:vitima"`.
+    #   codificação JSON   — CATRACA hoje. Quebrava o esquema `json.dumps` que
+    #                        a r9 tentou; contra prefixo fixo não quebra nada.
+    #                        Fica porque documenta por que o desenho não é
+    #                        aquele.
     COLISOES = [
         ("colisao_r8_teste", "colisao_r8_teste"),
         ("anon:vitima", "vitima"),
@@ -906,34 +915,130 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
             f"identidades distintas produziram a mesma chave: {repetidas}"
         )
 
-    def test_a_desambiguacao_nao_vaza_para_o_negocio(self, cliente_real):
-        """A identidade que o CRM vê é o id do cliente, não a chave interna.
+    def test_o_historico_de_canal_nao_e_compartilhado(self, cliente_real,
+                                                      monkeypatch):
+        """O canal de saída de um cliente não pode ser decidido por outro.
 
-        Escrito como catraca, mas é PROVA DE REGRESSÃO: reprova em `94cd8f6`
-        com `o pipeline recebeu ['anon:visitante_r9']`. O prefixo `anon:` não
-        só separava mal — ele vazava para a identidade do negócio, e o contato
-        criado no HubSpot ia se chamar `anon:visitante_r9`. Deixo a nota aqui
-        porque rotular errado um teste é o defeito que a A1-r4 já cobrou uma
-        vez neste projeto.
+        Este teste substitui um anterior — `test_a_desambiguacao_nao_vaza_para_
+        o_negocio` — que afirmava o oposto e TRAVAVA o defeito. A ideia lá era
+        que o prefixo de desambiguação não devia sujar o nome do contato no
+        CRM, e por isso a identidade do negócio voltou a ser o id cru. Só que
+        `state["user_id"]` não é um rótulo: `_channel_history` e o HubSpot o
+        usam como CHAVE. A separação chegava ao checkpoint e não chegava a eles.
+
+        Medido em `2634272`, com o aceite forçado (`random.random -> 0.0`,
+        senão a conversão é sorteio e não medição):
+
+            anonymousId='vitima', no site  -> converte por POPUP
+            userId='vitima',  FORA do site -> recebia POPUP (deveria ser EMAIL)
+            _channel_history: uma chave só para os dois
+            HubSpot: um contato só, e o MESMO deal
+
+        A consequência é comercial, não estética: `choose_channel` prefere o
+        canal que já converteu sobre `on_site_now`. Um cliente que não está no
+        site recebe popup — a oferta de retenção não alcança ninguém, e a CRAI
+        registra `retained` sobre uma mensagem que não foi vista.
         """
-        from crai.api import app as app_module
+        import random
 
-        vistos = []
-        original = app_module._run_voluntary_pipeline
+        from crai.churn_voluntary import voluntary_agent as va
 
-        async def espiao(user_id, event, props, **kw):
-            vistos.append(user_id)
-            return await original(user_id, event, props, **kw)
+        monkeypatch.setattr(random, "random", lambda: 0.0)
+        va._channel_history.clear()
 
-        app_module._run_voluntary_pipeline = espiao
-        try:
-            self._enviar(cliente_real, "anonymousId", "visitante_r9",
-                         "Cancellation Page Viewed", "PJ")
-        finally:
-            app_module._run_voluntary_pipeline = original
+        # 1) visitante anônimo, no site: converte, e o popup entra no histórico
+        self._enviar(cliente_real, "anonymousId", "vitima_r10",
+                     "Cancellation Page Viewed", "PJ", on_site=True)
+        # 2) cliente identificado com o MESMO id, fora do site
+        self._enviar(cliente_real, "userId", "vitima_r10",
+                     "Cancellation Page Viewed", "CLT", on_site=False)
 
-        assert vistos == ["visitante_r9"], (
-            f"o pipeline recebeu {vistos!r} como identidade do cliente; "
-            "esperado ['visitante_r9']. A chave do checkpoint é interna e não "
-            "pode virar o nome do contato no CRM"
+        assert len(va._channel_history) == 2, (
+            "o visitante anônimo e o cliente identificado dividiram a mesma "
+            f"entrada de histórico de canal: {dict(va._channel_history)}. "
+            "`_channel_history` é chaveado por `state[\'user_id\']`, então a "
+            "desambiguação precisa estar NA identidade — pôr só no `thread_id` "
+            "protege o checkpoint e deixa o canal e o CRM colidindo"
+        )
+
+        canais_do_identificado = [canal for chave, canal
+                                  in va._channel_history.items()
+                                  if chave.endswith("vitima_r10")
+                                  and chave.startswith("user:")]
+        assert canais_do_identificado == ["email"], (
+            f"o cliente identificado, FORA do site, recebeu "
+            f"{canais_do_identificado}; esperado ['email']. Ele herdou o canal "
+            "que converteu para outra pessoa"
+        )
+
+    def test_o_crm_nao_funde_o_anonimo_com_o_identificado(self, cliente_real,
+                                                          monkeypatch):
+        """A outra consequência medida: um contato e um deal para duas pessoas.
+
+        O digest do deal do HubSpot deriva de `user_id`. Com a identidade crua,
+        os dois ciclos de retenção viravam literalmente o mesmo deal.
+        """
+        import random
+
+        from crai.integrations import hubspot_crm
+
+        monkeypatch.setattr(random, "random", lambda: 0.0)
+        contatos = []
+        original = hubspot_crm.HubSpotCRM.upsert_contact
+
+        async def espiao(self, user_id, *a, **kw):
+            contatos.append(user_id)
+            return await original(self, user_id, *a, **kw)
+
+        monkeypatch.setattr(hubspot_crm.HubSpotCRM, "upsert_contact", espiao)
+
+        self._enviar(cliente_real, "anonymousId", "fusao_r10",
+                     "Cancellation Page Viewed", "PJ", on_site=True)
+        self._enviar(cliente_real, "userId", "fusao_r10",
+                     "Cancellation Page Viewed", "CLT", on_site=False)
+
+        assert len(set(contatos)) == 2, (
+            f"o CRM recebeu {contatos!r} — o visitante anônimo e o cliente "
+            "identificado viraram o mesmo contato"
+        )
+
+    def test_o_simulador_usa_a_mesma_identidade_do_webhook(self, cliente_real,
+                                                           monkeypatch):
+        """N-7, do lado voluntário: as duas portas, a mesma chave.
+
+        O projeto já cobrou e fechou exatamente isto no lado involuntário —
+        `/simulate/pix-falhado` passa pelo mesmo `_thread_id` do webhook, para
+        que o endpoint da demo exercite o código que a demo mostra. O lado
+        voluntário tinha as duas portas produzindo identidades diferentes.
+        """
+        monkeypatch.setenv("ENV", "demo")
+        from crai.churn_voluntary import voluntary_agent as va
+
+        # O que precisa coincidir é a CHAVE DO CHECKPOINT, não o rótulo: em
+        # `2634272` as duas portas passavam a mesma string como `user_id` e
+        # mesmo assim gravavam em checkpoints diferentes, porque só o webhook
+        # calculava um `thread_id` próprio. Medir a identidade passaria lá e
+        # não provaria nada; medir a chave é medir o que divergia.
+        chaves = []
+        original = va.voluntary_churn_agent.ainvoke
+
+        async def espiao(entrada, config=None, **kw):
+            chaves.append(config["configurable"]["thread_id"])
+            return await original(entrada, config, **kw)
+
+        monkeypatch.setattr(va.voluntary_churn_agent, "ainvoke", espiao)
+
+        self._enviar(cliente_real, "userId", "mesma_porta_r10",
+                     "Session Started", "CLT", on_site=False)
+        cliente_real.post("/simulate/churn-risk", json={
+            "user_id": "mesma_porta_r10", "event": "Session Started",
+            "on_site_now": False, "billing_profile": "CLT",
+        })
+
+        assert len(chaves) == 2 and chaves[0] == chaves[1], (
+            f"webhook e simulador gravaram em checkpoints diferentes: "
+            f"{chaves!r}. Duas portas para o mesmo pipeline com dois espaços "
+            "de chave — o simulador deixa de exercitar o código que a demo "
+            "mostra, que é a razão pela qual o N-7 foi corrigido no lado "
+            "involuntário"
         )

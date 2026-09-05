@@ -26,7 +26,11 @@
 > | `calibracao.json → calibrado.tenure = false` (§5) | **o arquivo não existe** |
 >
 > Leia todo verbo no presente das seções 2, 3, 4 e 5 como **"passa a"**, não
-> como "é". Cada seção repete este aviso no ponto exato.
+> como "é". As §2.2, §2.3, §5 e §6 repetem a marca ⬜ no ponto exato; §3 e §4
+> não a repetem porque nada nelas alimenta o gerador — são a taxa-base do BACEN
+> e o contexto de mercado do Pix, citados no texto do TCC e em nenhum parâmetro.
+> (A frase anterior dizia "cada seção", o que era falso para essas duas — e
+> era, de novo, uma afirmação de completude maior do que a realidade.)
 >
 > **Correção da auditoria A1-r9.** A rodada anterior corrigiu esta mesma classe
 > de afirmação — mas só na §6, porque a nota de correção apontava para as
@@ -230,7 +234,7 @@ Enquanto isso, a declaração desta limitação é este parágrafo, e só ele.
                   tenure           → sem fonte                  ❌ NÃO CALIBRÁVEL
                   p base = 0.5     → sem fonte pública          ❌ NÃO CALIBRÁVEL
 
-                  ⬜ = a fonte foi levantada e o número existe (seção 4), mas
+                  ⬜ = a fonte foi levantada e o número existe (§2.1/§2.2), mas
                        o gerador ainda NÃO o usa.
                   ❌ = não há fonte pública; fica declarado como limitação.
 
