@@ -15,7 +15,7 @@ from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
 from .risk_scorer import calculate_risk, classify_profile
-from .offer_bandit import OfferBandit
+from .offer_bandit import OfferBandit, is_critical_risk
 from ..integrations.hubspot_crm import HubSpotCRM
 
 claude   = AsyncAnthropic()
@@ -30,7 +30,6 @@ OFFER_LABELS = {
     "desconto_10": "10% de desconto por 3 meses",
     "desconto_20": "20% de desconto por 3 meses",
     "pausa_1_mes": "pausar a assinatura por 1 mês sem custo",
-    "consulta_cs": "uma conversa com nosso time de sucesso do cliente",
     "pix_boleto_flash": "trocar para pagamento via Pix ou boleto em 1 clique",
 }
 
@@ -50,7 +49,8 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     p_estimado = _bandit.conversion_rates(state["profile"]).get(offer, 0.0)
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
-    return {**state, "offer_type": offer}
+    return {**state, "offer_type": offer,
+            "is_critical": is_critical_risk(state["risk_score"])}
 
 
 async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -97,8 +97,7 @@ Retorne APENAS a mensagem."""
 
 async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     print(f"[CHURN-VOL] Enviando via {state['channel'].upper()}: {state['message'][:90]}")
-    escalate = state["offer_type"] == "consulta_cs"
-    return {**state, "offer_sent": True, "escalated_to_human": escalate}
+    return {**state, "offer_sent": True}
 
 
 async def track_outcome(state: ChurnVoluntaryState) -> ChurnVoluntaryState:

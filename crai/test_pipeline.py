@@ -93,7 +93,7 @@ async def run_voluntary_scenario(name, user_id, event, props):
         "risk_score": 0.0, "profile": "CLT", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
-        "offer_sent": False, "accepted": None, "retained": False, "escalated_to_human": False,
+        "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,
     }
     config = {"configurable": {"thread_id": user_id}}
     return await voluntary_churn_agent.ainvoke(initial, config)
@@ -162,11 +162,19 @@ async def main():
     print(f"   Recobranças automáticas : 0 (código isolado em dunning/legacy_card/)")
 
     retained = sum(1 for r in voluntary_results if r.get("retained"))
-    escalated = sum(1 for r in voluntary_results if r.get("escalated_to_human"))
+    criticos = sum(1 for r in voluntary_results if r.get("is_critical"))
+    # O invariante de produto, medido em vez de afirmado: nenhum resultado pode
+    # sair do grafo carregando escalação humana. `consulta_cs` e
+    # `escalated_to_human` deixaram de existir no Sprint 1 — esta linha reprova
+    # a demo se algum dia voltarem.
+    escalados = sum(1 for r in voluntary_results
+                    if r.get("escalated_to_human") or r.get("offer_type") == "consulta_cs")
+    assert escalados == 0, f"INVARIANTE VIOLADO: {escalados} escalação(ões) humana(s)"
     print(f"\n📈 Churn Voluntário:")
     print(f"   Sinais de risco processados : {len(voluntary_results)}")
     print(f"   Clientes retidos             : {retained}/{len(voluntary_results)}")
-    print(f"   Escalados para CS humano     : {escalated}/{len(voluntary_results)}")
+    print(f"   Sinalizados como críticos    : {criticos}/{len(voluntary_results)} (tom ajustado)")
+    print(f"   Escalações para humano        : 0/{len(voluntary_results)} (invariante verificado)")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 

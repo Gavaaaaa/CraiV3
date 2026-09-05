@@ -946,7 +946,7 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
         "risk_score": 0.0, "profile": "CLT", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
-        "offer_sent": False, "accepted": None, "retained": False, "escalated_to_human": False,
+        "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,
     }
     # A identidade JÁ chega qualificada (ver `_identidade_voluntaria`), e é a
     # mesma coisa em todo lugar: no checkpoint, em `_channel_history` e no

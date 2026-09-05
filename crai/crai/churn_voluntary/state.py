@@ -12,6 +12,9 @@ class ChurnVoluntaryState(TypedDict):
     # Risco
     risk_score: float
     profile:    str           # CLT | PJ | freelancer
+    # Tom da mensagem, não desvio de fluxo: risco crítico sai com tom de alto
+    # cuidado. Nunca aciona humano.
+    is_critical: bool
 
     # Oferta (Multi-Armed Bandit)
     offer_type: Optional[str]
@@ -28,4 +31,3 @@ class ChurnVoluntaryState(TypedDict):
     offer_sent: bool
     accepted:   Optional[bool]
     retained:   bool
-    escalated_to_human: bool
