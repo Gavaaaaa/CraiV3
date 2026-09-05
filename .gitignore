@@ -55,3 +55,9 @@ relatorio_*.txt
 # Cobertura
 .coverage
 htmlcov/
+
+# Config local do Claude Code — permissões e preferências da máquina de quem
+# está rodando, não do projeto. settings.local.json em particular é pessoal
+# por convenção (mesmo espírito de um .env.local); não deve ir para um repo
+# compartilhado.
+.claude/
