@@ -19,11 +19,20 @@ Fora do pacote, `test_pipeline.py` — que é o PRIMEIRO comando do README,
 num console cp1252. O inventário real do projeto era 22, não 7, e este arquivo
 afirmava cobri-lo.
 
-Agora a varredura começa na RAIZ do repositório e o inventário declarado é o
-inventário inteiro: 22 ocorrências, medidas nas duas pontas. Em
-`baseline-pre-sprint` são as mesmas 22, arquivo por arquivo e linha por linha
+A auditoria A1-r6 mostrou que a correção da r5 repetiu o erro um nível acima:
+`RAIZ` virou `parent.parent`, que é `D:/PTI/crai` — o diretório do projeto, e
+não a raiz do repositório, que é `D:/PTI`. `archive/` inteiro ficava de fora, e
+lá dentro há mais 1 ocorrência. O inventário do repositório é **23**, não 22.
+
+Três rodadas seguidas afirmando um escopo maior do que o medido. Comentário
+não impediu nenhuma das três, então agora existe uma asserção:
+`test_a_raiz_e_mesmo_a_raiz_do_repositorio` exige que `RAIZ` contenha `.git`.
+
+A varredura começa na raiz do repositório e o inventário declarado é o
+inventário inteiro: **23 ocorrências**, medidas nas duas pontas. Em
+`baseline-pre-sprint` são as mesmas 23, arquivo por arquivo e linha por linha
 em `test_pipeline.py` — ou seja, a dívida é herdada, não introduzida, e a
-contribuição líquida deste diff para o N-12 é ZERO. A solução sistêmica
+contribuição líquida destes sprints para o N-12 é ZERO. A solução sistêmica
 (`sys.stdout.reconfigure`) é do Sprint 5.
 
 A catraca é o ponto: qualquer ocorrência NOVA, em qualquer arquivo `.py` do
@@ -44,29 +53,35 @@ from pathlib import Path
 
 import pytest
 
-# Raiz do repositório, não o pacote: a varredura precisa alcançar
-# `test_pipeline.py`, que vive fora de `crai/` e é o primeiro comando do README.
-RAIZ = Path(__file__).resolve().parent.parent
+# Raiz do REPOSITÓRIO — `D:\PTI`, não `D:\PTI\crai`. A rodada 5 escreveu
+# `parent.parent` e chamou aquilo de raiz do repositório; era o diretório do
+# projeto, um nível abaixo, e deixava `archive/` inteiro fora da conta que a
+# docstring prometia cobrir. `test_a_raiz_e_mesmo_a_raiz_do_repositorio`
+# abaixo trava isto: é a terceira rodada seguida em que este arquivo afirma um
+# escopo maior do que mede, e comentário não impede a quarta.
+RAIZ = Path(__file__).resolve().parents[2]
 
-# Inventário medido nas auditorias A1-r4 e A1-r5, por arquivo. Estas 22
+# Inventário medido nas auditorias A1-r4, A1-r5 e A1-r6, por arquivo. Estas 23
 # ocorrências estão idênticas em `baseline-pre-sprint` — mesmos arquivos,
 # mesmas contagens: são dívida herdada, não introduzida.
 #
-#   crai/agent/workflow.py                  "Decisão: mensagem_pagamento (... -> boleto)"
-#   crai/churn_voluntary/voluntary_agent.py  os emoji de aceite e recusa (2 caracteres)
-#   crai/dunning/dunning_engine.py           "[DUNNING] CANAL -> cliente"
-#   crai/dunning/pix_automatico_retry.py     "(dd/mm hh:mm -> dd/mm hh:mm)"
-#   crai/ml/anomaly_detector.py              "autoencoder (n -> gargalo)" (2 ocorrências)
-#   test_pipeline.py                         cabeçalhos e separadores da saída
-#                                            da demo (15 ocorrências; a linha
-#                                            103 é onde o processo morre)
+#   archive/.../modulo_04_offer_bandit/src/visualizar.py   protótipo arquivado
+#   crai/crai/agent/workflow.py                  "Decisão: mensagem_pagamento (... -> boleto)"
+#   crai/crai/churn_voluntary/voluntary_agent.py  os emoji de aceite e recusa (2 caracteres)
+#   crai/crai/dunning/dunning_engine.py           "[DUNNING] CANAL -> cliente"
+#   crai/crai/dunning/pix_automatico_retry.py     "(dd/mm hh:mm -> dd/mm hh:mm)"
+#   crai/crai/ml/anomaly_detector.py              "autoencoder (n -> gargalo)" (2 ocorrências)
+#   crai/test_pipeline.py                         cabeçalhos e separadores da saída
+#                                                 da demo (15 ocorrências; a linha
+#                                                 103 é onde o processo morre)
 PENDENCIAS_PRE_EXISTENTES = {
-    "crai/agent/workflow.py": 1,
-    "crai/churn_voluntary/voluntary_agent.py": 2,
-    "crai/dunning/dunning_engine.py": 1,
-    "crai/dunning/pix_automatico_retry.py": 1,
-    "crai/ml/anomaly_detector.py": 2,
-    "test_pipeline.py": 15,
+    "archive/protótipos-pré-unificação/modulo_04_offer_bandit/src/visualizar.py": 1,
+    "crai/crai/agent/workflow.py": 1,
+    "crai/crai/churn_voluntary/voluntary_agent.py": 2,
+    "crai/crai/dunning/dunning_engine.py": 1,
+    "crai/crai/dunning/pix_automatico_retry.py": 1,
+    "crai/crai/ml/anomaly_detector.py": 2,
+    "crai/test_pipeline.py": 15,
 }
 
 TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
@@ -74,13 +89,14 @@ TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
 # Módulos que este sprint limpou. Aqui a exigência é zero, sem tolerância:
 # `ml/failure_classifier.py` é o que derrubava o gate do Sprint 4.
 MODULOS_QUE_DEVEM_ESTAR_LIMPOS = (
-    "crai/ml/failure_classifier.py",
-    "crai/integrations/payment_gateway.py",
-    "crai/scripts/preparar_amostra_real.py",
+    "crai/crai/ml/failure_classifier.py",
+    "crai/crai/integrations/payment_gateway.py",
+    "crai/crai/scripts/preparar_amostra_real.py",
 )
 
 # Diretórios que não são código do projeto e não devem entrar na contagem.
-IGNORADOS = (".git", ".venv", "venv", "build", "dist", "__pycache__", ".pytest_cache")
+IGNORADOS = (".git", ".venv", "venv", "build", "dist", "__pycache__",
+             ".pytest_cache", ".claude")
 
 
 def _fora_do_cp1252(texto: str) -> str:
@@ -203,17 +219,34 @@ class TestN12Catraca:
         alguem estreitar a raiz de volta para o pacote, ele reprova.
         """
         inventario = _inventario()
-        fora_do_pacote = [m for m in inventario if not m.startswith("crai/")]
+        fora_do_pacote = [m for m in inventario if not m.startswith("crai/crai/")]
 
-        assert "test_pipeline.py" in inventario, (
-            "a varredura nao alcanca `test_pipeline.py`. O inventario voltou a "
-            "medir so o pacote, e a docstring deste arquivo promete o "
-            f"repositorio. Arquivos vistos fora do pacote: {fora_do_pacote}"
+        assert "crai/test_pipeline.py" in inventario, (
+            "a varredura não alcança `test_pipeline.py`. O inventário voltou a "
+            "medir só o pacote, e a docstring deste arquivo promete o "
+            f"repositório. Arquivos vistos fora do pacote: {fora_do_pacote}"
+        )
+
+    def test_a_raiz_e_mesmo_a_raiz_do_repositorio(self):
+        """Fecha a classe de defeito, em vez de corrigir mais uma instância dela.
+
+        Nas rodadas 4, 5 e 6 este arquivo afirmou um escopo e mediu outro: em
+        `crai/`, quando dizia "qualquer módulo"; depois em `crai/`, quando
+        dizia "a raiz do repositório". Um comentário pedindo cuidado não teria
+        impedido nenhuma das três. Uma asserção impede.
+
+        `.git` é a marca da raiz — é o que faz de `D:/PTI` um repositório e de
+        `D:/PTI/crai` apenas uma pasta dentro dele.
+        """
+        assert (RAIZ / ".git").exists(), (
+            f"RAIZ aponta para {RAIZ}, que não contém `.git` e portanto não é a "
+            "raiz do repositório. A docstring deste arquivo e a linha N-12 do "
+            "README prometem o repositório inteiro"
         )
 
     def test_o_total_bate_com_o_medido_na_auditoria(self):
         total = sum(len(a) for a in _inventario().values())
         assert total <= TOTAL_DECLARADO, (
             f"total de {total} ocorrências contra {TOTAL_DECLARADO} declaradas "
-            "nas auditorias A1-r4 e A1-r5"
+            "nas auditorias A1-r4, A1-r5 e A1-r6"
         )

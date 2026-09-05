@@ -341,3 +341,148 @@ class TestA1R5ValidacaoNuncaVira500:
 
         assert resposta.status_code == 422, resposta.text
         assert resposta.json()["detail"]["campo"] == "days_since_last"
+
+class TestA1R6BordaAssinadaNaoDerrubaAApi:
+    """Assinar prova ORIGEM, não FORMA — e a borda tratava as duas como a mesma.
+
+    Os webhooks de Stripe e Segment faziam `json.loads(raw)` seguido de `.get()`
+    e entregavam o resultado ao pipeline. `json.loads(b'[]')` devolve uma lista,
+    que não tem `.get`; `{"userId": [1]}` é JSON perfeito e vira chave de
+    dicionário três camadas adiante; `{"amount_due": null}` entra numa divisão.
+    Um PSP legítimo com bug de serialização assina um corpo torto, e a
+    assinatura confere.
+
+    Medido em `8786d82`, com assinatura VÁLIDA e o pipeline REAL (sem stub):
+    **11 payloads davam HTTP 500 em `/webhooks/segment` e 5 em
+    `/webhooks/stripe`** — 16 no total. Cinco dos sete tracebacks distintos
+    morriam dentro de `crai/api/app.py`, ou seja, na própria borda.
+
+    O objetivo declarado do Sprint 1 é textual: *"nenhum payload de PSP, por
+    mais torto que seja, derruba a API ou entra no pipeline em silêncio."*
+
+    Este teste usa cliente PRÓPRIO, sem a fixture `client`: aquela fixture
+    substitui os dois pipelines por stubs, e vários destes payloads só estouram
+    dentro do pipeline de verdade. Com stub, o teste passaria em `8786d82` e
+    não provaria nada.
+    """
+
+    SEGMENT_NAO_OBJETO = [b"not json", b"[]", b'"texto"', b"5", b"null"]
+    SEGMENT_FORMA_ERRADA = [
+        b'{"userId":null}',
+        b'{"userId":[1],"event":"x"}',
+        b'{"userId":{"a":1},"event":"Session Started"}',
+        b'{"userId":"u","event":"x","properties":"nao-dict"}',
+        b'{"userId":"u","event":"x","properties":[1,2]}',
+        b'{"userId":"u","event":"Cancellation Page Viewed",'
+        b'"properties":{"billing_profile":[1]}}',
+    ]
+    STRIPE_NAO_OBJETO = [b"not json", b"[]"]
+    STRIPE_FORMA_ERRADA = [
+        b'{"type":"invoice.payment_failed","data":"nao-dict"}',
+        b'{"type":"invoice.payment_failed","data":null}',
+        b'{"type":"invoice.payment_failed","data":{"object":{"amount_due":"abc"}}}',
+        b'{"type":"invoice.payment_failed","data":{"object":{"amount_due":null}}}',
+    ]
+
+    @pytest.fixture
+    def cliente_real(self, monkeypatch):
+        """Cliente com os segredos configurados e os pipelines DE VERDADE."""
+        monkeypatch.setenv("SEGMENT_WEBHOOK_SECRET", SEGMENT_SECRET)
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", STRIPE_SECRET)
+        with TestClient(app_module.app, raise_server_exceptions=False) as c:
+            yield c
+
+    @staticmethod
+    def _h_segment(corpo: bytes) -> dict:
+        return {"x-signature": segment_header(corpo),
+                "content-type": "application/json"}
+
+    @staticmethod
+    def _h_stripe(corpo: bytes) -> dict:
+        return {"stripe-signature": stripe_header(corpo),
+                "content-type": "application/json"}
+
+    @pytest.mark.parametrize("corpo", SEGMENT_NAO_OBJETO)
+    def test_segment_corpo_que_nao_e_objeto_json_da_400(self, cliente_real, corpo):
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+        assert r.status_code == 400, (
+            f"{corpo!r} devolveu {r.status_code}. Corpo assinado que não é um "
+            "objeto JSON é recusa de forma, não erro do servidor"
+        )
+
+    @pytest.mark.parametrize("corpo", SEGMENT_FORMA_ERRADA)
+    def test_segment_campo_com_forma_errada_da_422(self, cliente_real, corpo):
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+        assert r.status_code == 422, (
+            f"{corpo!r} devolveu {r.status_code}. É JSON bem-formado com um "
+            "campo na forma errada — o pipeline assume str/dict e recebe outra "
+            "coisa; recusar na borda é o que impede o 500 lá dentro"
+        )
+
+    @pytest.mark.parametrize("corpo", STRIPE_NAO_OBJETO)
+    def test_stripe_corpo_que_nao_e_objeto_json_da_400(self, cliente_real, corpo):
+        r = cliente_real.post("/webhooks/stripe", content=corpo,
+                              headers=self._h_stripe(corpo))
+        assert r.status_code == 400, f"{corpo!r} devolveu {r.status_code}"
+
+    @pytest.mark.parametrize("corpo", STRIPE_FORMA_ERRADA)
+    def test_stripe_campo_com_forma_errada_da_422(self, cliente_real, corpo):
+        r = cliente_real.post("/webhooks/stripe", content=corpo,
+                              headers=self._h_stripe(corpo))
+        assert r.status_code == 422, f"{corpo!r} devolveu {r.status_code}"
+
+    def test_inteiro_grande_demais_para_o_checkpoint_da_422(self, cliente_real):
+        """2**200 é JSON válido e nome de campo certo — e derrubava a API.
+
+        O limite não é do JSON nem do Pydantic: é do msgpack que serializa o
+        checkpoint do LangGraph, que endereça 64 bits. O erro aparecia só na
+        gravação do estado, depois de o pipeline ter rodado inteiro.
+        """
+        corpo = json.dumps({
+            "userId": "usr_r6", "event": "Cancellation Page Viewed",
+            "properties": {"days_since_last": 2 ** 200},
+        }).encode()
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+
+        assert r.status_code == 422, (
+            f"inteiro de 2**200 em properties devolveu {r.status_code}: "
+            f"{r.text[:200]}"
+        )
+        assert r.json()["detail"]["motivo"] == "inteiro_fora_do_alcance"
+
+    def test_nenhum_payload_torto_produz_5xx(self, cliente_real):
+        """A asserção do Sprint 1, medida de uma vez sobre a classe inteira."""
+        casos = [("/webhooks/segment", c, self._h_segment)
+                 for c in self.SEGMENT_NAO_OBJETO + self.SEGMENT_FORMA_ERRADA]
+        casos += [("/webhooks/stripe", c, self._h_stripe)
+                  for c in self.STRIPE_NAO_OBJETO + self.STRIPE_FORMA_ERRADA]
+
+        quintos = []
+        for rota, corpo, assinar in casos:
+            r = cliente_real.post(rota, content=corpo, headers=assinar(corpo))
+            if r.status_code >= 500:
+                quintos.append((rota, corpo, r.status_code))
+
+        assert not quintos, (
+            f"{len(quintos)} de {len(casos)} payloads ASSINADOS derrubaram a "
+            f"API com 5xx: {quintos}"
+        )
+
+    def test_payload_bem_formado_continua_passando(self, cliente_real):
+        """Contrapeso: a blindagem não pode ter fechado a porta legítima.
+
+        Catraca, não regressão — este caso já passava em `8786d82`. Existe
+        porque um portão de forma cedo demais é fácil de escrever apertado
+        demais, e aí o webhook real para de funcionar sem ninguém notar.
+        """
+        corpo = json.dumps({
+            "userId": "usr_r6_ok", "event": "Cancellation Page Viewed",
+            "properties": {"days_since_last": 14, "features_used_30d": 2,
+                           "on_site_now": True, "billing_profile": "CLT"},
+        }).encode()
+        r = cliente_real.post("/webhooks/segment", content=corpo,
+                              headers=self._h_segment(corpo))
+        assert r.status_code == 200, r.text

@@ -124,8 +124,18 @@ def build_crai_graph() -> StateGraph:
     # único, e trocar o checkpointer por um persistente (`SqliteSaver` /
     # `PostgresSaver`, que o LangGraph já oferece com a mesma interface) é uma
     # linha aqui mais uma migração — trabalho de produção, não de banca.
-    # Enquanto isso não acontecer, o limite regulatório é garantido pelo
-    # processo, e o processo é a fronteira de correção do sistema.
+    #
+    # CORREÇÃO DA AUDITORIA A1-r6: a versão anterior deste comentário terminava
+    # dizendo que "o limite regulatório é garantido pelo processo". Era falso, e
+    # de um jeito que importa: dentro de UM processo, N entregas simultâneas do
+    # mesmo `id_recorrencia` agendavam 3×N tentativas (medido: 6 e 9), porque o
+    # `ainvoke` lê o checkpoint na entrada e grava nó a nó, com `await` no meio.
+    # Trocar o checkpointer não consertaria isso — um `SqliteSaver` sem
+    # transação serializada tem a mesma corrida. O que consertou foi a trava por
+    # `thread_id` em `_run_involuntary_pipeline` (crai/api/app.py).
+    #
+    # O que vale hoje, com precisão: o limite é garantido DENTRO de um processo,
+    # pela trava; ENTRE processos não há nada, pelo motivo (1) acima.
     return graph.compile(checkpointer=MemorySaver())
 
 

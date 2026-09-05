@@ -15,8 +15,10 @@ correta — ver crai/agent/main_agent.py.
 import os
 import json
 import math
+import asyncio
 import hashlib
 import logging
+import weakref
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
@@ -367,7 +369,26 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     ):
         raise _reject_unsigned(request, "stripe")
 
-    event = json.loads(payload)
+    event = _objeto_json_do_corpo(payload, "STRIPE")
+
+    # `data` e `data.object` são percorridos com `.get()` encadeado em
+    # `_dados_stripe`, e `amount_due` entra numa divisão. Um `data` que não é
+    # objeto, ou um `amount_due` que não é número, estourava ali.
+    # `nulo_e_ausente=False` nos dois: `_dados_stripe` reencontra o payload CRU
+    # e refaz `event.get("data", {}).get("object", {})`. Com `data: null` o
+    # `.get` devolve `None` e o encadeamento estoura — um default calculado
+    # aqui não alcançaria aquela leitura. Campo ausente segue valendo default.
+    dados = _campo_com_forma(event, "data", (dict,), "STRIPE", default={},
+                             nulo_e_ausente=False)
+    fatura = _campo_com_forma(dados, "object", (dict,), "STRIPE", default={},
+                              nulo_e_ausente=False)
+    if "amount_due" in fatura:
+        _campo_com_forma(fatura, "amount_due", (int, float), "STRIPE",
+                         nulo_e_ausente=False)
+    if "attempt_count" in fatura:
+        _campo_com_forma(fatura, "attempt_count", (int,), "STRIPE",
+                         nulo_e_ausente=False)
+
     if event.get("type") == "invoice.payment_failed":
         _registrar_cartao_desativado(event)
         return JSONResponse({
@@ -456,12 +477,21 @@ async def segment_webhook(request: Request) -> JSONResponse:
     ):
         raise _reject_unsigned(request, "segment")
 
-    payload = json.loads(raw)
-    await _run_voluntary_pipeline(
-        user_id=payload.get("userId", "usr_unknown"),
-        event=payload.get("event", ""),
-        props=payload.get("properties", {}),
-    )
+    payload = _objeto_json_do_corpo(raw, "SEGMENT")
+
+    # As três formas que o pipeline de churn voluntário assume do evento.
+    # `userId` vira chave de dicionário e `billing_profile` vira chave do
+    # bandit: qualquer coisa não-hashable ali estourava com `TypeError`
+    # dentro de `offer_bandit.py`, três camadas abaixo da borda.
+    user_id = _campo_com_forma(payload, "userId", (str,), "SEGMENT",
+                               obrigatorio=True)
+    evento = _campo_com_forma(payload, "event", (str,), "SEGMENT", default="")
+    props = _campo_com_forma(payload, "properties", (dict,), "SEGMENT", default={})
+    if "billing_profile" in props:
+        _campo_com_forma(props, "billing_profile", (str,), "SEGMENT")
+    _recusar_inteiro_grande_demais(props, "SEGMENT")
+
+    await _run_voluntary_pipeline(user_id=user_id, event=evento, props=props)
     return JSONResponse({"status": "ok"})
 
 
@@ -499,6 +529,130 @@ async def health():
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+def _objeto_json_do_corpo(raw: bytes, origem: str) -> dict:
+    """Corpo assinado -> objeto JSON, ou 400. Portão comum dos três webhooks.
+
+    O webhook de Pix já tinha este portão; os de Stripe e Segment não. Assinar
+    o corpo prova ORIGEM, não FORMA: um PSP legítimo com um bug de serialização
+    manda um corpo assinado e torto, e a assinatura confere. O que vinha depois
+    era `json.loads(raw)` cru, seguido de `.get()` — e `json.loads(b'[]')`
+    devolve uma lista, que não tem `.get`.
+
+    Medido antes deste portão, com assinatura VÁLIDA:
+    `not json`, `[]`, `"texto"`, `5` e `null` davam HTTP 500 nos dois
+    endpoints. Nenhum deles chegava a ser recusado: eles estouravam.
+
+    `parse_constant` fecha `NaN`/`Infinity`/`-Infinity`, que o JSON do Python
+    aceita por padrão e o JSON padrão não tem — a mesma porta que o P0-1 usou.
+    """
+    try:
+        corpo = json.loads(raw, parse_constant=_rejeitar_constante_json)
+    except json.JSONDecodeError as e:
+        logger.warning("[%s] Corpo assinado não é JSON válido (%s) — 400", origem, e)
+        raise HTTPException(status_code=400,
+                            detail="Corpo do webhook não é JSON válido")
+    except ValueError as e:
+        logger.warning("[%s] Corpo assinado traz constante não numérica (%s) — 400",
+                       origem, e)
+        raise HTTPException(
+            status_code=400,
+            detail="Corpo do webhook contém Infinity/NaN, que não são JSON válido")
+
+    if not isinstance(corpo, dict):
+        logger.warning("[%s] Corpo assinado é %s, não um objeto JSON — 400",
+                       origem, type(corpo).__name__)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Corpo do webhook deve ser um objeto JSON, e é {type(corpo).__name__}")
+    return corpo
+
+
+# O checkpoint do LangGraph é serializado em msgpack, que endereça inteiros de
+# 64 bits. Um inteiro maior atravessa o JSON e o Pydantic intactos e só estoura
+# na gravação do checkpoint, com `TypeError: Object of type int is not
+# serializable` — 500, depois de o pipeline já ter rodado.
+LIMITE_INTEIRO_SERIALIZAVEL = 2 ** 63 - 1
+
+
+def _recusar_inteiro_grande_demais(valor, origem: str, caminho: str = "properties"):
+    """Varre o payload atrás de inteiro fora do alcance do checkpoint.
+
+    Medido: `{"properties": {"days_since_last": 2**200}}` com assinatura
+    válida devolvia HTTP 500. O mesmo com `features_used_30d` e `on_site_now`.
+    O JSON é válido, o campo tem o nome certo, e mesmo assim derruba — porque
+    o limite não é do JSON, é de quem grava o estado.
+
+    É recursivo porque `properties` é um objeto livre: o número pode estar em
+    qualquer profundidade, e barrar só o primeiro nível deixaria a porta aberta.
+    """
+    if isinstance(valor, bool):
+        return
+    if isinstance(valor, int) and abs(valor) > LIMITE_INTEIRO_SERIALIZAVEL:
+        logger.warning("[%s] Inteiro fora do alcance do checkpoint em %s — 422",
+                       origem, caminho)
+        raise HTTPException(status_code=422, detail={
+            "motivo": "inteiro_fora_do_alcance", "campo": caminho,
+            "detalhe": (f"inteiros acima de {LIMITE_INTEIRO_SERIALIZAVEL} não "
+                        "cabem no checkpoint do agente"),
+        })
+    if isinstance(valor, dict):
+        for chave, item in valor.items():
+            _recusar_inteiro_grande_demais(item, origem, f"{caminho}.{chave}")
+    elif isinstance(valor, (list, tuple)):
+        for i, item in enumerate(valor):
+            _recusar_inteiro_grande_demais(item, origem, f"{caminho}[{i}]")
+
+
+def _campo_com_forma(corpo: dict, campo: str, tipos: tuple, origem: str,
+                     obrigatorio: bool = False, default=None,
+                     nulo_e_ausente: bool = True):
+    """Lê um campo do payload exigindo a FORMA que o pipeline assume dele.
+
+    Não é validação decorativa: cada tipo recusado aqui corresponde a um 500
+    medido. `userId` virava chave de dicionário lá dentro, então uma lista ou
+    um dict davam `TypeError: unhashable type`. `properties` era usado com
+    `.get()`, então uma string dava `AttributeError`. O erro aparecia três
+    camadas abaixo, com traceback de módulo de negócio, para um problema que é
+    de contrato de entrada.
+
+    Recusar na borda mantém a regra no lugar onde ela é verdadeira e evita
+    espalhar `isinstance` por dentro do pipeline — que, no caso do
+    `churn_voluntary/`, o plano do sprint declara fora de escopo.
+    """
+    if campo not in corpo:
+        if obrigatorio:
+            logger.warning("[%s] Campo %r ausente — 422", origem, campo)
+            raise HTTPException(status_code=422, detail={
+                "motivo": "campo_obrigatorio_ausente", "campo": campo,
+            })
+        return default
+
+    valor = corpo[campo]
+    if valor is None:
+        # `null` explícito não é o mesmo que campo ausente, e nem sempre pode
+        # ser tratado como tal: `{"amount_due": null}` entrava numa divisão e
+        # dava `TypeError: unsupported operand`, HTTP 500. Onde o campo apenas
+        # não se aplica (`properties: null`), o default segue valendo.
+        if obrigatorio or not nulo_e_ausente:
+            logger.warning("[%s] Campo %r veio nulo, esperado %s — 422", origem,
+                           campo, " ou ".join(t.__name__ for t in tipos))
+            raise HTTPException(status_code=422, detail={
+                "motivo": "campo_com_forma_invalida", "campo": campo,
+                "detalhe": "recebido null",
+            })
+        return default
+
+    if not isinstance(valor, tipos):
+        esperado = " ou ".join(t.__name__ for t in tipos)
+        logger.warning("[%s] Campo %r veio como %s, esperado %s — 422",
+                       origem, campo, type(valor).__name__, esperado)
+        raise HTTPException(status_code=422, detail={
+            "motivo": "campo_com_forma_invalida", "campo": campo,
+            "detalhe": f"esperado {esperado}, recebido {type(valor).__name__}",
+        })
+    return valor
+
+
 def _registrar_cartao_desativado(event: dict) -> dict:
     """Registra uma falha de cartão sem acionar recobrança automática.
 
@@ -526,6 +680,56 @@ def _dados_stripe(event: dict) -> dict:
         # attempt_count do Stripe conta a cobranca original; retentativas ja feitas = count - 1
         "retries_done": max(0, invoice.get("attempt_count", 1) - 1),
     }
+
+
+# Uma trava por `thread_id`, criada sob demanda. `WeakValueDictionary` porque
+# o dicionário não pode crescer para sempre: enquanto alguém segura a trava há
+# referência forte viva; quando o último a soltar sai de cena, a entrada some
+# sozinha. Um `dict` comum viraria um vazamento indexado por id de cliente.
+_travas_por_cliente: "weakref.WeakValueDictionary[str, asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _trava_do_cliente(customer_id: str) -> asyncio.Lock:
+    """Serializa as execuções do pipeline de um MESMO cliente.
+
+    O `ainvoke` lê o checkpoint na entrada e o grava nó a nó. Entre a leitura e
+    a gravação há `await` em quatro nós (diagnóstico, anomalia, payday e o
+    próprio agendamento), e um PSP entrega eventos **at-least-once**: duas
+    entregas do mesmo `id_recorrencia` chegando juntas intercalam de verdade.
+    As duas leem `retry_count = 0`, as duas passam por `decide_recovery` com
+    zero tentativas usadas, e as duas recebem 3 da política — que está certa,
+    porque cada chamada isolada respeita o limite. O invariante quebrado é
+    ENTRE chamadas.
+
+    Medido antes desta trava, com N requisições concorrentes do mesmo
+    `id_recorrencia` pelo webhook assinado, sem mock nenhum:
+
+        N=1 -> 3 tentativas   numeros [1,2,3]
+        N=2 -> 6 tentativas   numeros [1,2,3,1,2,3]
+        N=3 -> 9 tentativas   numeros [1,2,3,1,2,3,1,2,3]
+
+    contra o limite legal de 3 — e o checkpoint registrando `retry_count: 3`
+    nos três casos, ou seja, **subnotificando** o que foi comprometido. Era o
+    mesmo 3+3+3=9 que a rodada 4 fechou pela chegada sequencial e que a chegada
+    concorrente mantinha aberto.
+
+    A trava cobre o `ainvoke` inteiro, leitura e escrita. Clientes diferentes
+    continuam correndo em paralelo: o que serializa é o `thread_id`, que é a
+    unidade de estado.
+
+    Isto fecha o caso de **um processo**. Entre processos não há nada — ver o
+    comentário do `MemorySaver` em `crai/agent/main_agent.py` e a linha `P1-14`
+    do README.
+    """
+    trava = _travas_por_cliente.get(customer_id)
+    if trava is None:
+        # Sem `await` entre a consulta e a escrita: num event loop só, este
+        # trecho é atômico, e dois pedidos concorrentes pegam a MESMA trava.
+        trava = asyncio.Lock()
+        _travas_por_cliente[customer_id] = trava
+    return trava
 
 
 async def _run_involuntary_pipeline(
@@ -589,8 +793,10 @@ async def _run_involuntary_pipeline(
     if retries_done is not None:
         initial["retry_count"] = retries_done
 
+    # Uma execução por vez, por cliente. Ver `_trava_do_cliente`.
     config = {"configurable": {"thread_id": customer_id}}
-    await crai_agent.ainvoke(initial, config)
+    async with _trava_do_cliente(customer_id):
+        await crai_agent.ainvoke(initial, config)
 
 
 async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):

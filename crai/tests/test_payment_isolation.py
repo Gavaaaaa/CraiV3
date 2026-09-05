@@ -16,12 +16,14 @@ cobrança Pix violaria o limite regulatório. Com cartão fora do fluxo ativo, e
 superfície de erro deixa de existir — e os testes abaixo travam esse estado.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
 import time
 from datetime import datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -796,4 +798,143 @@ class TestA1R5AJanelaDoBacenExpira:
         estado["pix_janela_ate"] = agora + timedelta(seconds=1)
         assert workflow_module._janela_vigente(estado, agora) == (
             3, agora + timedelta(seconds=1),
+        )
+
+class TestA1R6ConcorrenciaNaJanelaDoBacen:
+    """Duas entregas do mesmo evento, ao mesmo tempo, não podem dobrar o limite.
+
+    A rodada 4 fechou a chegada SEQUENCIAL: o segundo webhook encontra o
+    contador do checkpoint e cai na mensagem personalizada. A chegada
+    CONCORRENTE nunca foi fechada — e um PSP entrega *at-least-once*, então
+    duas cópias do mesmo evento chegando juntas é operação normal, não
+    condição exótica.
+
+    Entre a leitura do checkpoint e a gravação há `await` em quatro nós. Dois
+    `ainvoke` do mesmo `thread_id` intercalam: os dois leem `retry_count = 0`,
+    os dois recebem 3 tentativas da política — que está certa, porque cada
+    chamada isolada respeita o limite. O invariante quebrado é ENTRE chamadas.
+
+    Medido em `8786d82`, pelo webhook assinado, sem mock nenhum, contando pela
+    própria trilha `[PIX-RETRY]`:
+
+        N=1 -> 3 tentativas   numeros [1,2,3]
+        N=2 -> 6 tentativas   numeros [1,2,3,1,2,3]
+        N=3 -> 9 tentativas   numeros [1,2,3,1,2,3,1,2,3]
+
+    contra o limite legal de 3 — e o checkpoint registrando `retry_count: 3`
+    nos três, ou seja, subnotificando o que foi comprometido. É o mesmo
+    3+3+3=9 que a rodada 4 descreve ter fechado.
+    """
+
+    @staticmethod
+    def _assinar(corpo: bytes, segredo: bytes = b"s3cr3t") -> dict:
+        ts = int(time.time())
+        mac = hmac.new(segredo, f"{ts}.".encode() + corpo, hashlib.sha256).hexdigest()
+        return {"x-pix-signature": f"t={ts},v1={mac}",
+                "content-type": "application/json"}
+
+    def _corpo(self, id_recorrencia: str) -> bytes:
+        return json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "e2e_id": f"E_{id_recorrencia}", "valor": VALOR,
+            "id_recorrencia": id_recorrencia,
+        }).encode()
+
+    async def _disparar_juntos(self, corpos):
+        """N requisições concorrentes no MESMO event loop, sem mock.
+
+        `httpx.ASGITransport` fala com o app direto, sem socket e sem thread:
+        um processo, um loop, um `MemorySaver`. É a condição que a declaração
+        do projeto diz ser suficiente para o limite valer.
+        """
+        transporte = httpx.ASGITransport(app=app_module.app)
+        async with httpx.AsyncClient(transport=transporte,
+                                     base_url="http://teste") as cliente:
+            return await asyncio.gather(*[
+                cliente.post("/webhooks/pix-automatico", content=corpo,
+                             headers=self._assinar(corpo))
+                for corpo in corpos
+            ])
+
+    def _agendadas(self, monkeypatch, corpos):
+        """Total de tentativas que a política efetivamente devolveu."""
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s3cr3t")
+        original = workflow_module._pix_retry.schedule
+        lotes = []
+
+        async def espiao(**kwargs):
+            tentativas = await original(**kwargs)
+            lotes.append(tentativas)
+            return tentativas
+
+        monkeypatch.setattr(workflow_module._pix_retry, "schedule", espiao)
+        respostas = asyncio.run(self._disparar_juntos(corpos))
+        assert [r.status_code for r in respostas] == [200] * len(corpos)
+        return lotes
+
+    @pytest.mark.parametrize("quantos", [2, 3])
+    def test_webhooks_concorrentes_nao_dobram_a_janela(self, monkeypatch, quantos):
+        corpo = self._corpo(f"RN_r6_conc_{quantos}")
+        lotes = self._agendadas(monkeypatch, [corpo] * quantos)
+        total = sum(len(lote) for lote in lotes)
+
+        assert total <= MAX_TENTATIVAS_PIX, (
+            f"LIMITE BACEN VIOLADO por concorrência: {quantos} entregas "
+            f"simultâneas do mesmo id_recorrencia agendaram {total} tentativas "
+            f"na mesma janela de 7 dias (máximo {MAX_TENTATIVAS_PIX}). "
+            f"Lotes: {[len(l) for l in lotes]}. O `ainvoke` lê o checkpoint na "
+            "entrada e grava nó a nó; sem exclusão mútua por thread_id, as N "
+            "execuções leem retry_count=0 e cada uma recebe 3"
+        )
+
+    def test_a_numeracao_nao_se_repete_entre_execucoes_simultaneas(self, monkeypatch):
+        """Numeração repetida é a assinatura do contador lido em paralelo.
+
+        Vale como asserção independente do total: duas tentativas nº 1 na
+        mesma janela são duas execuções que se enxergaram como a primeira.
+        """
+        corpo = self._corpo("RN_r6_conc_num")
+        lotes = self._agendadas(monkeypatch, [corpo] * 3)
+        numeros = [t.numero for lote in lotes for t in lote]
+
+        assert len(numeros) == len(set(numeros)), (
+            f"numeração repetida na mesma janela: {numeros} — três execuções "
+            "concorrentes do mesmo cliente leram o mesmo contador"
+        )
+
+    def test_o_checkpoint_nao_subnotifica_o_que_foi_comprometido(self, monkeypatch):
+        """O contador gravado tem que bater com o que a política agendou.
+
+        Esta é a parte que impede qualquer auditoria posterior de perceber o
+        estouro: medido em `8786d82`, nove instruções comprometidas e
+        `retry_count: 3` no checkpoint. Quem lesse o estado depois concluiria
+        que o limite foi respeitado.
+        """
+        corpo = self._corpo("RN_r6_conc_sub")
+        lotes = self._agendadas(monkeypatch, [corpo] * 3)
+        total = sum(len(lote) for lote in lotes)
+        estado = crai_agent.get_state(
+            {"configurable": {"thread_id": "RN_r6_conc_sub"}}).values
+
+        assert estado.get("retry_count") == total, (
+            f"a política agendou {total} tentativa(s) e o checkpoint registra "
+            f"{estado.get('retry_count')}. O estado precisa refletir o que foi "
+            "comprometido, senão o estouro fica invisível para auditoria"
+        )
+
+    def test_clientes_diferentes_continuam_correndo_em_paralelo(self, monkeypatch):
+        """Contrapeso: a trava é por cliente, não uma fila global.
+
+        Serializar tudo também faria o total bater, e estaria errado — cada
+        `id_recorrencia` é uma cobrança independente com direito às 3 dela.
+        Este teste reprova uma trava global, que o teste acima aceitaria.
+        """
+        corpos = [self._corpo(f"RN_r6_conc_par_{i}") for i in range(3)]
+        lotes = self._agendadas(monkeypatch, corpos)
+        total = sum(len(lote) for lote in lotes)
+
+        assert total == 3 * MAX_TENTATIVAS_PIX, (
+            f"três clientes DISTINTOS agendaram {total} tentativas, esperado "
+            f"{3 * MAX_TENTATIVAS_PIX}. Cada id_recorrencia tem a própria "
+            "janela; uma trava global roubaria de dois deles"
         )
