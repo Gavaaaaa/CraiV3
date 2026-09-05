@@ -61,6 +61,9 @@ crai/
 │   └── state.py                     # AgentState — inclui retry_count e pix_janela_ate
 ├── churn_voluntary/                 # Churn voluntário
 │   ├── voluntary_agent.py           # Grafo LangGraph: risk -> offer -> channel -> message -> CRM
+│   │                                #   DUAS topologias: produção termina no envio,
+│   │                                #   simulação passa por track_outcome (CRAI_SIMULATE_OUTCOMES)
+│   ├── retention_log.py             # Dataset de treino: 1 linha por ciclo (SQLite, gitignored)
 │   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por perfil
 │   ├── risk_scorer.py               # risk_score + criticidade (tom) a partir de eventos Segment
 │   └── state.py
@@ -84,13 +87,15 @@ crai/
 │   ├── webhook_verification.py      # HMAC dos 3 webhooks + janela anti-replay
 │   └── tokenization.py              # Tokenização de dados sensíveis
 ├── api/
-│   └── app.py                       # FastAPI: webhooks Pix + Stripe + Segment,
+│   └── app.py                       # FastAPI: webhooks Pix + Stripe + Segment +
+│                                    #   retention-outcome (desfecho real do voluntário),
 │                                    #   blindagem de forma da borda, trava por cliente,
 │                                    #   endpoints /simulate/*
 ├── scripts/
 │   ├── train_all.py                 # Treina os 3 modelos: python -m crai.scripts.train_all
 │   └── preparar_amostra_real.py     # Amostra real -> parâmetros de calibração
 ├── tests/                           # a suíte (rode `pytest tests/ -q` para a contagem)
+│   └── conftest.py                  #   isola CRAI_RETENTION_DB: teste não escreve no dataset real
 ├── test_pipeline.py                 # Demo dos 9 cenários (rode com PYTHONIOENCODING=utf-8)
 └── requirements.txt
 ```

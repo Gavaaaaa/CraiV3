@@ -23,6 +23,12 @@ crai/data/real/
 crai/data/synthetic/
 # Pacote de modelos da demo (gerado no Sprint 4)
 crai/models_demo.tar.gz
+# Log de ciclos de retencao — e o DATASET de treino do churn voluntario, e
+# carrega dado de cliente real (mrr, uso, desfecho). Nunca versionar: o
+# formato esta documentado em churn_voluntary/README_treino.md e o arquivo se
+# regenera sozinho a cada ciclo.
+crai/data/retention_cycles.db
+crai/data/retention_cycles.db-journal
 
 # Logs de auditoria SHAP (regeneraveis)
 crai/logs/

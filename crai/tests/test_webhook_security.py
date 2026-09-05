@@ -943,6 +943,14 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
 
         from crai.churn_voluntary import voluntary_agent as va
 
+        # MODO SIMULAÇÃO. Este teste sempre dependeu do desfecho simulado — é o
+        # que o `random.random -> 0.0` abaixo força. Desde o Sprint 4 do churn
+        # voluntário esse caminho só existe com a env ligada: em produção o
+        # grafo termina no envio e `_channel_history` passa a ser escrito pelo
+        # webhook de desfecho. O invariante medido aqui (duas identidades, duas
+        # entradas) continua valendo nos dois modos; o do webhook está em
+        # `tests/test_retention_outcome.py`.
+        monkeypatch.setenv("CRAI_SIMULATE_OUTCOMES", "1")
         monkeypatch.setattr(random, "random", lambda: 0.0)
         va._channel_history.clear()
 

@@ -3,17 +3,47 @@ crai/churn_voluntary/voluntary_agent.py
 Agente de churn voluntário — LangGraph orquestra todo o fluxo, incluindo
 a escolha de canal (decisão dinâmica com memória, não árvore fixa).
 
-Fluxo:
-    assess_risk → choose_offer → choose_channel
-        → generate_message → send_offer → track_outcome → update_crm
+DOIS MODOS, e eles têm TOPOLOGIAS DE GRAFO DIFERENTES. A variável de ambiente
+`CRAI_SIMULATE_OUTCOMES` decide qual grafo é construído:
+
+    MODO PRODUÇÃO (env ausente ou "0") — o padrão
+        assess_risk → choose_offer → choose_channel
+            → generate_message → send_offer → update_crm → END
+
+        O grafo TERMINA no envio. O cliente aceita ou não aceita depois, no
+        tempo dele, e isso chega por `POST /webhooks/retention-outcome`, que
+        atualiza o bandit e fecha a linha no `retention_log`. Ao fim do grafo
+        `accepted` é None e `retained` é False: é "aguardando retorno", não
+        "recusou" — a diferença importa para o CRM e para o dataset.
+
+    MODO SIMULAÇÃO (env == "1")
+        ... send_offer → track_outcome → update_crm → END
+
+        `track_outcome` sorteia o aceite com `random()` sobre a taxa histórica
+        do bandit. Existe para a demo (`test_pipeline.py`) e para os testes
+        rodarem ponta a ponta sem webhook externo. NUNCA deve rodar em
+        produção: o bandit aprenderia com dado inventado, que é exatamente o
+        problema que o Sprint 4 veio resolver.
+
+Por que a topologia muda em vez de um `if` dentro do nó: um `track_outcome`
+que às vezes não faz nada continua sendo um nó no caminho, e o desenho do
+grafo — que é o que se lê para entender o sistema — mentiria sobre onde o
+fluxo termina.
 """
 
 import os
+import random
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
+from .retention_log import (
+    TENANT_PADRAO,
+    ciclo_aberto,
+    registrar_ciclo,
+    registrar_desfecho,
+)
 from .risk_scorer import (
     calculate_risk,
     classify_criticality,
@@ -225,11 +255,15 @@ async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
 
 
 async def track_outcome(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    """SÓ NO MODO SIMULAÇÃO. Sorteia o aceite pela taxa histórica do bandit.
+
+    Este nó não existe no grafo de produção — ver `build_voluntary_churn_graph`.
+    Em produção o desfecho é real e chega por webhook; aqui ele é inventado,
+    para a demo e os testes rodarem ponta a ponta sem depender de um sistema
+    externo. Aprender com sorteio é exatamente o defeito que o Sprint 4 veio
+    corrigir, e é por isso que o nó ficou isolado num modo declarado em vez de
+    num `if` dentro do caminho de produção.
     """
-    MVP: simula aceite com probabilidade baseada na taxa histórica do bandit.
-    Produção: aguarda webhook real de aceite/rejeição do cliente.
-    """
-    import random
     rates = _bandit.conversion_rates(state["profile"])
     prob  = rates.get(state["offer_type"], 0.3)
     accepted = random.random() < prob
@@ -242,9 +276,103 @@ async def track_outcome(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     return {**state, "accepted": accepted, "retained": accepted}
 
 
+async def _crm_do_desfecho(user_id: str, ciclo: dict, offer_type: str,
+                           accepted: bool) -> None:
+    """Atualiza o CRM com o desfecho, reusando `register_retention_cycle`.
+
+    O contexto (`risk_score`, `event`, `channel`) sai da linha do
+    `retention_log` — é o primeiro uso prático do dataset: ele guarda o que a
+    decisão sabia, e o webhook não carrega isso.
+
+    RESSALVA REGISTRADA, não corrigida: `register_retention_cycle` deriva o
+    estágio de `retained`/`offer_sent` e por isso NUNCA produz `churned`, ainda
+    que o pipeline `crai_retention` do HubSpot declare esse estágio. Uma recusa
+    entra como `offer_sent`. Mexer nisso é mudar o método do CRM, que o plano
+    desta sessão declara fora de escopo.
+
+    Falha do CRM NÃO derruba o desfecho: ele já foi contabilizado no bandit e
+    no log, e o reenvio do cliente seria deduplicado — retentar não consertaria
+    o CRM e ainda devolveria erro para um evento que foi processado.
+    """
+    estado = {
+        "user_id":    user_id,
+        "risk_score": ciclo.get("risk_score") or 0.0,
+        "event":      ciclo.get("event") or "retention_outcome",
+        "offer_type": offer_type,
+        "channel":    ciclo.get("channel") or "",
+        "offer_sent": True,
+        "retained":   accepted,
+    }
+    try:
+        crm = await _hubspot.register_retention_cycle(estado)
+        print(f"[CHURN-VOL] HubSpot atualizado — Deal {crm['hubspot_deal_id']} "
+              f"| Stage: {crm['stage']}")
+    except Exception as e:                        # noqa: BLE001
+        print(f"[CHURN-VOL] Falha ao atualizar HubSpot no desfecho "
+              f"(já contabilizado): {e}")
+
+
+async def registrar_resultado_externo(user_id: str, offer_type: str, profile: str,
+                                      accepted: bool,
+                                      tenant_id: str | None = None) -> dict:
+    """Fecha o ciclo com o desfecho REAL, vindo de `/webhooks/retention-outcome`.
+
+    É o que substitui o `track_outcome` no modo produção. Mora aqui, e não na
+    API, porque o bandit e o `_channel_history` são estado deste módulo — a
+    borda valida a forma do payload, este módulo decide o que fazer com ela.
+
+    A ORDEM IMPORTA e a deduplicação está embutida nela:
+
+      1. Lê o ciclo ABERTO no `retention_log` — é de onde saem `risk_score`,
+         `event` e `channel`, que o webhook não carrega e o HubSpot precisa.
+      2. Fecha a linha. Se `registrar_desfecho` devolver False, é reenvio ou
+         desfecho órfão: NADA é contado. Contar duas vezes o mesmo aceite
+         enviesaria o posterior do bandit para quem reenvia mais.
+      3. Só então o bandit aprende.
+
+    Devolve o contexto do ciclo para quem chama montar o estado do CRM.
+    """
+    tenant_id = tenant_id or TENANT_PADRAO
+    ciclo = ciclo_aberto(tenant_id, user_id, offer_type)
+
+    if not registrar_desfecho(tenant_id, user_id, offer_type, accepted):
+        return {"contabilizado": False, "ciclo": ciclo}
+
+    _bandit.record_outcome(profile, offer_type, accepted)
+
+    canal = (ciclo or {}).get("channel")
+    if accepted and canal:
+        _channel_history[user_id] = canal
+
+    # Rótulo em ASCII, não os emoji do `track_outcome`: a catraca do N-12
+    # (tests/test_encoding_saida.py) diz que o inventário de caracteres que o
+    # cp1252 não codifica só pode DESCER. As 2 ocorrências do `track_outcome`
+    # são dívida herdada; esta linha é nova e não entra na conta.
+    print(f"[CHURN-VOL] Desfecho real de {user_id} | {offer_type}: "
+          f"{'ACEITOU' if accepted else 'recusou'}")
+
+    await _crm_do_desfecho(user_id, ciclo or {}, offer_type, accepted)
+    return {"contabilizado": True, "ciclo": ciclo}
+
+
 async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     crm_result = await _hubspot.register_retention_cycle(state)
-    print(f"[CHURN-VOL] HubSpot: Contact {crm_result['hubspot_contact_id']} | Deal {crm_result['hubspot_deal_id']} | Stage: {crm_result['stage']}\n")
+    print(f"[CHURN-VOL] HubSpot: Contact {crm_result['hubspot_contact_id']} | Deal {crm_result['hubspot_deal_id']} | Stage: {crm_result['stage']}")
+
+    # A linha do dataset de treino. Escrita AQUI porque `update_crm` é o último
+    # nó nos DOIS modos e no caminho de risco baixo.
+    #
+    # O caminho de risco baixo também grava, com `offer_type` nulo, e isso é
+    # deliberado: são os clientes que o sistema decidiu NÃO abordar. Sem eles o
+    # dataset só teria quem passou pelo corte de 0.60, e um modelo treinado
+    # nisso aprenderia sobre a população que o próprio modelo selecionou. O
+    # viés não desaparece — não há desfecho para quem não recebeu oferta —, mas
+    # com as linhas gravadas ele é MENSURÁVEL em vez de invisível. Está
+    # documentado no README_treino.md.
+    registrar_ciclo(state)
+    if state.get("offer_type") and state.get("accepted") is None:
+        print("[CHURN-VOL] Ciclo registrado — aguardando retorno do cliente")
+    print()
     return state
 
 
@@ -259,7 +387,28 @@ def route_after_risk(state: ChurnVoluntaryState) -> str:
 
 # ── Construção do grafo ───────────────────────────────────────────────────
 
-def build_voluntary_churn_graph() -> StateGraph:
+def modo_simulacao() -> bool:
+    """`CRAI_SIMULATE_OUTCOMES == "1"` liga o sorteio de desfecho.
+
+    Lido a cada chamada, não congelado no import: `test_pipeline.py` seta a env
+    no início do próprio script e os testes precisam construir os dois grafos
+    na mesma sessão. Só `"1"` liga — qualquer outra coisa, inclusive `"true"`
+    ou vazio, é produção. Um modo que aprende com dado inventado não pode ser
+    ligado por engano de digitação.
+    """
+    return os.getenv("CRAI_SIMULATE_OUTCOMES", "").strip() == "1"
+
+
+def build_voluntary_churn_graph(simular: bool | None = None) -> StateGraph:
+    """Constrói o grafo do modo pedido (default: o que a env disser).
+
+    As duas topologias diferem em UMA aresta e um nó — e essa diferença é o
+    Sprint 4 inteiro: em produção o fluxo termina no envio e o desfecho chega
+    depois, por webhook.
+    """
+    if simular is None:
+        simular = modo_simulacao()
+
     graph = StateGraph(ChurnVoluntaryState)
 
     graph.add_node("assess_risk",      assess_risk)
@@ -267,7 +416,6 @@ def build_voluntary_churn_graph() -> StateGraph:
     graph.add_node("choose_channel",   choose_channel)
     graph.add_node("generate_message", generate_message)
     graph.add_node("send_offer",       send_offer)
-    graph.add_node("track_outcome",    track_outcome)
     graph.add_node("update_crm",       update_crm)
 
     graph.set_entry_point("assess_risk")
@@ -280,11 +428,47 @@ def build_voluntary_churn_graph() -> StateGraph:
     graph.add_edge("choose_offer",     "choose_channel")
     graph.add_edge("choose_channel",   "generate_message")
     graph.add_edge("generate_message", "send_offer")
-    graph.add_edge("send_offer",       "track_outcome")
-    graph.add_edge("track_outcome",    "update_crm")
+
+    if simular:
+        graph.add_node("track_outcome", track_outcome)
+        graph.add_edge("send_offer",    "track_outcome")
+        graph.add_edge("track_outcome", "update_crm")
+    else:
+        # PRODUÇÃO: o grafo acaba aqui. `accepted` fica None e `retained`
+        # False — "aguardando retorno", não "recusou". Quem fecha o ciclo é
+        # `POST /webhooks/retention-outcome`.
+        graph.add_edge("send_offer",    "update_crm")
+
     graph.add_edge("update_crm",       END)
 
     return graph.compile(checkpointer=MemorySaver())
 
 
-voluntary_churn_agent = build_voluntary_churn_graph()
+# Os DOIS grafos são compilados no import, e o modo é escolhido a cada chamada.
+#
+# A alternativa — compilar só o grafo da env no import — congela o modo no
+# momento em que o módulo é carregado. Isso funciona para um deploy, onde a
+# configuração não muda, e quebra para tudo o mais: `test_pipeline.py` teria de
+# setar a env antes do primeiro import de qualquer módulo `crai`, e a suíte não
+# conseguiria exercitar os dois modos na mesma sessão (o módulo é importado uma
+# vez por processo). Compilar os dois custa um objeto a mais em memória e paga
+# testabilidade. É o mesmo padrão que `limiar_de_alto_valor()` e `_assinatura()`
+# já usam: env lida na hora do uso, não no import.
+#
+# RESSALVA: cada grafo tem seu próprio `MemorySaver`, então trocar de modo com o
+# processo de pé começa um checkpoint novo para o cliente. Irrelevante em
+# produção (o modo é fixo por deploy) e declarado aqui para não ser descoberto.
+_AGENTES = {
+    True:  build_voluntary_churn_graph(simular=True),
+    False: build_voluntary_churn_graph(simular=False),
+}
+
+
+def agente_do_modo():
+    """O agente compilado do modo que o ambiente pede AGORA."""
+    return _AGENTES[modo_simulacao()]
+
+
+# Mantido para quem importa pelo nome antigo. Prefira `agente_do_modo()`: este
+# aponta para o modo que valia no import.
+voluntary_churn_agent = _AGENTES[modo_simulacao()]

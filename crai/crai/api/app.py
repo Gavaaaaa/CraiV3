@@ -29,7 +29,8 @@ from pydantic import BaseModel
 
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
-from ..churn_voluntary.voluntary_agent import voluntary_churn_agent
+from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
+from ..churn_voluntary.offer_bandit import OFFERS, PROFILES
 from ..churn_voluntary.state import ChurnVoluntaryState
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
@@ -47,6 +48,7 @@ from ..security.webhook_verification import (
     verify_stripe_signature,
     verify_segment_signature,
     verify_pix_automatico_signature,
+    verify_retention_outcome_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -553,6 +555,90 @@ async def segment_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/webhooks/retention-outcome")
+async def retention_outcome_webhook(request: Request) -> JSONResponse:
+    """O desfecho REAL de uma oferta de retenção, vindo do backend do cliente.
+
+    É a metade que faltava do Sprint 4: em produção o grafo termina no envio, e
+    é ESTE endpoint que ensina o bandit. Sem ele o aprendizado vinha de
+    `random.random()`.
+
+    SEGREDO PRÓPRIO (`RETENTION_OUTCOME_WEBHOOK_SECRET`), não o do Segment: quem
+    envia aqui é o backend do cliente, e duas origens diferentes não dividem
+    credencial. Sem o segredo no ambiente, 401 em tudo — fail closed, como os
+    outros três webhooks. Um endpoint que move o posterior do bandit é
+    exatamente o que não pode aceitar request forjado: com ele aberto, qualquer
+    um faria a CRAI acreditar que `desconto_20` converte 100%.
+
+    A FORMA DOS CAMPOS É VALIDADA CONTRA O VOCABULÁRIO, não só contra o tipo.
+    `profile` e `offer_type` viram CHAVE de dicionário dentro do bandit, e
+    `record_outcome` aceita qualquer string e persiste — foi assim que perfis
+    como `""` e `"299,90"` entraram no `bandit_state.json` real (ver o
+    saneamento no Sprint 1). O Sprint 1 limpou a leitura; recusar aqui fecha a
+    ESCRITA, que é onde o lixo nasce.
+
+    `accepted` exige `bool` de verdade. `"true"` e `1` são recusados de
+    propósito: um cliente que mandar `accepted: "false"` — string não-vazia,
+    logo `True` em Python — registraria aceite onde houve recusa, e o bandit
+    aprenderia o contrário do que aconteceu.
+    """
+    raw = await request.body()
+    if not verify_retention_outcome_signature(
+        raw,
+        request.headers.get("x-signature", ""),
+        os.getenv("RETENTION_OUTCOME_WEBHOOK_SECRET", ""),
+    ):
+        raise _reject_unsigned(request, "retention-outcome")
+
+    payload = _objeto_json_do_corpo(raw, "OUTCOME")
+
+    user_id = _campo_com_forma(payload, "user_id", (str,), "OUTCOME", obrigatorio=True)
+    if not user_id.strip():
+        raise HTTPException(status_code=422, detail={
+            "motivo": "campo_com_forma_invalida", "campo": "user_id",
+            "detalhe": "identidade vazia — sem ela o desfecho não tem dono",
+        })
+
+    offer_type = _campo_com_forma(payload, "offer_type", (str,), "OUTCOME", obrigatorio=True)
+    profile = _campo_com_forma(payload, "profile", (str,), "OUTCOME", obrigatorio=True)
+    tenant_id = _campo_com_forma(payload, "tenant_id", (str,), "OUTCOME")
+
+    for campo, valor, vocabulario in (("offer_type", offer_type, OFFERS),
+                                      ("profile", profile, PROFILES)):
+        if valor not in vocabulario:
+            logger.warning("[OUTCOME] %s=%r fora do vocabulário — 422", campo, valor)
+            raise HTTPException(status_code=422, detail={
+                "motivo": "valor_fora_do_vocabulario", "campo": campo,
+                "detalhe": f"esperado um de {vocabulario}",
+            })
+
+    accepted = payload.get("accepted")
+    if not isinstance(accepted, bool):
+        logger.warning("[OUTCOME] accepted=%r não é booleano — 422", accepted)
+        raise HTTPException(status_code=422, detail={
+            "motivo": "campo_com_forma_invalida", "campo": "accepted",
+            "detalhe": ("esperado bool; \"true\"/1 são recusados porque uma "
+                        "string não-vazia vira True e inverteria uma recusa"),
+        })
+
+    # A mesma qualificação do `/webhooks/segment` e do `/simulate/churn-risk`:
+    # o ciclo foi gravado com a identidade qualificada, e é por ela que o
+    # desfecho reencontra a linha. Desfecho vem do backend do cliente, que fala
+    # de cliente identificado — visitante anônimo não gera retorno de servidor.
+    identidade = _identidade_voluntaria("userId", user_id)
+
+    resultado = await registrar_resultado_externo(
+        identidade, offer_type, profile, accepted, tenant_id=tenant_id)
+
+    if not resultado["contabilizado"]:
+        # 200, não erro: reenvio é comportamento esperado de webhook, e um 4xx
+        # faria o cliente retentar para sempre o que já foi processado.
+        return JSONResponse({"status": "ignorado",
+                             "motivo": "reenvio_ou_ciclo_inexistente"})
+
+    return JSONResponse({"status": "contabilizado", "accepted": accepted})
+
+
 class SimulateChurnRisk(BaseModel):
     user_id: str = "usr_demo_001"
     event:   str = "Cancellation Page Viewed"   # ou "Downgrade Clicked" | "Session Started"
@@ -960,7 +1046,11 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
     # HubSpot. Ter duas formas da identidade foi exatamente o defeito que a
     # A1-r10 mediu — a desambiguação chegava a um dos três consumidores.
     config = {"configurable": {"thread_id": user_id}}
-    await voluntary_churn_agent.ainvoke(initial, config)
+    # `agente_do_modo()` e não um agente fixo: o grafo de produção termina no
+    # envio e o de simulação passa por `track_outcome`. Ver o docstring de
+    # `voluntary_agent` — são topologias diferentes, escolhidas por
+    # `CRAI_SIMULATE_OUTCOMES`.
+    await agente_do_modo().ainvoke(initial, config)
 
 
 def _build_fake_stripe_event(p: SimulatePayment) -> dict:

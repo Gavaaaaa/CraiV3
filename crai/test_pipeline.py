@@ -21,10 +21,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# A DEMO RODA EM MODO SIMULAÇÃO, e isso é uma escolha, não um descuido.
+#
+# Em produção o grafo termina no envio e o desfecho chega depois, por
+# `POST /webhooks/retention-outcome` (Sprint 4). Uma demo assim mostraria quatro
+# clientes "aguardando retorno" e nenhum resultado — não dá para demonstrar
+# retenção sem o desfecho. Com a env ligada, `track_outcome` sorteia o aceite
+# pela taxa histórica do bandit e a demo fecha o ciclo na hora.
+#
+# `setdefault` e não atribuição: quem quiser ver o comportamento de produção
+# roda `CRAI_SIMULATE_OUTCOMES=0 python test_pipeline.py` e o script respeita.
+os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
+
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
 from crai.api.app import _registrar_cartao_desativado
-from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
+from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
 
 
@@ -96,7 +108,7 @@ async def run_voluntary_scenario(name, user_id, event, props):
         "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,
     }
     config = {"configurable": {"thread_id": user_id}}
-    return await voluntary_churn_agent.ainvoke(initial, config)
+    return await agente_do_modo().ainvoke(initial, config)
 
 
 async def main():
@@ -183,6 +195,13 @@ async def main():
     print(f"   Sinalizados como críticos    : {criticos}/{len(voluntary_results)} (tom ajustado)")
     print(f"   Canais escolhidos            : {distribuicao}")
     print(f"   Escalações para humano        : 0/{len(voluntary_results)} (invariante verificado)")
+
+    # O dataset de treino, medido em vez de prometido. Em produção estes ciclos
+    # ficariam "aguardando" até o webhook de desfecho; aqui a demo os fecha.
+    from crai.churn_voluntary.retention_log import estatisticas
+    st = estatisticas()
+    print(f"   Ciclos no dataset de treino  : {st['total']} "
+          f"({st['com_desfecho']} com desfecho, {st['aguardando']} aguardando)")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 
