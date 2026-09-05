@@ -32,8 +32,16 @@ integração de verdade entrar, ela entra no `whatsapp_sender.py` e o dunning pa
 chamá-lo.
 
 **A descrição do projeto confirma o WhatsApp como canal dos dois churns:**
-`README.md:442` — `| Bot WhatsApp | 0,05 | Dunning + ofertas |`. "Ofertas" é o bandit do
+`README.md:442` na RAIZ do repositório (`D:/PTI/README.md`, não `crai/README.md` —
+ver W-5) — `| Bot WhatsApp | 0,05 | Dunning + ofertas |`. "Ofertas" é o bandit do
 churn voluntário.
+
+**Atualização (Sprint 3, `sprint(cv3)`):** o W-2 e a ausência do canal foram
+FECHADOS para o lado voluntário — `integrations/whatsapp_sender.py` nasceu com
+`send_whatsapp`, o `choose_channel` roteia para ele por criticidade e o `props`
+passou a carregar `phone`. O envio segue SIMULADO por decisão declarada. O W-1,
+o W-3, o W-4 e o lado involuntário do W-2 continuam abertos, como registrado
+abaixo.
 
 ---
 
@@ -45,6 +53,7 @@ churn voluntário.
 | **W-2** | 🟠 | Não existe destinatário em lugar nenhum: nenhum estado carrega telefone |
 | **W-3** | 🟡 | `ligacao_cs` (R$ 15,00) sobrevive na tabela de custos e no README — o canal humano, contra o invariante de autonomia. Nunca é selecionado |
 | **W-4** | 🟡 | Os dois churns chamam modelos Claude diferentes |
+| **W-5** | 🟡 | Dois README rastreados, e o da RAIZ está parado na Fase 3 |
 
 ---
 
@@ -110,3 +119,21 @@ mexeria em `ml/` e num teste do involuntário — por isso fica registrado, não
 O voluntário está preso a um modelo antigo por id datado. O Sprint 2 proíbe explicitamente
 mudar o modelo ("Não mudar o modelo nem max_tokens da chamada existente"), então fica
 registrado para uma frente separada.
+
+### W-5 🟡 — Dois README rastreados, e quem abre o repositório lê o desatualizado
+
+O repositório tem **dois** README versionados:
+
+- `README.md` na raiz (31,8 KB) — último commit `a2ed692` ("feat(fase-03)"). É onde
+  vivem a tabela de custos por canal (`:439-445`) e a árvore de módulos `:272`.
+- `crai/README.md` (19,8 KB) — último commit `d5d77ad` (GATE GA1). É o que a suíte
+  verifica (`tests/test_metricas_declaradas.py` lê `parent.parent / "README.md"`, que
+  resolve para este) e o que os sprints vêm mantendo.
+
+Quem clona e abre a raiz — a banca, entre outros — lê o da Fase 3, que não conhece
+nada dos sprints A1 nem destes. As métricas declaradas, a árvore de módulos e a lista
+de dívidas divergem entre os dois, e só um deles tem teste de honestidade.
+
+Não é o mesmo defeito do canal, então fica registrado em vez de corrigido. A decisão
+(consolidar num só, ou o da raiz virar um ponteiro curto para `crai/README.md`) é de
+produto, não de implementação.

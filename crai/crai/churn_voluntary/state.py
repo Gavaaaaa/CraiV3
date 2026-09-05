@@ -21,7 +21,7 @@ class ChurnVoluntaryState(TypedDict):
     offer_type: Optional[str]
 
     # Canal (LangGraph — roteamento com memória de histórico)
-    channel:       Optional[str]   # popup | email | sms
+    channel:       Optional[str]   # popup | email | whatsapp
     on_site_now:   bool
     prior_channel_success: Optional[str]
 

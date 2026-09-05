@@ -62,7 +62,7 @@ crai/
 ├── churn_voluntary/                 # Churn voluntário
 │   ├── voluntary_agent.py           # Grafo LangGraph: risk -> offer -> channel -> message -> CRM
 │   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por perfil
-│   ├── risk_scorer.py               # risk_score a partir de eventos Segment
+│   ├── risk_scorer.py               # risk_score + criticidade (tom) a partir de eventos Segment
 │   └── state.py
 ├── ml/
 │   ├── failure_classifier.py        # XGBoost + Random Forest — train() + predict() + SHAP
@@ -77,7 +77,9 @@ crai/
 │       └── smart_backoff.py         #   backoff exponencial + jitter (política de cartão)
 ├── integrations/
 │   ├── payment_gateway.py           # Adapter de Pix Automático: normaliza e recusa payload torto
-│   └── hubspot_crm.py               # CRM — 2 pipelines: recovery + retention
+│   ├── hubspot_crm.py               # CRM — 2 pipelines: recovery + retention
+│   └── whatsapp_sender.py           # Canal WhatsApp do voluntário — SIMULADO; o ponto de
+│                                    #   integração real (BSP / Cloud API) está no módulo
 ├── security/
 │   ├── webhook_verification.py      # HMAC dos 3 webhooks + janela anti-replay
 │   └── tokenization.py              # Tokenização de dados sensíveis

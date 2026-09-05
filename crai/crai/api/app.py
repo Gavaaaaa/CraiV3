@@ -560,6 +560,11 @@ class SimulateChurnRisk(BaseModel):
     features_used_30d: int = 2
     on_site_now: bool = True
     billing_profile: str = "CLT"
+    # Sem telefone o canal WhatsApp fica inalcançável pela demo, e o endpoint
+    # deixaria de exercitar o código que a demo mostra — é o N-7 outra vez.
+    # `Optional[str]` já barra lista e dict no Pydantic; a forma do número quem
+    # decide é `destino_utilizavel`, no sender.
+    phone: Optional[str] = None
 
 
 @app.post("/simulate/churn-risk")
@@ -576,6 +581,8 @@ async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
         "on_site_now":       payload.on_site_now,
         "billing_profile":   payload.billing_profile,
     }
+    if payload.phone is not None:
+        props["phone"] = payload.phone
     # Mesma qualificação do webhook. Sem isto, `/simulate/churn-risk` e o
     # webhook do Segment produziriam identidades diferentes para o mesmo
     # cliente, e o endpoint da demo deixaria de exercitar o código que a demo

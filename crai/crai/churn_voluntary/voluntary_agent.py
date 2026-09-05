@@ -22,6 +22,7 @@ from .risk_scorer import (
 )
 from .offer_bandit import OfferBandit, is_critical_risk
 from ..integrations.hubspot_crm import HubSpotCRM
+from ..integrations.whatsapp_sender import destino_utilizavel, send_whatsapp
 
 claude   = AsyncAnthropic()
 _bandit  = OfferBandit()
@@ -72,19 +73,41 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     Roteamento de canal via LangGraph — usa memória de histórico do
     cliente em vez de regra fixa. Se o cliente já converteu em um canal
     antes, prioriza esse canal.
+
+    Ordem de decisão, e por que ela é esta:
+
+      1. WHATSAPP, quando há número utilizável E a criticidade é "critico" ou
+         "alto". Vem ANTES do histórico de propósito: o histórico diz por onde
+         o cliente já converteu, mas quem está prestes a sair (ou paga muito)
+         recebe o canal mais pessoal que temos, e não o canal que funcionou
+         quando ele estava tranquilo. É uma escolha de produto, não uma
+         otimização — e está travada por teste para ficar visível se mudar.
+      2. HISTÓRICO, quando o canal lembrado ainda é entregável. Um histórico
+         "whatsapp" sem telefone no evento atual é memória de um canal que não
+         existe agora: cai para o resto da cadeia em vez de rotear para o vazio.
+      3. POPUP, se o cliente está no site agora — a intervenção mais barata e
+         imediata.
+      4. E-MAIL, o fallback.
+
+    O ramo `risk_score >= 0.90 → email` que existia aqui foi removido: ele e o
+    `else` devolviam os dois `"email"`, então a condição nunca decidiu nada. O
+    caso que ele queria cobrir — risco alto fora do site — agora é o item 1.
     """
     user_id = state["user_id"]
     on_site = state["props"].get("on_site_now", state.get("on_site_now", False))
+    criticality = state.get("criticality", "padrao")
+    destino = destino_utilizavel(state["props"].get("phone"))
 
     prior = _channel_history.get(user_id)
 
-    if prior:
+    if destino and criticality in ("critico", "alto"):
+        channel = "whatsapp"
+        print(f"[CHURN-VOL] Canal por criticidade ({criticality}): whatsapp")
+    elif prior and (prior != "whatsapp" or destino):
         channel = prior
         print(f"[CHURN-VOL] Canal por histórico: {channel} (converteu antes)")
     elif on_site:
         channel = "popup"
-    elif state["risk_score"] >= 0.90:
-        channel = "email"   # alto risco dispara mesmo fora do site
     else:
         channel = "email"
 
@@ -178,6 +201,25 @@ async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
 
 
 async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    """WhatsApp sai pelo `whatsapp_sender`; popup e e-mail seguem simulados.
+
+    `tenant_id` já é repassado, ainda que hoje seja sempre `None`: o Sprint 5
+    coloca o campo no estado, e o sender é o consumidor final dele. Ligar o fio
+    agora custa uma linha e evita que o Sprint 5 precise voltar aqui.
+    """
+    if state["channel"] == "whatsapp":
+        resultado = await send_whatsapp(
+            state["props"].get("phone"), state["message"],
+            tenant_id=state.get("tenant_id"),
+        )
+        if not resultado["sent"]:
+            # Não derruba o ciclo: a oferta foi decidida e o CRM precisa saber
+            # que ela existiu. O que falhou foi a entrega, e isso é o que o log
+            # diz — em vez de marcar `offer_sent` por um envio que não houve.
+            print(f"[CHURN-VOL] Falha na entrega via WHATSAPP "
+                  f"({resultado['motivo']}) — oferta não enviada")
+        return {**state, "offer_sent": resultado["sent"]}
+
     print(f"[CHURN-VOL] Enviando via {state['channel'].upper()}: {state['message'][:90]}")
     return {**state, "offer_sent": True}
 

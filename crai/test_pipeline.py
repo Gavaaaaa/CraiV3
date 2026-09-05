@@ -132,8 +132,10 @@ async def main():
          {"on_site_now": True, "billing_profile": "PJ"}),
         ("Inatividade Prolongada",      "usr_diego_013",  "Session Started",
          {"days_since_last": 18, "features_used_30d": 1, "on_site_now": False, "billing_profile": "freelancer"}),
-        ("Risco Crítico (>=0.90)",      "usr_lara_014",   "Cancellation Page Viewed",
-         {"on_site_now": False, "billing_profile": "PJ"}),
+        # Único cenário com telefone: é o que exercita o canal WhatsApp do
+        # Sprint 3. Os outros três cobrem popup e e-mail.
+        ("Risco Crítico (>=0.90) — WhatsApp", "usr_lara_014", "Cancellation Page Viewed",
+         {"on_site_now": False, "billing_profile": "PJ", "phone": "+55 11 91234-5678"}),
     ]
     voluntary_results = []
     for name, uid, event, props in voluntary_scenarios:
@@ -173,7 +175,13 @@ async def main():
     print(f"\n📈 Churn Voluntário:")
     print(f"   Sinais de risco processados : {len(voluntary_results)}")
     print(f"   Clientes retidos             : {retained}/{len(voluntary_results)}")
+    canais = {}
+    for r in voluntary_results:
+        if r.get("channel"):
+            canais[r["channel"]] = canais.get(r["channel"], 0) + 1
+    distribuicao = ", ".join(f"{c}: {n}" for c, n in sorted(canais.items()))
     print(f"   Sinalizados como críticos    : {criticos}/{len(voluntary_results)} (tom ajustado)")
+    print(f"   Canais escolhidos            : {distribuicao}")
     print(f"   Escalações para humano        : 0/{len(voluntary_results)} (invariante verificado)")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
