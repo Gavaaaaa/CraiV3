@@ -616,3 +616,217 @@ class TestA1R7AGuardaNaoPodeSerODefeito:
 
         assert r.status_code == 422, r.text
         assert r.json()["detail"]["motivo"] == MOTIVO_SEM_IDENTIFICACAO
+
+class TestA1R8ACorrecaoTemQueAlcancarTodasAsRotas:
+    """A rodada 7 consertou o aninhamento em dois webhooks, e havia quatro portas.
+
+    O `except RecursionError` foi posto no portão comum `_objeto_json_do_corpo`,
+    que Stripe e Segment usam. `/webhooks/pix-automatico` — a única rota do
+    pipeline ATIVO — tinha um `json.loads` próprio, cópia do mesmo código sem
+    aquele `except`. E os três `/simulate/*` estouravam num terceiro lugar: o
+    handler de validação, que ecoa a estrutura recusada e recursa dentro do
+    `jsonable_encoder`.
+
+    Medido em `deb23be`:
+
+        /webhooks/pix-automatico, 5000 níveis .......... 500
+        /simulate/churn-risk,    2000 níveis em campo
+                                 recusado pelo Pydantic  500
+        /simulate/pix-falhado,   idem ................... 500
+        /simulate/payment-failed, idem .................. 500
+
+    É a terceira rodada seguida em que a mesma classe é fechada num lugar e
+    deixada aberta em outro (r6: Segment sim, Stripe não; r7: guarda de inteiro
+    só no Segment; r8: aninhamento só em dois dos quatro caminhos de parse).
+    Por isso o último teste desta classe varre TODAS as rotas de uma vez, em
+    vez de uma por uma: o defeito não é o payload, é o inventário de portas.
+    """
+
+    NIVEIS = (900, 2000, 5000, 20000)
+
+    @pytest.fixture
+    def cliente_real(self, monkeypatch):
+        monkeypatch.setenv("SEGMENT_WEBHOOK_SECRET", SEGMENT_SECRET)
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", STRIPE_SECRET)
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "pix_r8")
+        monkeypatch.setenv("ENV", "demo")
+        with TestClient(app_module.app, raise_server_exceptions=False) as c:
+            yield c
+
+    @staticmethod
+    def _aninhado(niveis: int) -> str:
+        """Montado como TEXTO: construir em Python já estouraria o teste."""
+        return '{"p":' * niveis + "{}" + "}" * niveis
+
+    @staticmethod
+    def _h_pix(corpo: bytes) -> dict:
+        ts = int(time.time())
+        mac = hmac.new(b"pix_r8", f"{ts}.".encode() + corpo,
+                       hashlib.sha256).hexdigest()
+        return {"x-pix-signature": f"t={ts},v1={mac}",
+                "content-type": "application/json"}
+
+    @pytest.mark.parametrize("niveis", NIVEIS)
+    def test_pix_com_corpo_aninhado_nao_da_5xx(self, cliente_real, niveis):
+        """A rota do pipeline ativo tinha a cópia do parse SEM a correção."""
+        corpo = ('{"event":"automatic_pix.charge_failed","e2e_id":"E_r8",'
+                 '"valor":299.90,"id_recorrencia":"RN_r8","extra":'
+                 + self._aninhado(niveis) + "}").encode()
+        r = cliente_real.post("/webhooks/pix-automatico", content=corpo,
+                              headers=self._h_pix(corpo))
+
+        assert r.status_code < 500, (
+            f"{niveis} níveis num corpo ASSINADO de Pix devolveram "
+            f"{r.status_code}. Esta é a única rota do pipeline ativo, e tinha "
+            "um `json.loads` próprio — a correção do portão comum não chegava "
+            "aqui"
+        )
+
+    @pytest.mark.parametrize("rota,base,campo", [
+        ("/simulate/churn-risk", '"user_id":"u","event":"Session Started"',
+         "days_since_last"),
+        ("/simulate/pix-falhado", '"id_recorrencia":"R1"', "valor"),
+        ("/simulate/payment-failed", '"customer_id":"c"', "amount"),
+    ])
+    @pytest.mark.parametrize("niveis", [900, 2000])
+    def test_simulate_com_campo_recusado_e_aninhado_nao_da_5xx(
+            self, cliente_real, rota, base, campo, niveis):
+        """O aninhamento precisa estar no campo que o Pydantic RECUSA.
+
+        É isso que faz o valor entrar no eco do erro: o handler que existe para
+        impedir 500 recursava sobre a estrutura recusada e produzia o 500.
+        """
+        corpo = ("{" + base + f',"{campo}":' + self._aninhado(niveis)
+                 + "}").encode()
+        r = cliente_real.post(rota, content=corpo,
+                              headers={"content-type": "application/json"})
+
+        assert r.status_code < 500, (
+            f"{rota} com {niveis} níveis em `{campo}` devolveu "
+            f"{r.status_code}. O corpo foi corretamente recusado pelo Pydantic "
+            "e o 500 nasceu no handler que deveria transformar essa recusa em "
+            "422"
+        )
+
+    def test_nenhuma_rota_da_5xx_com_corpo_aninhado(self, cliente_real):
+        """O inventário de portas, varrido de uma vez.
+
+        Os testes acima cobrem os caminhos conhecidos. Este existe para o
+        caminho que ninguém lembrou: se amanhã nascer uma quinta rota com o
+        seu próprio parse, ela reprova aqui sem que alguém precise se lembrar
+        de acrescentar um teste.
+        """
+        def h_segment(c):
+            return {"x-signature": segment_header(c),
+                    "content-type": "application/json"}
+
+        def h_stripe(c):
+            return {"stripe-signature": stripe_header(c),
+                    "content-type": "application/json"}
+
+        simples = {"content-type": "application/json"}
+        casos = []
+        for n in self.NIVEIS:
+            aninhado = self._aninhado(n)
+            casos += [
+                ("/webhooks/pix-automatico",
+                 ('{"event":"automatic_pix.charge_failed","e2e_id":"E","valor":'
+                  '299.90,"id_recorrencia":"RN","x":' + aninhado + "}").encode(),
+                 self._h_pix),
+                ("/webhooks/segment",
+                 ('{"userId":"u","event":"Session Started","properties":'
+                  + aninhado + "}").encode(), h_segment),
+                ("/webhooks/stripe",
+                 ('{"type":"invoice.payment_failed","data":'
+                  + aninhado + "}").encode(), h_stripe),
+                ("/simulate/churn-risk",
+                 ('{"user_id":"u","event":"Session Started","days_since_last":'
+                  + aninhado + "}").encode(), lambda _: simples),
+                ("/simulate/pix-falhado",
+                 ('{"id_recorrencia":"R1","valor":' + aninhado + "}").encode(),
+                 lambda _: simples),
+                ("/simulate/payment-failed",
+                 ('{"customer_id":"c","amount":' + aninhado + "}").encode(),
+                 lambda _: simples),
+            ]
+
+        quintos = []
+        for rota, corpo, assinar in casos:
+            r = cliente_real.post(rota, content=corpo, headers=assinar(corpo))
+            if r.status_code >= 500:
+                quintos.append((rota, len(corpo), r.status_code))
+
+        assert not quintos, (
+            f"{len(quintos)} de {len(casos)} corpos aninhados derrubaram a API: "
+            f"{quintos}"
+        )
+
+
+class TestA1R8IdentidadeDoSegmentNaoColide:
+    """`userId` e `anonymousId` são espaços de nome diferentes.
+
+    Os dois ids são atribuídos por sistemas diferentes — o backend do cliente e
+    o SDK do navegador — e nada garante que não coincidam. Ao aceitar
+    `anonymousId` como identidade (correção da r7), o valor passou a entrar no
+    `thread_id` sem prefixo: um visitante anônimo cujo id calhasse de ser igual
+    ao `userId` de um cliente identificado herdava o checkpoint dele.
+
+    Medido em `deb23be`, dois eventos com o mesmo id em campos diferentes:
+
+        userId='colisao_r8'      -> perfil=CLT evento='Cancellation Page Viewed'
+        anonymousId='colisao_r8' -> perfil=PJ  evento='Session Started'
+        MESMO checkpoint: o segundo SOBRESCREVEU o estado do primeiro
+
+    É o P0-6 por outra porta: o `thread_id` precisa ser único por cliente, não
+    apenas não-vazio.
+    """
+
+    @pytest.fixture
+    def cliente_real(self, monkeypatch):
+        monkeypatch.setenv("SEGMENT_WEBHOOK_SECRET", SEGMENT_SECRET)
+        with TestClient(app_module.app, raise_server_exceptions=False) as c:
+            yield c
+
+    @staticmethod
+    def _enviar(cliente, campo, valor, evento, perfil):
+        corpo = json.dumps({
+            campo: valor, "event": evento,
+            "properties": {"on_site_now": True, "billing_profile": perfil},
+        }).encode()
+        r = cliente.post("/webhooks/segment", content=corpo,
+                         headers={"x-signature": segment_header(corpo),
+                                  "content-type": "application/json"})
+        assert r.status_code == 200, r.text
+
+    def test_id_anonimo_nao_herda_o_checkpoint_do_identificado(self, cliente_real):
+        from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
+
+        colisao = "colisao_r8_teste"
+        self._enviar(cliente_real, "userId", colisao,
+                     "Cancellation Page Viewed", "CLT")
+        self._enviar(cliente_real, "anonymousId", colisao,
+                     "Session Started", "PJ")
+
+        identificado = voluntary_churn_agent.get_state(
+            {"configurable": {"thread_id": colisao}}).values
+
+        assert identificado.get("event") == "Cancellation Page Viewed", (
+            "o evento anônimo sobrescreveu o checkpoint do cliente "
+            f"identificado: {identificado.get('event')!r}. Os dois ids vêm de "
+            "sistemas diferentes e podem coincidir — sem prefixo, coincidir "
+            "significa dividir o mesmo estado"
+        )
+
+    def test_o_evento_anonimo_tem_checkpoint_proprio(self, cliente_real):
+        """A outra metade: isolar não pode virar descartar."""
+        from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
+
+        anonimo = "so_anonimo_r8"
+        self._enviar(cliente_real, "anonymousId", anonimo,
+                     "Cancellation Page Viewed", "PJ")
+
+        estado = voluntary_churn_agent.get_state(
+            {"configurable": {"thread_id": f"anon:{anonimo}"}}).values
+        assert estado.get("event") == "Cancellation Page Viewed", (
+            f"o evento anônimo não gravou estado em `anon:{anonimo}`: {estado}"
+        )

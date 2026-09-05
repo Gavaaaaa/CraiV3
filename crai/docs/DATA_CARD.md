@@ -156,24 +156,54 @@ exponencial + uniforme escrita à mão em `synthetic_data.py`. Está marcado com
 
 ## 6. Protocolo 300 reais → 15.000 sintéticos
 
+> ⚠️ **ESTE PROTOCOLO É O PLANO DO SPRINT 3, E O SPRINT 3 AINDA NÃO RODOU.**
+>
+> Correção da auditoria A1-r8: os passos [2] e [4] abaixo estavam escritos no
+> presente, com selos `✅ CALIBRADO`, como se descrevessem o estado atual do
+> código. Não descrevem. Medido em `deb23be`:
+>
+> | O que o texto afirmava | O que existe |
+> |---|---|
+> | gerador calibrado por MLE | `synthetic_data.py` ainda usa `rng.lognormal(mean=5.8, sigma=0.7)` — o palpite que a seção 5 diz ter sido substituído |
+> | `PARAMS` alimentando o gerador | o símbolo não existe no módulo |
+> | `crai/models/calibracao.json` | não existe |
+> | `data/synthetic/treino_15000.parquet` | não existe |
+> | `tests/test_synthetic_fidelity.py` (gate G3) | não existe |
+> | `python -m crai.scripts.gerar_treino` | o script não existe |
+> | `python -m crai.scripts.calibrar_parametros` | o script não existe |
+>
+> O que EXISTE hoje: `crai/scripts/preparar_amostra_real.py`, os números da
+> amostra real (seção 4, conferidos), e este documento. A calibração em si é a
+> tarefa do Sprint 3, que está **parado pelo gate GA1** — ver `sprints.md`.
+>
+> Consequência prática: os modelos em `crai/models/` foram treinados pelo
+> gerador NÃO calibrado, e é daí que vem a AUC 0,7029 registrada na `§4.6` do
+> README. Nenhum número desta seção 6 pode ser apresentado à banca como
+> medido — eles são a meta, não o resultado.
+
+
 ```
 [1] AMOSTRA     300 linhas da Fonte A, estratificadas por payment_type × quartil
                 de valor, alocação proporcional, seed 42.
                 → data/real/amostra_300.csv  (SHA-256 acima)
 
-[2] CALIBRAÇÃO  ajustada sobre as 300 → crai/models/calibracao.json
-                  valor            → lognormal por MLE          ✅ CALIBRADO
-                  hora/dow/dom     → histograma empírico        ✅ CALIBRADO
-                  mix meio pgto    → frequência observada       ✅ CALIBRADO
-                  taxa-base falha  → série SGS 21084            ✅ CALIBRADO
-                  tenure           → sem fonte                  ❌ NÃO CALIBRADO
-                  p base = 0.5     → sem fonte pública          ❌ NÃO CALIBRADO
+[2] CALIBRAÇÃO  a ajustar sobre as 300 → crai/models/calibracao.json
+                  valor            → lognormal por MLE          ⬜ PLANEJADO
+                  hora/dow/dom     → histograma empírico        ⬜ PLANEJADO
+                  mix meio pgto    → frequência observada       ⬜ PLANEJADO
+                  taxa-base falha  → série SGS 21084            ⬜ PLANEJADO
+                  tenure           → sem fonte                  ❌ NÃO CALIBRÁVEL
+                  p base = 0.5     → sem fonte pública          ❌ NÃO CALIBRÁVEL
+
+                  ⬜ = a fonte foi levantada e o número existe (seção 4), mas
+                       o gerador ainda NÃO o usa.
+                  ❌ = não há fonte pública; fica declarado como limitação.
 
 [3] DEPENDÊNCIAS preservar a matriz de Spearman das 300 por amostragem
                  condicional por estrato. NÃO usar cópula gaussiana.
 
 [4] EXPANSÃO    generate_dataset(n_samples=15000, seed=42)
-                → data/synthetic/treino_15000.parquet
+                → data/synthetic/treino_15000.parquet   ⬜ NÃO GERADO
 
 [5] RÓTULO      _calculate_recovery_probability(), coeficientes documentados um
                 a um na seção 7, com ruído N(0, 0.05) preservado.
@@ -234,8 +264,8 @@ sabem, sem ruído, o modelo decora a regra. O gate **G3 mede as duas falhas**
 | `data/real/amostra_300.csv` | ❌ (CC BY-NC-SA) | `python -m crai.scripts.preparar_amostra_real` |
 | `data/real/bacen_sgs_*.json` | ❌ | idem |
 | `data/real/PROVENIENCIA.json` | ❌ | idem |
-| `crai/models/calibracao.json` | ✅ **exceção no .gitignore** | `python -m crai.scripts.calibrar` |
-| `data/synthetic/treino_15000.parquet` | ❌ | `python -m crai.scripts.gerar_treino` |
+| `crai/models/calibracao.json` | ✅ **exceção no .gitignore** | `python -m crai.scripts.calibrar` ⬜ *script do Sprint 3, ainda não escrito* |
+| `data/synthetic/treino_15000.parquet` | ❌ | `python -m crai.scripts.gerar_treino` ⬜ *script do Sprint 3, ainda não escrito* |
 | `crai/models/*` (modelos) | ❌ | `python -m crai.scripts.train_all` + `models_demo.tar.gz` |
 
 `calibracao.json` é a única exceção porque é um punhado de números medidos, não

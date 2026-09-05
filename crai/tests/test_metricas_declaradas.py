@@ -19,6 +19,14 @@ de um artefato que o `.gitignore` garante não estar lá.
 Não é um gate de qualidade do modelo (isso é o G3/G4, no `sprints.md`). É um
 gate de **honestidade da documentação**, que é o que este projeto entrega para
 uma banca.
+
+**O que aqui é prova de regressão e o que é catraca** (cobrança da A1-r8):
+apenas `test_a_auc_declarada_e_a_auc_medida` reprova no commit anterior
+(`dd9b16a`), com `assert 0.7029 in {0.6797, 0.7, 0.92}`. Os outros quatro
+passam nos dois lados — são **catracas declaradas**: descrevem invariantes que
+já valiam e que a correção não pode ter quebrado, e existem para travar o
+estado, não para provar a correção. Cada um repete essa declaração na própria
+docstring, para que ninguém precise voltar aqui para saber.
 """
 
 import json
@@ -68,7 +76,11 @@ class TestOReadmeNaoMenteSobreOsModelos:
         )
 
     def test_a_auc_medida_esta_dentro_do_gate(self):
-        """Se sair da faixa, o README tem que dizer isso — e o teste, também."""
+        """CATRACA — já passava em `dd9b16a`, e é para continuar passando.
+
+        Se a AUC sair da faixa, o README tem que dizer isso, e este teste
+        reprova antes de alguém esquecer de dizer.
+        """
         auc = _metricas()["auc"]
         assert PISO_AUC <= auc <= TETO_AUC, (
             f"AUC {auc} fora da faixa [{PISO_AUC}; {TETO_AUC}] dos gates G3/G4. "
@@ -82,6 +94,10 @@ class TestOReadmeNaoMenteSobreOsModelos:
 
         O README afirmava que o arquivo em disco era anterior a esse commit.
         Este teste é o que torna a afirmação verificável em vez de opinável.
+
+        CATRACA: passa em `dd9b16a` também — lá o arquivo em disco JÁ tinha o
+        schema novo; o que estava errado era a frase do README, e é o teste
+        acima que pega isso. Este trava o schema para a frente.
         """
         m = _metricas()
         for chave in ("metricas_por_limiar", "recall_operacional",
@@ -93,7 +109,12 @@ class TestOReadmeNaoMenteSobreOsModelos:
             )
 
     def test_o_limiar_em_uso_e_o_que_o_codigo_aplica(self):
-        """A tabela por limiar tem que marcar como `em_uso` o limiar real."""
+        """CATRACA — a tabela tem que marcar `em_uso` o limiar que o código usa.
+
+        Passa nos dois lados. Existe porque um retreino que mude
+        `LIMIAR_CLASSIFICACAO` sem regravar a tabela produz um relatório que
+        descreve um classificador diferente do que roda.
+        """
         from crai.ml.failure_classifier import LIMIAR_CLASSIFICACAO
 
         m = _metricas()
@@ -116,6 +137,9 @@ class TestOReadmeNaoMenteSobreOsModelos:
         Não é redundante com o teste de AUC: a AUC não depende do limiar, e é
         justamente o limiar que decide quantos clientes recuperáveis o
         pipeline deixa passar.
+
+        CATRACA: passa nos dois lados. Trava a justificativa documentada da
+        escolha do limiar contra um retreino futuro que a invalide em silêncio.
         """
         m = _metricas()
         assert m["recall_recovered"] >= 0.90, (

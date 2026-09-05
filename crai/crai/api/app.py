@@ -93,10 +93,23 @@ async def _erro_de_validacao_nunca_vira_500(request: Request, exc: RequestValida
     Sanear o eco resolve a classe inteira, não só estes três campos: vale para
     qualquer rota, atual ou futura, sem que cada uma precise lembrar do caso.
     """
-    return JSONResponse(
-        status_code=422,
-        content={"detail": _json_representavel(jsonable_encoder(exc.errors()))},
-    )
+    try:
+        detalhe = _json_representavel(jsonable_encoder(exc.errors()))
+    except RecursionError:
+        # O eco carrega a ESTRUTURA recusada, não só o nome do campo. Um valor
+        # profundamente aninhado num campo que o Pydantic rejeita faz o próprio
+        # `jsonable_encoder` estourar a pilha — dentro do handler que existe
+        # para impedir 500. Medido: ~2000 níveis em `days_since_last`, `valor`
+        # ou `amount` devolviam 500 nos três `/simulate/*`.
+        logger.warning("[VALIDACAO] Corpo recusado é aninhado demais para ser "
+                       "ecoado — 422 sem o valor ofensor")
+        detalhe = [{
+            "type": "payload_aninhado_demais",
+            "msg": ("o corpo foi recusado e é aninhado demais para ser "
+                    "devolvido no erro"),
+        }]
+
+    return JSONResponse(status_code=422, content={"detail": detalhe})
 
 # Ambientes onde os endpoints /simulate/* ficam expostos. O default é
 # "production" (fail closed): esquecer de definir ENV nunca deve deixar um
@@ -282,19 +295,13 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     ):
         raise _reject_unsigned(request, "pix_automatico")
 
-    try:
-        # parse_constant fecha a porta para os literais `Infinity`, `-Infinity`
-        # e `NaN`, que o JSON do Python aceita por padrão mas o JSON padrão não
-        # tem. Um `inf` atravessando o parser reproduzia o P0-1 três nós adiante
-        # — o sklearn levanta ValueError e o FastAPI devolve 500.
-        corpo = json.loads(raw, parse_constant=_rejeitar_constante_json)
-    except json.JSONDecodeError as e:
-        logger.warning("[PIX] Corpo do webhook não é JSON válido (%s) — 400", e)
-        raise HTTPException(status_code=400, detail="Corpo do webhook não é JSON válido")
-    except ValueError as e:
-        logger.warning("[PIX] Corpo do webhook contém constante não numérica (%s) — 400", e)
-        raise HTTPException(status_code=400,
-                            detail="Corpo do webhook contém Infinity/NaN, que não são JSON válido")
+    # Mesmo portão dos outros dois webhooks. Este era o `json.loads` próprio
+    # desta rota, com o mesmo `parse_constant` mas SEM o `except RecursionError`
+    # que a rodada 7 acrescentou ao portão comum — então a correção de lá não
+    # alcançava a única rota do pipeline ativo, e um corpo assinado com ~5000
+    # níveis de aninhamento devolvia 500 aqui. Duas cópias da mesma regra
+    # divergiram no dia em que uma delas foi corrigida; agora há uma só.
+    corpo = _objeto_json_do_corpo(raw, "PIX")
 
     try:
         evento = await _pix_adapter.parse_pix_event(corpo)
@@ -498,8 +505,17 @@ async def segment_webhook(request: Request) -> JSONResponse:
     # aceitar é evento SEM nenhuma identidade: o `thread_id` do checkpoint sai
     # daqui, e sem ele clientes distintos dividiriam o mesmo estado (é o mesmo
     # raciocínio do P0-6, no webhook de Pix).
-    user_id = (_campo_com_forma(payload, "userId", (str,), "SEGMENT")
-               or _campo_com_forma(payload, "anonymousId", (str,), "SEGMENT"))
+    # As duas identidades vivem em ESPAÇOS DE NOME SEPARADOS. `userId` e
+    # `anonymousId` são atribuídos por sistemas diferentes — o seu backend e o
+    # SDK do navegador — e nada impede que coincidam. Sem o prefixo, um
+    # visitante anônimo cujo id calhasse de ser igual ao `userId` de um cliente
+    # identificado herdava o checkpoint dele: medido, o segundo evento
+    # SOBRESCREVEU o estado do primeiro (perfil CLT virou PJ). É o P0-6 por
+    # outra porta, e a defesa é a mesma — o `thread_id` precisa ser único por
+    # cliente, não só não-vazio.
+    identificado = _campo_com_forma(payload, "userId", (str,), "SEGMENT")
+    anonimo = _campo_com_forma(payload, "anonymousId", (str,), "SEGMENT")
+    user_id = identificado or (f"anon:{anonimo}" if anonimo else None)
     if not user_id:
         logger.warning("[SEGMENT] Evento sem userId e sem anonymousId — 422")
         raise HTTPException(status_code=422, detail={

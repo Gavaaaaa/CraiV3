@@ -55,34 +55,49 @@ curl -X POST http://localhost:8000/simulate/churn-risk \
 
 ```
 crai/
-├── agent/                      # Churn involuntário
-│   ├── main_agent.py            # Grafo LangGraph principal
-│   ├── workflow.py              # Nós: diagnose, anomaly, payday, retry, dunning, CRM
-│   └── state.py
-├── churn_voluntary/             # Churn voluntário (NOVO)
-│   ├── voluntary_agent.py       # Grafo LangGraph: risk → offer → channel → message → CRM
-│   ├── offer_bandit.py          # Multi-Armed Bandit — aprende a melhor oferta por perfil
-│   ├── risk_scorer.py           # Calcula risk_score a partir de eventos Segment
+├── agent/                          # Churn involuntário — grafo principal
+│   ├── main_agent.py                # Grafo LangGraph + MemorySaver (checkpoint por cliente)
+│   ├── workflow.py                  # Nós: diagnose, anomaly, payday, decide, retry, dunning, CRM
+│   └── state.py                     # AgentState — inclui retry_count e pix_janela_ate
+├── churn_voluntary/                 # Churn voluntário
+│   ├── voluntary_agent.py           # Grafo LangGraph: risk -> offer -> channel -> message -> CRM
+│   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por perfil
+│   ├── risk_scorer.py               # risk_score a partir de eventos Segment
 │   └── state.py
 ├── ml/
-│   ├── failure_classifier.py    # XGBoost + Random Forest — train() + predict()
-│   ├── anomaly_detector.py      # Autoencoder PyTorch — train() + check()
-│   ├── payday_inference.py      # LSTM + Prophet — train() + predict_next_window()
-│   └── synthetic_data.py        # Geradores de dataset dos 3 modelos (seed 42)
-├── scripts/
-│   └── train_all.py             # Treina os 3 modelos: python -m crai.scripts.train_all
+│   ├── failure_classifier.py        # XGBoost + Random Forest — train() + predict() + SHAP
+│   ├── anomaly_detector.py          # Autoencoder PyTorch — train() + check()
+│   ├── payday_inference.py          # LSTM + Prophet — train() + predict_next_window()
+│   └── synthetic_data.py            # Geradores dos 3 datasets (seed 42)
 ├── dunning/
-│   ├── dunning_engine.py        # LangGraph + Claude API (dunning involuntário)
-│   └── smart_backoff.py         # Backoff Exponencial + Jitter
+│   ├── pix_automatico_retry.py      # Política do BACEN: 3 tentativas / janela de 7 dias
+│   ├── dunning_engine.py            # LangGraph + Claude API (mensagem personalizada)
+│   └── legacy_card/                 # Recobrança de cartão — FORA do pipeline ativo (Fase 3)
+│       ├── card_retry.py            #   preservada para reativação, não importada
+│       └── smart_backoff.py         #   backoff exponencial + jitter (política de cartão)
 ├── integrations/
-│   └── hubspot_crm.py           # CRM — 2 pipelines: recovery + retention
+│   ├── payment_gateway.py           # Adapter de Pix Automático: normaliza e recusa payload torto
+│   └── hubspot_crm.py               # CRM — 2 pipelines: recovery + retention
+├── security/
+│   ├── webhook_verification.py      # HMAC dos 3 webhooks + janela anti-replay
+│   └── tokenization.py              # Tokenização de dados sensíveis
 ├── api/
-│   └── app.py                   # FastAPI: webhooks Pix Automático + Stripe + Segment,
-│                                #   blindagem de forma da borda, trava por cliente
-│                                #   e endpoints /simulate/*
-├── test_pipeline.py
+│   └── app.py                       # FastAPI: webhooks Pix + Stripe + Segment,
+│                                    #   blindagem de forma da borda, trava por cliente,
+│                                    #   endpoints /simulate/*
+├── scripts/
+│   ├── train_all.py                 # Treina os 3 modelos: python -m crai.scripts.train_all
+│   └── preparar_amostra_real.py     # Amostra real -> parâmetros de calibração
+├── tests/                           # 419 testes
+├── test_pipeline.py                 # Demo dos 9 cenários (rode com PYTHONIOENCODING=utf-8)
 └── requirements.txt
 ```
+
+> Conferido com `find crai -name "*.py"` na correção da auditoria A1-r8. A
+> versão anterior deste bloco listava `dunning/smart_backoff.py`, que não
+> existe nesse caminho desde a Fase 3, e omitia seis módulos — entre eles
+> `pix_automatico_retry.py` e `payment_gateway.py`, que são o coração da
+> janela do BACEN e da blindagem da borda.
 
 ## Os dois pipelines
 
@@ -100,11 +115,16 @@ PixAutomaticoRetryPolicy — 3 tentativas por janela de 7 dias (BACEN)
 [janela esgotada?] → Claude API (mensagem personalizada) → HubSpot
 ```
 
-O webhook do Stripe alimenta o mesmo grafo, mas um evento de cartão nunca
-alcança a política de retentativa: a aresta condicional lê `payment_method` e
-manda direto para a mensagem personalizada. `smart_backoff.py` (backoff
-exponencial) **não está no caminho ativo** — ele é a política de cartão, e
-aplicá-la a uma cobrança Pix violaria o limite do BACEN.
+O webhook do Stripe **não entra neste grafo**. Desde a Fase 3 ele apenas
+registra o evento com o prefixo `[CARTAO-DESATIVADO]` e responde
+`pipeline: false` — nenhum nó roda. `smart_backoff.py`, a política de cartão,
+está preservada em `dunning/legacy_card/` e não é importada por nada no
+caminho ativo: aplicar backoff exponencial a uma cobrança Pix violaria o
+limite do BACEN.
+
+O campo `payment_method` do state e a aresta condicional em `main_agent.py`
+continuam existindo, e é por eles que o cartão volta ao fluxo quando for
+reimplementado — mas hoje nenhum evento de cartão chega até lá.
 
 ### 2. Churn Voluntário (cliente em risco) — NOVO
 
@@ -159,4 +179,4 @@ Estão aqui para não virarem dívida esquecida.
 | **N-13** | `agent/workflow.py::schedule_retry_pix` | `retry_exhausted = True` é **inalcançável** no caminho de Pix: `decide_recovery` só roteia para o nó de retentativa quando ainda cabem tentativas, e nesse caso a política nunca devolve lista vazia. O cenário "Janela esgotada" imprime `0/3` em vez do esgotamento real. | Pré-existente — verificado idêntico em `baseline-pre-sprint`. É um ramo defensivo morto, não um erro de cálculo: o limite continua correto, só o rótulo da demo fica errado. **Fecha no Sprint 5**, que monta os cenários da banca e precisa deste exato caso na tela. |
 | **N-14** | `api/app.py::_thread_id` | Um pagador anônimo (`id_recorrencia` vazio) recebe um `thread_id` derivado do próprio evento, que muda a cada evento. Três eventos anônimos do mesmo cliente real viram três checkpoints e **9 tentativas** na mesma janela. | O 422 do P0-6 já recusa o evento que não identifica ninguém; o que sobra é o caso em que o PSP manda `e2e_id` mas não `id_recorrencia` — a CRAI não tem como saber que os três são a mesma pessoa. Não é resolvível dentro do payload: exige conciliação por chave Pix, que é justamente o que o `P2-13` destrava. |
 | **N-6 (resíduo)** | `integrations/payment_gateway.py::store_encrypted_pix_key` | Descarta a lista `degradacoes` que recebe, em vez de registrá-la. | Fora do caminho do pipeline ativo, como o P2-13. |
-| **§4.6** | `crai/models/` | **Só o Módulo 1 foi retreinado** (01/09, `n=15000`): **AUC 0,7029**, dentro da faixa [0,70; 0,92] dos gates G3/G4 — mas com folga de **+0,0029** sobre o piso, e **abaixo da meta de 0,78–0,85** fixada na aprovação do Sprint 3. Os Módulos 2 e 3 são de **26/08**, anteriores a todo o trabalho destes sprints, e trazem ROC-AUC **0,995** (autoencoder) e **0,9792** (payday). | **Fecha no Sprint 4**, que retreina os três com os 15.000 do Sprint 3 — que ainda não rodou: `data/synthetic/treino_15000.parquet` não existe e o gerador segue não-calibrado, então o 0,7029 é do gerador ANTIGO. **Correção da auditoria A1-r8:** esta linha dizia "AUC 0,6797, abaixo do piso" e "`train_metrics.json` com schema anterior ao commit `4109d84`". As duas afirmações eram falsas: o arquivo em disco tem 0,7029 e o schema novo (com `metricas_por_limiar` e `recall_operacional`, que só existem depois daquele commit). Números reproduzidos carregando o modelo de disco e re-scorando o holdout: AUC 0,7029, recall 0,9400, precisão 0,5054, matriz `[[410,1241],[81,1268]]` — idênticos aos gravados. O erro sobreviveu a sete rodadas de auditoria porque `crai/models/` é ignorado pelo git: os auditores liam a declaração, nunca o arquivo. ⚠️ O **0,995** do autoencoder e o **0,9792** do payday não estão sob o gate anti-vazamento (que o plano aplica ao Módulo 1), mas são a faixa que o próprio `sprints.md` chama de *"bandeira vermelha que qualquer orientador reconhece"*. O Sprint 4 precisa ou justificar os dois, ou medi-los sob o mesmo critério. |
+| **§4.6** | `crai/models/` | **Só o Módulo 1 foi retreinado** (01/09, `n=15000`): **AUC 0,7029**, dentro da faixa [0,70; 0,92] dos gates G3/G4 — mas com folga de **+0,0029** sobre o piso, e **abaixo da meta de 0,78–0,85** fixada na aprovação do Sprint 3 (`docs/APROVACAO_SPRINT3.md`, no repositório desde a A1-r8 — antes o número não tinha fonte auditável). Os Módulos 2 e 3 são de **26/08**, anteriores a todo o trabalho destes sprints, e trazem ROC-AUC **0,995** (autoencoder) e **0,9792** (payday). | **Fecha no Sprint 4**, que retreina os três com os 15.000 do Sprint 3 — que ainda não rodou: `data/synthetic/treino_15000.parquet` não existe e o gerador segue não-calibrado, então o 0,7029 é do gerador ANTIGO. **Correção da auditoria A1-r8:** esta linha dizia "AUC 0,6797, abaixo do piso" e "`train_metrics.json` com schema anterior ao commit `4109d84`". As duas afirmações eram falsas: o arquivo em disco tem 0,7029 e o schema novo (com `metricas_por_limiar` e `recall_operacional`, que só existem depois daquele commit). Números reproduzidos carregando o modelo de disco e re-scorando o holdout: AUC 0,7029, recall 0,9400, precisão 0,5054, matriz `[[410,1241],[81,1268]]` — idênticos aos gravados. O erro sobreviveu a sete rodadas de auditoria porque `crai/models/` é ignorado pelo git: os auditores liam a declaração, nunca o arquivo. ⚠️ O **0,995** do autoencoder e o **0,9792** do payday não estão sob o gate anti-vazamento (que o plano aplica ao Módulo 1), mas são a faixa que o próprio `sprints.md` chama de *"bandeira vermelha que qualquer orientador reconhece"*. O Sprint 4 precisa ou justificar os dois, ou medi-los sob o mesmo critério. |
