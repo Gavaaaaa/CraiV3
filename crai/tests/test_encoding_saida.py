@@ -8,13 +8,26 @@ O console padrão do Windows abre em **cp1252**. Uma string que chegue ao
 classificador.
 
 Este arquivo não conserta o problema; ele **trava o inventário**. A auditoria
-A1-r4 mediu 12 ocorrências no `HEAD` e 7 em `baseline-pre-sprint`. As 5 de
-diferença foram introduzidas por este diff e corrigidas neste sprint. As 7
-restantes são pré-existentes, estão declaradas abaixo uma a uma, e a solução
-sistêmica delas (`sys.stdout.reconfigure`) é do `demo_runner.py`, no Sprint 5.
+A1-r4 mediu 12 ocorrências no pacote `crai/` do `HEAD` e 7 no
+`baseline-pre-sprint`. As 5 de diferença foram introduzidas por este diff e
+corrigidas neste sprint.
 
-A catraca é o ponto: qualquer ocorrência NOVA, em qualquer módulo, falha aqui.
-O número declarado só pode descer.
+A auditoria A1-r5 mostrou que essa contagem, embora certa, era **estreita**: a
+varredura olhava só `crai/crai/**`, e a docstring aqui dizia "qualquer módulo".
+Fora do pacote, `test_pipeline.py` — que é o PRIMEIRO comando do README,
+`python test_pipeline.py` — carrega outras 15 ocorrências e morre na linha 103
+num console cp1252. O inventário real do projeto era 22, não 7, e este arquivo
+afirmava cobri-lo.
+
+Agora a varredura começa na RAIZ do repositório e o inventário declarado é o
+inventário inteiro: 22 ocorrências, medidas nas duas pontas. Em
+`baseline-pre-sprint` são as mesmas 22, arquivo por arquivo e linha por linha
+em `test_pipeline.py` — ou seja, a dívida é herdada, não introduzida, e a
+contribuição líquida deste diff para o N-12 é ZERO. A solução sistêmica
+(`sys.stdout.reconfigure`) é do Sprint 5.
+
+A catraca é o ponto: qualquer ocorrência NOVA, em qualquer arquivo `.py` do
+repositório, falha aqui. O número declarado só pode descer.
 
 Por que a contagem exclui docstrings: elas nunca são impressas. E por que ela
 inclui f-strings explicitamente: a partir do Python 3.12 (PEP 701) o
@@ -31,22 +44,29 @@ from pathlib import Path
 
 import pytest
 
-PACOTE = Path(__file__).resolve().parent.parent / "crai"
+# Raiz do repositório, não o pacote: a varredura precisa alcançar
+# `test_pipeline.py`, que vive fora de `crai/` e é o primeiro comando do README.
+RAIZ = Path(__file__).resolve().parent.parent
 
-# Inventário medido na auditoria A1-r4, por arquivo. Estas 7 ocorrências estão
-# idênticas em `baseline-pre-sprint`: são dívida herdada, não introduzida.
+# Inventário medido nas auditorias A1-r4 e A1-r5, por arquivo. Estas 22
+# ocorrências estão idênticas em `baseline-pre-sprint` — mesmos arquivos,
+# mesmas contagens: são dívida herdada, não introduzida.
 #
-#   agent/workflow.py                  "Decisão: mensagem_pagamento (... -> boleto)"
-#   churn_voluntary/voluntary_agent.py  os emoji de aceite e recusa (2 caracteres)
-#   dunning/dunning_engine.py           "[DUNNING] CANAL -> cliente"
-#   dunning/pix_automatico_retry.py     "(dd/mm hh:mm -> dd/mm hh:mm)"
-#   ml/anomaly_detector.py              "autoencoder (n -> gargalo)" (2 ocorrências)
+#   crai/agent/workflow.py                  "Decisão: mensagem_pagamento (... -> boleto)"
+#   crai/churn_voluntary/voluntary_agent.py  os emoji de aceite e recusa (2 caracteres)
+#   crai/dunning/dunning_engine.py           "[DUNNING] CANAL -> cliente"
+#   crai/dunning/pix_automatico_retry.py     "(dd/mm hh:mm -> dd/mm hh:mm)"
+#   crai/ml/anomaly_detector.py              "autoencoder (n -> gargalo)" (2 ocorrências)
+#   test_pipeline.py                         cabeçalhos e separadores da saída
+#                                            da demo (15 ocorrências; a linha
+#                                            103 é onde o processo morre)
 PENDENCIAS_PRE_EXISTENTES = {
-    "agent/workflow.py": 1,
-    "churn_voluntary/voluntary_agent.py": 2,
-    "dunning/dunning_engine.py": 1,
-    "dunning/pix_automatico_retry.py": 1,
-    "ml/anomaly_detector.py": 2,
+    "crai/agent/workflow.py": 1,
+    "crai/churn_voluntary/voluntary_agent.py": 2,
+    "crai/dunning/dunning_engine.py": 1,
+    "crai/dunning/pix_automatico_retry.py": 1,
+    "crai/ml/anomaly_detector.py": 2,
+    "test_pipeline.py": 15,
 }
 
 TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
@@ -54,10 +74,13 @@ TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
 # Módulos que este sprint limpou. Aqui a exigência é zero, sem tolerância:
 # `ml/failure_classifier.py` é o que derrubava o gate do Sprint 4.
 MODULOS_QUE_DEVEM_ESTAR_LIMPOS = (
-    "ml/failure_classifier.py",
-    "integrations/payment_gateway.py",
-    "scripts/preparar_amostra_real.py",
+    "crai/ml/failure_classifier.py",
+    "crai/integrations/payment_gateway.py",
+    "crai/scripts/preparar_amostra_real.py",
 )
+
+# Diretórios que não são código do projeto e não devem entrar na contagem.
+IGNORADOS = (".git", ".venv", "venv", "build", "dist", "__pycache__", ".pytest_cache")
 
 
 def _fora_do_cp1252(texto: str) -> str:
@@ -116,12 +139,15 @@ def _ocorrencias(caminho: Path) -> list:
 
 
 def _inventario() -> dict:
-    """{caminho relativo com '/': [(linha, caracteres), ...]}"""
+    """{caminho relativo à raiz do repositório: [(linha, caracteres), ...]}"""
     mapa = {}
-    for arquivo in sorted(PACOTE.rglob("*.py")):
+    for arquivo in sorted(RAIZ.rglob("*.py")):
+        relativo = arquivo.relative_to(RAIZ)
+        if any(parte in IGNORADOS for parte in relativo.parts):
+            continue
         achados = _ocorrencias(arquivo)
         if achados:
-            mapa[arquivo.relative_to(PACOTE).as_posix()] = achados
+            mapa[relativo.as_posix()] = achados
     return mapa
 
 
@@ -165,9 +191,29 @@ class TestN12Catraca:
                 f"({_descrever(achados)})"
             )
 
+    def test_a_varredura_alcanca_arquivo_fora_do_pacote(self):
+        """O escopo declarado tem que ser o escopo medido.
+
+        Catraca, nao regressao: e a correcao de uma AFIRMACAO, e afirmacao de
+        docstring nenhum teste consegue reprovar retroativamente. A auditoria
+        A1-r5 mostrou que este arquivo dizia varrer "qualquer modulo" e varria
+        so `crai/crai/**` — deixando de fora as 15 ocorrencias de
+        `test_pipeline.py`, que e o PRIMEIRO comando do README e morre na
+        linha 103 num console cp1252. Este teste trava o escopo novo: se
+        alguem estreitar a raiz de volta para o pacote, ele reprova.
+        """
+        inventario = _inventario()
+        fora_do_pacote = [m for m in inventario if not m.startswith("crai/")]
+
+        assert "test_pipeline.py" in inventario, (
+            "a varredura nao alcanca `test_pipeline.py`. O inventario voltou a "
+            "medir so o pacote, e a docstring deste arquivo promete o "
+            f"repositorio. Arquivos vistos fora do pacote: {fora_do_pacote}"
+        )
+
     def test_o_total_bate_com_o_medido_na_auditoria(self):
         total = sum(len(a) for a in _inventario().values())
         assert total <= TOTAL_DECLARADO, (
             f"total de {total} ocorrências contra {TOTAL_DECLARADO} declaradas "
-            "na auditoria A1-r4"
+            "nas auditorias A1-r4 e A1-r5"
         )

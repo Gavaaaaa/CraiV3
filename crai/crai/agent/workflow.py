@@ -2,6 +2,7 @@
 
 import numpy as np
 from datetime import datetime
+from typing import Optional
 from .state import AgentState
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
@@ -10,6 +11,8 @@ from ..ml.synthetic_data import seed_por_cliente
 from ..dunning.pix_automatico_retry import (
     MAX_TENTATIVAS as MAX_TENTATIVAS_PIX,
     PixAutomaticoRetryPolicy,
+    fim_da_janela,
+    inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
 from ..integrations.hubspot_crm import HubSpotCRM
@@ -31,6 +34,46 @@ _payday.load()
 # A política de Pix reaproveita o Payday Engine já carregado acima, em vez de
 # instanciar e recarregar o modelo por conta própria.
 _pix_retry = PixAutomaticoRetryPolicy(payday_inference=_payday)
+
+
+def _agora() -> datetime:
+    """Ponto único de leitura do relógio nos nós do grafo.
+
+    Existe para ser substituível: a expiração da janela do BACEN só é
+    testável se o teste puder colocar o pipeline 60 dias à frente sem
+    esperar 60 dias. Chamar `datetime.now()` direto dentro dos nós tornaria
+    o invariante "3 por janela de 7 dias" indistinguível, em teste, do
+    invariante errado "3 por contrato, para sempre".
+    """
+    return datetime.now()
+
+
+def _janela_vigente(state: AgentState, agora: datetime) -> tuple[int, Optional[datetime]]:
+    """Quantas tentativas já foram usadas NA JANELA ABERTA, e até quando ela vai.
+
+    O contador do checkpoint (`retry_count`) é cumulativo e não sabe a que
+    janela pertence. Quem sabe é `pix_janela_ate`. Passado o prazo, aquele
+    contador descreve uma janela encerrada e não pode mais bloquear nada: a
+    próxima cobrança que falhar abre uma janela nova, com as 3 tentativas
+    próprias que o BACEN concede a ela.
+
+    Um checkpoint com contador mas sem prazo (gravado antes desta marca
+    existir, ou por uma origem externa que sobrescreveu `retry_count`) é
+    tratado como janela ainda aberta — na dúvida, o limite regulatório
+    aperta, nunca afrouxa.
+    """
+    usadas = state.get("retry_count") or 0
+    prazo = state.get("pix_janela_ate")
+
+    # `prazo is not None`, e não `isinstance(prazo, datetime)`: o segundo casa
+    # contra o `datetime` global DESTE módulo, que é justamente o que um teste
+    # substitui para congelar o relógio. Um `pix_janela_ate` legítimo deixaria
+    # de ser reconhecido durante o teste, e a checagem defensiva silenciaria a
+    # regra que ela deveria proteger. O campo só é escrito aqui e é tipado
+    # `Optional[datetime]` no state; não há terceiro valor possível.
+    if prazo is not None and agora > prazo:
+        return 0, None
+    return usadas, prazo
 
 
 async def diagnose_failure(state: AgentState) -> AgentState:
@@ -151,7 +194,12 @@ async def decide_recovery(state: AgentState) -> AgentState:
     eprofit = state.get("eprofit", 0.0)
     anomala = state.get("is_anomalous", False)
     metodo = state.get("payment_method", "card")
-    usadas = state.get("retry_count", 0)
+    # O contador cru do checkpoint pode pertencer a uma janela já encerrada.
+    # `_janela_vigente` é quem decide se ele ainda vale — e o resultado é
+    # gravado de volta no state, para que `schedule_retry_pix` leia o mesmo
+    # número que esta decisão usou, em vez de recalcular a expiração.
+    momento = _agora()
+    usadas, prazo_vigente = _janela_vigente(state, momento)
 
     # Quantas retentativas ainda cabem depende do meio de pagamento:
     #   pix_automatico → o BACEN concede até 3 na janela de 7 dias, e desistir
@@ -205,7 +253,8 @@ async def decide_recovery(state: AgentState) -> AgentState:
     for passo in raciocinio:
         print(f"[RACIOCÍNIO] {passo}")
 
-    return {**state, "estrategia": estrategia, "raciocinio": raciocinio}
+    return {**state, "estrategia": estrategia, "raciocinio": raciocinio,
+            "retry_count": usadas, "pix_janela_ate": prazo_vigente}
 
 
 async def schedule_retry_pix(state: AgentState) -> AgentState:
@@ -220,17 +269,33 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     da mesma janela legal. Por isso `retry_count` passa a refletir todas as
     tentativas comprometidas — um novo evento do mesmo cliente na mesma janela
     encontra o limite já gasto e cai direto na mensagem personalizada.
+
+    "Na mesma janela" é a parte que precisa estar escrita no state, e não só
+    na cabeça de quem leu o BACEN. `pix_janela_ate` diz até quando o contador
+    vale; enquanto ele valer, esta função **continua** a janela aberta em vez
+    de abrir outra — reancorar o vencimento a cada webhook empurraria o prazo
+    indefinidamente e transformaria "3 por janela" em "3 por webhook".
     """
-    usadas = state.get("retry_count", 0)
+    momento = _agora()
+    usadas, prazo_vigente = _janela_vigente(state, momento)
+
+    # Vencimento que ancora a janela: o da cobrança que a abriu, se ela ainda
+    # está aberta; senão, agora — este evento é o começo de uma janela nova.
+    vencimento = inicio_da_janela(prazo_vigente) if prazo_vigente else momento
+    prazo_final = fim_da_janela(vencimento)
+
     tentativas = await _pix_retry.schedule(
         customer_id=state["customer_id"],
         valor_original=state["amount"],
+        vencimento=vencimento,
         tentativas_usadas=usadas,
+        agora=momento,
     )
 
     if not tentativas:
         print("[AGENT] Pix Automático: janela regulada esgotada — sem nova tentativa")
         return {**state, "next_retry_at": None, "retry_exhausted": True,
+                "retry_count": usadas, "pix_janela_ate": prazo_vigente,
                 "pix_retry_schedule": []}
 
     plano = [
@@ -241,7 +306,8 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
           f"próxima: {tentativas[0].quando.strftime('%d/%m %H:%M')} ({tentativas[0].origem})")
 
     return {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
-            "retry_count": usadas + len(tentativas), "pix_retry_schedule": plano}
+            "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
+            "pix_retry_schedule": plano}
 
 
 async def trigger_dunning(state: AgentState) -> AgentState:

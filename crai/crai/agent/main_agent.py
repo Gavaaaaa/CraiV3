@@ -105,6 +105,27 @@ def build_crai_graph() -> StateGraph:
     graph.add_edge("trigger_dunning", "update_dashboard")
     graph.add_edge("update_dashboard", END)
 
+    # ⚠️ O contador de tentativas do BACEN mora AQUI, e só aqui.
+    #
+    # `MemorySaver` guarda o checkpoint em RAM, no processo. Isso tem três
+    # consequências que precisam estar escritas, e não descobertas depois:
+    #
+    #   1. Dois processos (dois workers do uvicorn, dois pods) têm memórias
+    #      separadas. O mesmo `id_recorrencia` atendido por workers diferentes
+    #      recebe 3 tentativas de cada um: 6 na mesma janela de 7 dias, contra
+    #      o limite de 3. A CRAI hoje só é correta rodando em UM processo.
+    #   2. Reiniciar o serviço zera o contador de todo mundo. Uma janela do
+    #      BACEN dura 7 dias; nenhum deploy nesse intervalo pode acontecer sem
+    #      reabrir o direito a 3 novas tentativas que já foram gastas.
+    #   3. `pix_janela_ate` (ver crai/agent/state.py) sofre do mesmo mal: a
+    #      marca de expiração da janela some junto com o contador.
+    #
+    # É dívida ASSUMIDA para a demo, não descuido: a POC roda em processo
+    # único, e trocar o checkpointer por um persistente (`SqliteSaver` /
+    # `PostgresSaver`, que o LangGraph já oferece com a mesma interface) é uma
+    # linha aqui mais uma migração — trabalho de produção, não de banca.
+    # Enquanto isso não acontecer, o limite regulatório é garantido pelo
+    # processo, e o processo é a fronteira de correção do sistema.
     return graph.compile(checkpointer=MemorySaver())
 
 

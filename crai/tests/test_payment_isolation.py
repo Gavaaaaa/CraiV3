@@ -26,9 +26,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from crai.agent import workflow as workflow_module
-from crai.agent.main_agent import build_crai_graph, route_after_decision
+from crai.agent.main_agent import build_crai_graph, crai_agent, route_after_decision
 from crai.agent.workflow import decide_recovery, schedule_retry_pix
 from crai.api import app as app_module
+from crai.dunning import pix_automatico_retry as pix_retry_module
 from crai.dunning.pix_automatico_retry import MAX_TENTATIVAS as MAX_TENTATIVAS_PIX
 
 VALOR = 299.90
@@ -588,4 +589,211 @@ class TestA1R4LimiteBacenAtravessaOsWebhooks:
             f"o nó de agendamento foi alcançado {len(lotes)} vezes; a partir da "
             "segunda o cliente já não tem tentativa disponível e deveria ser "
             "barrado em decide_recovery"
+        )
+
+class TestA1R5AJanelaDoBacenExpira:
+    """O limite do BACEN é 3 POR JANELA DE 7 DIAS, não 3 por contrato.
+
+    A correção da rodada 4 parou de zerar `retry_count` a cada webhook. O
+    contador ficou monotônico: só crescia, e nada no state dizia a que janela
+    ele pertencia. Com isso o invariante em vigor passou a ser "3 tentativas
+    por id_recorrencia, para sempre" — e a cobrança do mês seguinte, que é uma
+    janela regulatória inteiramente nova, encontrava o limite já gasto por uma
+    janela encerrada 53 dias antes. O cliente perdia por prescrição um direito
+    que a regulação lhe dá em cada ciclo de cobrança.
+
+    Os testes da rodada 4 não pegaram isso porque afirmam `total <= 3`, e esse
+    teto está certo sob os DOIS invariantes. O que separa um do outro é o
+    tempo. Por isso estes testes controlam o relógio: sem mover o relógio, os
+    dois contratos são literalmente indistinguíveis.
+
+    Medido em `317a0eb`, antes desta correção: segundo evento 60 dias depois,
+    `chamadas a schedule: NENHUMA`, estratégia `mensagem_pagamento`, com o
+    pipeline dizendo "as 3 tentativas da janela regulada do BACEN já foram
+    usadas". `AgentState` não tinha nenhuma chave de janela ou prazo.
+    """
+
+    ABERTURA = datetime(2026, 9, 3, 9, 0)
+
+    @staticmethod
+    def _assinar(corpo: bytes, segredo: bytes = b"s3cr3t") -> dict:
+        ts = int(time.time())
+        mac = hmac.new(segredo, f"{ts}.".encode() + corpo, hashlib.sha256).hexdigest()
+        return {"x-pix-signature": f"t={ts},v1={mac}",
+                "content-type": "application/json"}
+
+    def _webhooks_no_tempo(self, monkeypatch, id_recorrencia, momentos):
+        """Um webhook em cada instante de `momentos`, com o relógio do grafo movido.
+
+        Devolve `(lotes, estados)`: o que a política agendou em cada passagem
+        pelo nó de retentativa, e o checkpoint depois de cada webhook.
+
+        Como na rodada 4, não há mock do `crai_agent`: o defeito vive na
+        fronteira entre a borda e o checkpoint, e um agente falso apagaria o
+        checkpoint junto com o bug. O que se substitui é só o relógio.
+        """
+        monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s3cr3t")
+        relogio = {"agora": momentos[0]}
+        original = workflow_module._pix_retry.schedule
+        lotes = []
+
+        async def espiao(**kwargs):
+            tentativas = await original(**kwargs)
+            lotes.append(tentativas)
+            return tentativas
+
+        monkeypatch.setattr(workflow_module._pix_retry, "schedule", espiao)
+
+        # O relógio é congelado substituindo o `datetime` que os DOIS módulos
+        # já importavam, e não um ponto de injeção novo. A diferença importa:
+        # um `monkeypatch.setattr(workflow, "_agora", ...)` levantaria
+        # AttributeError em `317a0eb`, onde esse símbolo não existe — e um
+        # AttributeError não é prova de falha de comportamento, é prova de
+        # símbolo ausente. Substituindo `datetime`, o mesmo teste roda nas duas
+        # pontas e a diferença que ele mede é a do CÓDIGO.
+        class RelogioCongelado(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return relogio["agora"]
+
+        monkeypatch.setattr(workflow_module, "datetime", RelogioCongelado)
+        monkeypatch.setattr(pix_retry_module, "datetime", RelogioCongelado)
+
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "e2e_id": f"E{id_recorrencia}",
+            "valor": VALOR,
+            "id_recorrencia": id_recorrencia,
+        }).encode()
+
+        estados = []
+        config = {"configurable": {"thread_id": id_recorrencia}}
+        with TestClient(app_module.app) as c:
+            for momento in momentos:
+                relogio["agora"] = momento
+                resposta = c.post("/webhooks/pix-automatico", content=corpo,
+                                  headers=self._assinar(corpo))
+                assert resposta.status_code == 200, resposta.text
+                estados.append(dict(crai_agent.get_state(config).values))
+        return lotes, estados
+
+    # -- o defeito: a janela seguinte nao existia -------------------------
+
+    def test_a_janela_seguinte_tem_as_proprias_tres_tentativas(self, monkeypatch):
+        """Sessenta dias depois é outra cobrança, com outro direito de 3."""
+        lotes, _ = self._webhooks_no_tempo(
+            monkeypatch, "RN_r5_expira_a",
+            [self.ABERTURA, self.ABERTURA + timedelta(days=60)],
+        )
+
+        assert len(lotes) == 2, (
+            f"o nó de agendamento foi alcançado {len(lotes)} vez(es). O evento "
+            "de 60 dias depois abre uma janela BACEN nova e tem direito às 3 "
+            "tentativas dela; encontrar o limite gasto significa que o contador "
+            "nunca expira — '3 por contrato' em vez de '3 por janela de 7 dias'"
+        )
+        assert len(lotes[1]) == MAX_TENTATIVAS_PIX, (
+            f"a janela nova concedeu {len(lotes[1])} tentativa(s), não "
+            f"{MAX_TENTATIVAS_PIX}"
+        )
+        assert [t.numero for t in lotes[1]] == [1, 2, 3], (
+            f"a numeração da janela nova começou em {[t.numero for t in lotes[1]]}; "
+            "cada janela numera as próprias tentativas de 1 a 3"
+        )
+
+    def test_o_prazo_da_janela_fica_gravado_no_checkpoint(self, monkeypatch):
+        """Sem a marca no state, expirar a janela é impossível por construção."""
+        _, estados = self._webhooks_no_tempo(
+            monkeypatch, "RN_r5_expira_b", [self.ABERTURA],
+        )
+        prazo = estados[0].get("pix_janela_ate")
+
+        assert prazo is not None, (
+            "o checkpoint não guarda até quando o contador de tentativas vale. "
+            "Um `retry_count` sem janela é um limite sem prazo: só cresce"
+        )
+        assert prazo == self.ABERTURA + timedelta(days=7), (
+            f"prazo gravado {prazo!r}; a janela do BACEN é de 7 dias corridos "
+            f"contados do vencimento ({self.ABERTURA!r})"
+        )
+
+    def test_a_janela_nova_reancora_no_evento_que_a_abriu(self, monkeypatch):
+        """A janela #2 conta 7 dias a partir dela mesma, não da #1."""
+        abertura_2 = self.ABERTURA + timedelta(days=60)
+        _, estados = self._webhooks_no_tempo(
+            monkeypatch, "RN_r5_expira_c", [self.ABERTURA, abertura_2],
+        )
+
+        assert estados[1].get("pix_janela_ate") == abertura_2 + timedelta(days=7), (
+            f"prazo após a segunda cobrança: {estados[1].get('pix_janela_ate')!r}. "
+            f"Esperado {abertura_2 + timedelta(days=7)!r} — a janela nova se "
+            "ancora no vencimento que a abriu"
+        )
+
+    # -- o contrapeso: a correcao nao pode virar '3 por webhook' ----------
+
+    def test_evento_dentro_da_janela_nao_empurra_o_prazo(self, monkeypatch):
+        """Trava a correção pelo outro lado.
+
+        Zerar o contador por tempo sem ancorar a janela faria cada webhook
+        adiar o prazo em mais 7 dias, e o limite nunca venceria — '3 por
+        webhook', que é o defeito da rodada 4 de volta por outra porta.
+
+        Em `317a0eb` ele reprova por falta da própria marca de janela, então
+        conta como regressão; mas o que ele existe para pegar é a
+        SOBRE-correção, e isso só uma implementação futura pode disparar.
+        """
+        _, estados = self._webhooks_no_tempo(
+            monkeypatch, "RN_r5_expira_d",
+            [self.ABERTURA, self.ABERTURA + timedelta(days=3)],
+        )
+
+        assert estados[1].get("pix_janela_ate") == self.ABERTURA + timedelta(days=7), (
+            "o segundo evento, ainda DENTRO da janela, empurrou o prazo para "
+            f"{estados[1].get('pix_janela_ate')!r}. A janela pertence à cobrança "
+            "que a abriu; reancorar a cada webhook a torna eterna"
+        )
+
+    def test_evento_dentro_da_janela_nao_ganha_tentativa_nova(self, monkeypatch):
+        """O invariante da rodada 4, preservado: dentro da janela o teto vale."""
+        lotes, _ = self._webhooks_no_tempo(
+            monkeypatch, "RN_r5_expira_e",
+            [self.ABERTURA, self.ABERTURA + timedelta(days=3)],
+        )
+        total = sum(len(lote) for lote in lotes)
+
+        assert total <= MAX_TENTATIVAS_PIX, (
+            f"LIMITE BACEN VIOLADO: {total} tentativas na mesma janela de 7 dias "
+            f"(máximo {MAX_TENTATIVAS_PIX}). Lotes: {[len(l) for l in lotes]}"
+        )
+
+    # -- a regra pura, sem HTTP ------------------------------------------
+    #
+    # Os dois testes abaixo exercem `_janela_vigente` diretamente. São testes
+    # UNITÁRIOS da regra nova, não prova de regressão: em `317a0eb` a função
+    # não existe, e o que eles produzem lá é AttributeError — símbolo ausente,
+    # não comportamento errado. A prova de regressão são os quatro testes de
+    # ponta a ponta acima.
+
+    def test_contador_sem_prazo_e_tratado_como_janela_aberta(self):
+        """Na dúvida o limite regulatório aperta, nunca afrouxa.
+
+        Um checkpoint gravado antes desta marca existir — ou por uma origem
+        externa que sobrescreveu `retry_count` — tem contador e não tem prazo.
+        Tratar isso como janela expirada liberaria 3 tentativas extras.
+        """
+        usadas, prazo = workflow_module._janela_vigente(
+            {"retry_count": 3, "pix_janela_ate": None}, datetime(2030, 1, 1),
+        )
+        assert (usadas, prazo) == (3, None)
+
+    def test_o_contador_zera_quando_o_prazo_passa(self):
+        agora = datetime(2026, 9, 3, 9, 0)
+        estado = {"retry_count": 3, "pix_janela_ate": agora - timedelta(seconds=1)}
+
+        assert workflow_module._janela_vigente(estado, agora) == (0, None)
+        # Um segundo ANTES do fim a janela ainda vale: a fronteira é inclusiva.
+        estado["pix_janela_ate"] = agora + timedelta(seconds=1)
+        assert workflow_module._janela_vigente(estado, agora) == (
+            3, agora + timedelta(seconds=1),
         )

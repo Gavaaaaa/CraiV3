@@ -60,6 +60,18 @@ class AgentState(TypedDict):
     retry_exhausted: bool
     recovered:       bool
 
+    # Até quando `retry_count` vale. O limite do BACEN é "3 tentativas dentro
+    # de 7 dias corridos contados do vencimento" — é um limite POR JANELA, não
+    # por contrato. Sem esta marca, o contador só crescia, e uma cobrança que
+    # falhasse no mês seguinte encontrava as 3 tentativas já gastas por uma
+    # janela encerrada havia semanas: o cliente perdia por prescrição um
+    # direito que a regulação lhe dá em cada ciclo.
+    #
+    # Ancorada no vencimento da cobrança que abriu a janela e NUNCA empurrada
+    # por eventos posteriores da mesma janela (ver `inicio_da_janela` em
+    # crai/dunning/pix_automatico_retry.py). `None` = nenhuma janela aberta.
+    pix_janela_ate:  Optional[datetime]
+
     # Plano completo de tentativas dentro da janela regulada (só Pix Automático)
     pix_retry_schedule: Optional[list]
 

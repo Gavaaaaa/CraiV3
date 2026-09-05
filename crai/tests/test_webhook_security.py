@@ -9,6 +9,7 @@ Os pipelines são stubados: aqui só interessa quem passa da porta de entrada.
 
 import hashlib
 import hmac
+import json
 import time
 
 import pytest
@@ -242,3 +243,101 @@ class TestSimulateEnvGate:
 
 def test_health_continua_publico(client):
     assert client.get("/health").status_code == 200
+
+class TestA1R5ValidacaoNuncaVira500:
+    """Entrada hostil nos `/simulate/*` devolve 422, nunca 5xx.
+
+    O projeto já fechava esta porta em dois pontos: o webhook de Pix recusa
+    `NaN`/`Infinity` no `json.loads` (`parse_constant`), e os campos de valor
+    e de contagem passam por `_valor_de_simulacao` / `_contador_de_simulacao`.
+
+    Faltava o caso em que **o Pydantic recusa antes de a rota rodar**. Um
+    `NaN` num campo declarado `int` (`days_since_last`) nunca alcança o corpo
+    da função — e o handler padrão do FastAPI monta um 422 que ECOA o valor
+    ofensor. Aí o `NaN` está no corpo da RESPOSTA, e o Starlette escreve as
+    respostas com `allow_nan=False`: a serialização levanta `ValueError` já
+    fora de qualquer `try`, e o cliente recebe 500. O serviço tinha recusado a
+    entrada corretamente e ainda assim reportou erro interno.
+
+    Medido em `317a0eb`: `days_since_last` com `NaN`, `Infinity` e
+    `-Infinity` devolvia HTTP 500 "Internal Server Error" nos três.
+    """
+
+    LITERAIS = ("NaN", "Infinity", "-Infinity")
+
+    @staticmethod
+    def _corpo(literal: str) -> bytes:
+        return (
+            '{"user_id":"usr_r5","event":"Session Started",'
+            f'"days_since_last":{literal},"features_used_30d":2,'
+            '"on_site_now":true,"billing_profile":"CLT"}'
+        ).encode()
+
+    @staticmethod
+    def _recusar_constante(nome):
+        raise AssertionError(
+            f"a resposta traz o literal `{nome}` cru, que não existe no JSON "
+            "padrão. É exatamente esse valor no corpo da RESPOSTA que fazia o "
+            "Starlette levantar ValueError e devolver 500"
+        )
+
+    @pytest.mark.parametrize("literal", LITERAIS)
+    def test_nao_ha_5xx_em_literal_nao_json(self, client, monkeypatch, literal):
+        monkeypatch.setenv("ENV", "demo")
+        resposta = client.post(
+            "/simulate/churn-risk", content=self._corpo(literal),
+            headers={"content-type": "application/json"},
+        )
+
+        assert resposta.status_code < 500, (
+            f"`days_since_last: {literal}` devolveu HTTP "
+            f"{resposta.status_code}. Entrada recusada tem que sair como 4xx: "
+            "um 5xx aqui diz ao cliente que o erro é do servidor, e some com o "
+            "motivo real da recusa"
+        )
+        assert resposta.status_code == 422, (
+            f"esperado 422 (entidade não processável), recebido "
+            f"{resposta.status_code}: {resposta.text[:200]}"
+        )
+
+    @pytest.mark.parametrize("literal", LITERAIS)
+    def test_a_recusa_sai_como_json_estrito(self, client, monkeypatch, literal):
+        """O 500 nascia na serialização — a prova é o corpo ser JSON válido.
+
+        `json.loads` aceita `NaN`/`Infinity` por default; com `parse_constant`
+        ele passa a recusá-los, que é o comportamento do JSON padrão e o do
+        Starlette ao escrever a resposta.
+        """
+        monkeypatch.setenv("ENV", "demo")
+        resposta = client.post(
+            "/simulate/churn-risk", content=self._corpo(literal),
+            headers={"content-type": "application/json"},
+        )
+
+        corpo = json.loads(resposta.text, parse_constant=self._recusar_constante)
+        assert "detail" in corpo, f"resposta sem motivo da recusa: {corpo!r}"
+
+    def test_o_portao_de_contadores_continua_de_pe(self, client, monkeypatch):
+        """Contrapeso: sanear o eco não pode ter afrouxado a validação real.
+
+        Catraca, não regressão — este caso já devolvia 422 em `317a0eb`. Está
+        aqui porque a correção mexe no caminho de erro de TODAS as rotas, e um
+        handler amplo demais poderia ter passado a aceitar o que os portões do
+        projeto recusam. O inteiro de 401 dígitos atravessa o Pydantic intacto
+        (um `int` Python não tem teto) e só é barrado por
+        `_contador_de_simulacao`.
+        """
+        monkeypatch.setenv("ENV", "demo")
+        gigante = "9" * 401
+        resposta = client.post(
+            "/simulate/churn-risk",
+            content=(
+                '{"user_id":"usr_r5","event":"Session Started",'
+                f'"days_since_last":{gigante},"features_used_30d":2,'
+                '"on_site_now":true,"billing_profile":"CLT"}'
+            ).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+        assert resposta.status_code == 422, resposta.text
+        assert resposta.json()["detail"]["campo"] == "days_since_last"

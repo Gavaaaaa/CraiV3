@@ -14,11 +14,14 @@ correta — ver crai/agent/main_agent.py.
 
 import os
 import json
+import math
 import hashlib
 import logging
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -48,6 +51,50 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CRAI", version="2.0.0",
               description="Agente autônomo de recuperação de receita — churn involuntário + voluntário")
+
+
+def _json_representavel(valor):
+    """Troca por texto todo float que o JSON padrão não sabe escrever.
+
+    `NaN`, `Infinity` e `-Infinity` são extensões do JSON do Python: existem no
+    `json.loads` por default, mas não na especificação. O Starlette escreve as
+    respostas com `allow_nan=False` — o certo — e por isso qualquer um deles
+    dentro do corpo de uma resposta levanta `ValueError` na hora de serializar,
+    já fora do `try` da rota. O cliente recebe 500.
+    """
+    if isinstance(valor, float) and not math.isfinite(valor):
+        return repr(valor)
+    if isinstance(valor, dict):
+        return {chave: _json_representavel(v) for chave, v in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return [_json_representavel(v) for v in valor]
+    return valor
+
+
+@app.exception_handler(RequestValidationError)
+async def _erro_de_validacao_nunca_vira_500(request: Request, exc: RequestValidationError):
+    """422 com o motivo, em vez de 500 sem motivo, quando o Pydantic recusa.
+
+    O projeto já fechava esta porta em dois pontos: o webhook de Pix recusa os
+    literais no `json.loads` (`parse_constant`), e os `/simulate/*` de valor
+    passam pelos portões `_valor_de_simulacao` / `_contador_de_simulacao`.
+    Faltava o caso em que **o Pydantic recusa antes da rota existir**: um
+    `NaN` chegando num campo declarado `int` (`days_since_last`) nunca alcança
+    o corpo da função, e o handler padrão do FastAPI devolve o valor ofensor
+    ECOADO dentro do erro. Aí o `NaN` está no corpo da RESPOSTA, e é a
+    serialização dela que quebra — 500 num payload que o serviço tinha acabado
+    de recusar corretamente.
+
+    Medido antes da correção: `days_since_last: NaN | Infinity | -Infinity` em
+    `/simulate/churn-risk` devolvia HTTP 500 "Internal Server Error" nos três.
+
+    Sanear o eco resolve a classe inteira, não só estes três campos: vale para
+    qualquer rota, atual ou futura, sem que cada uma precise lembrar do caso.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _json_representavel(jsonable_encoder(exc.errors()))},
+    )
 
 # Ambientes onde os endpoints /simulate/* ficam expostos. O default é
 # "production" (fail closed): esquecer de definir ENV nunca deve deixar um
@@ -509,6 +556,13 @@ async def _run_involuntary_pipeline(
     Omitir a chave preserva o valor acumulado no checkpoint. Para um cliente
     sem checkpoint a chave simplesmente não existe, e os nós já leem com
     `state.get("retry_count", 0)`.
+
+    `pix_janela_ate` é omitido pelo mesmo motivo, e é o par indispensável do
+    contador: sozinho, `retry_count` acumula para sempre e o limite do BACEN
+    vira "3 por contrato" em vez de "3 por janela de 7 dias". Quem decide se o
+    contador ainda vale é `_janela_vigente` (crai/agent/workflow.py), que só
+    consegue decidir porque encontra a marca da janela no checkpoint. Escrever
+    qualquer um dos dois aqui apaga essa memória.
 
     `retries_done` continua aceito para a origem em que o contador é **externo
     e autoritativo** — o `attempt_count` do Stripe, quando a recobrança de
