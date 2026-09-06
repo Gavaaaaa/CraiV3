@@ -1,0 +1,54 @@
+{
+  "RN_maria_001": {
+    "customer_id": "RN_maria_001",
+    "tenant_id": null,
+    "e2e_id": "E60701190RN_maria_001",
+    "valor_original": 299.9,
+    "pix_janela_ate": "2026-09-13T07:25:25.701811",
+    "atualizado_em": "2026-09-06T07:25:25.745319",
+    "tentativas": [
+      {
+        "numero": 1,
+        "quando": "2026-09-07T07:25:25.701811",
+        "valor": 299.9,
+        "origem": "payday_engine",
+        "disparada_em": "2026-09-07T08:25:26.116660",
+        "id_cobranca": "ch_sim_7d1a992429dcf0fb"
+      },
+      {
+        "numero": 2,
+        "quando": "2026-09-08T07:25:25.701811",
+        "valor": 299.9,
+        "origem": "payday_engine",
+        "disparada_em": "2026-09-08T08:25:26.127175",
+        "id_cobranca": "ch_sim_36e9d786a16d7f18"
+      },
+      {
+        "numero": 3,
+        "quando": "2026-09-09T07:25:25.701811",
+        "valor": 299.9,
+        "origem": "payday_engine",
+        "disparada_em": "2026-09-09T08:25:26.134178",
+        "id_cobranca": "ch_sim_0139cd3a09f06736"
+      }
+    ]
+  },
+  "RN_joao_002": {
+    "customer_id": "RN_joao_002",
+    "tenant_id": null,
+    "e2e_id": "E60701190RN_joao_002",
+    "valor_original": 149.0,
+    "pix_janela_ate": "2026-09-13T07:25:25.849916",
+    "atualizado_em": "2026-09-06T07:25:25.997531",
+    "tentativas": [
+      {
+        "numero": 3,
+        "quando": "2026-09-07T07:25:25.849916",
+        "valor": 149.0,
+        "origem": "fallback_uniforme",
+        "disparada_em": "2026-09-07T08:25:26.116660",
+        "id_cobranca": "ch_sim_0a5fa25c34105ae6"
+      }
+    ]
+  }
+}

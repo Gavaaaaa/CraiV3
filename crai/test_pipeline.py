@@ -17,6 +17,7 @@ Uso:
 
 import asyncio
 import os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,6 +37,8 @@ os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
 from crai.api.app import _fechar_ciclo_recuperado, _registrar_cartao_desativado
+from crai.dunning import retry_state
+from crai.dunning.retry_scheduler import processar_tentativas_devidas
 from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
 
@@ -135,6 +138,33 @@ async def run_pix_confirmacao(id_recorrencia, valor):
     )
 
 
+async def run_agendador(dias_a_frente):
+    """O cron de produção, com o relógio adiantado — as tentativas 2 e 3.
+
+    A política do BACEN concede 3 tentativas na janela de 7 dias e devolve o
+    plano inteiro; o nó do grafo dispara a que já é devida e termina. As outras
+    caem em dias seguintes, com o `ainvoke` encerrado há muito. Em produção
+    quem volta nessas datas é um cron chamando
+    `processar_tentativas_devidas()` — infraestrutura, não agente.
+
+    Aqui o relógio é adiantado dia a dia para a banca ver as 3 tentativas
+    saindo em sequência sem esperar uma semana. O que roda é o MESMO código de
+    produção; o que muda é só o instante informado.
+    """
+    cabecalho("AGENDADOR DE RETENTATIVAS (as tentativas 2 e 3 do BACEN)",
+              "o cron de produção, com o relógio adiantado dia a dia")
+    disparos = []
+    for dia in range(1, dias_a_frente + 1):
+        momento = datetime.now() + timedelta(days=dia, hours=1)
+        do_dia = await processar_tentativas_devidas(momento)
+        if do_dia:
+            print(f"  D+{dia}: {len(do_dia)} tentativa(s) reenviada(s) ao PSP")
+        disparos.extend(do_dia)
+    if not disparos:
+        print("  nenhuma tentativa devida no período")
+    return disparos
+
+
 # ── Churn Voluntário ─────────────────────────────────────────────────────
 
 async def run_voluntary_scenario(name, user_id, event, props):
@@ -158,6 +188,11 @@ async def main():
     if not os.getenv("HUBSPOT_TOKEN"):
         print("⚠️  HUBSPOT_TOKEN não definida — HubSpot rodará em modo simulação\n")
 
+    # Estado de retentativa zerado a cada execução da demo: sem isto, o plano
+    # da rodada anterior segue pendente em `data/` e o agendador o dispararia
+    # junto com o desta, embaralhando a contagem que a banca vê.
+    retry_state.limpar_tudo()
+
     # ── Cenários de Pix Automático (janela regulada BACEN) ──────────────
     pix_scenarios = [
         ("Primeira falha — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0),
@@ -168,6 +203,9 @@ async def main():
     for name, rec_id, valor, usadas in pix_scenarios:
         result = await run_pix_scenario(name, rec_id, valor, usadas)
         pix_results.append(result)
+
+    # ── As tentativas 2 e 3: o agendador percorre a janela do BACEN ─────
+    disparos = await run_agendador(dias_a_frente=8)
 
     # ── O ciclo se fecha: o pagamento chega e a recuperação é contabilizada ──
     #
@@ -220,6 +258,13 @@ async def main():
         dias = ", ".join(t["quando"].strftime("%d/%m") for t in plano)
         print(f"     {r['customer_id']}: {len(plano)} tentativa(s) em {dias} ({origem})")
 
+    por_cliente = {}
+    for d in disparos:
+        por_cliente[d["customer_id"]] = por_cliente.get(d["customer_id"], 0) + 1
+    print(f"   Tentativas reenviadas ao PSP : {len(disparos)} "
+          f"({', '.join(f'{c}: {n}' for c, n in sorted(por_cliente.items())) or 'nenhuma'})")
+    assert all(n <= 3 for n in por_cliente.values()), (
+        f"INVARIANTE VIOLADO: mais de 3 tentativas na janela do BACEN: {por_cliente}")
     print(f"   Ciclos fechados por pagamento: 1/{len(pix_results)} "
           f"({confirmacao['ciclo']}, fee R$ {confirmacao['fee']:.2f})")
     print(f"   Reenvio da mesma confirmação  : {reenvio['ciclo']} "

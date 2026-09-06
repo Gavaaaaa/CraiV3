@@ -34,6 +34,8 @@ stripe==10.12.0
 hubspot-api-client==9.0.0
 
 # ── Dev / Testes ──────────────────────────────────────────
+# httpx tambem e o cliente HTTP do modo real do pagarme_gateway (importado sob
+# demanda: o modo simulado, que e o default e o que a suite roda, nao o toca).
 httpx==0.27.2
 pytest==8.3.3
 pytest-asyncio==0.24.0

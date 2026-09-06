@@ -324,6 +324,10 @@ cp .env.example .env
 | `STRIPE_WEBHOOK_SECRET` | Para `/webhooks/stripe` | Valida o header `stripe-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
 | `PIX_WEBHOOK_SECRET` | Para `/webhooks/pix-automatico` | Valida o header `x-pix-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
 | `CRAI_ENCRYPTION_KEY` | Para arquivar chave Pix | Chave Fernet para cifrar a chave Pix do pagador. Sem ela o arquivamento falha em vez de gravar em texto puro |
+| `CRAI_PAGARME_LIVE` | Não | `1` liga o envio REAL de instrução de cobrança ao Pagar.me. Sem ela, `reenviar_cobranca_pix` roda em modo simulado — nenhuma rede, nenhuma credencial |
+| `CRAI_PAGARME_API_KEY` | Com `CRAI_PAGARME_LIVE=1` | Secret key do Pagar.me (Basic auth, senha vazia). Ligar o modo real sem ela **falha alto**, em vez de cair para simulado em silêncio |
+| `CRAI_PAGARME_ENDPOINT` | Não | Caminho da cobrança avulsa sobre a recorrência de Pix Automático. O default é um placeholder marcado `TODO(integração)` — o valor real depende da conta |
+| `CRAI_RETRY_STATE` | Não | Redireciona o arquivo de planos de retentativa pendentes (default `crai/data/pix_retry_state.json`). A suíte usa isto para não escrever no estado real |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -542,6 +546,15 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Idempotência dos **dois** lados (janela de 7 dias, `api/idempotencia.py`): reenvio da confirmação não fatura duas vezes; reenvio da falha não reexecuta o pipeline
   - [x] `/simulate/pix-pago` — a banca vê o loop inteiro (falha → agendamento → confirmação → fee) sem PSP real
   - ⚠️ A janela de idempotência é memória de processo: reinício a esquece e dois processos têm janelas separadas — mesma dependência de DB do `MemorySaver` (P1-14)
+- [x] **Execução da retentativa** — o agente deixa de só agendar (Sprint 2)
+  - [x] `integrations/pagarme_gateway.py` — a SAÍDA para o PSP (`reenviar_cobranca_pix`), espelhando o adapter de entrada
+  - [x] Modo simulado por default (sem rede, sem credencial); modo real com `CRAI_PAGARME_LIVE=1` + chave, que **falha alto** se a chave faltar
+  - [x] Invariante de valor na última linha antes do dinheiro: valor != original levanta `PixRetryPolicyViolation`
+  - [x] `dunning/retry_scheduler.py` — as tentativas 2 e 3 do BACEN (Gap 1). Em produção um cron chama `processar_tentativas_devidas()`; o relógio é injetado, e é o que torna a regra testável
+  - [x] `dunning/retry_state.py` — o plano pendente atrás de `get_retry_state`/`save_retry_state` (Gap 2): ponto de troca pronto para o PostgreSQL
+  - [x] Falha do PSP não consome tentativa: a marca de disparo só é gravada depois do aceite
+  - ⚠️ **Limitação assumida (Gap 2):** o contador do BACEN segue no `MemorySaver` e o plano num JSON reescrito inteiro. Um processo, sem transação — reinício e segundo worker continuam sendo a dependência de banco já descrita em P1-14. O que muda com o DB é a implementação por trás dessas duas funções, não o nó do grafo nem o agendador
+  - ⚠️ **Fora do escopo declarado:** o scheduler temporal de produção (cron/worker) é infraestrutura. O que existe aqui é a LÓGICA de disparo, completa e testável, mais o ponto onde o cron chama
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

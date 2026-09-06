@@ -47,6 +47,12 @@ def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     explicitamente — e aí a intenção fica escrita.
     """
     monkeypatch.setenv("CRAI_RETENTION_DB", str(tmp_path / "ciclos_de_teste.db"))
+    # Mesma razão, outro arquivo: desde o Sprint 2 do involuntário o nó de
+    # agendamento grava o plano de tentativas do BACEN em `data/`. Um teste que
+    # dispare o pipeline deixaria planos pendentes no estado real, e a próxima
+    # passagem do agendador — na demo, na mão de quem apresenta — reenviaria
+    # cobrança de cliente de teste ao PSP.
+    monkeypatch.setenv("CRAI_RETRY_STATE", str(tmp_path / "pix_retry_de_teste.json"))
 
 
 @pytest.fixture(autouse=True)

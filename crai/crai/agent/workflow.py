@@ -15,6 +15,8 @@ from ..dunning.pix_automatico_retry import (
     inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
+from ..dunning import retry_state
+from ..dunning.retry_scheduler import disparar_tentativa
 from ..integrations.hubspot_crm import HubSpotCRM
 
 # Não há import de smart_backoff aqui: a retentativa de cartão saiu do pipeline
@@ -304,6 +306,30 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     ]
     print(f"[AGENT] Pix Automático: {len(plano)} tentativa(s) na janela BACEN | "
           f"próxima: {tentativas[0].quando.strftime('%d/%m %H:%M')} ({tentativas[0].origem})")
+
+    # O plano sai do grafo e vai para a camada de estado (Sprint 2). Sem isto,
+    # as tentativas 2 e 3 morrem aqui: o `ainvoke` termina, o checkpoint guarda
+    # o plano num formato privado do LangGraph, e nada volta na data certa para
+    # reenviar a instrução de pagamento. Ver `crai/dunning/retry_scheduler.py`.
+    retry_state.save_retry_state(
+        customer_id=state["customer_id"],
+        valor_original=state["amount"],
+        tentativas=plano,
+        pix_janela_ate=prazo_final,
+        e2e_id=state.get("invoice_id"),
+    )
+
+    # A primeira tentativa sai AGORA quando já é devida. "Devida" é a data que a
+    # política calculou, não o momento em que o webhook chegou: a janela do
+    # recebedor abre no dia seguinte ao vencimento (as duas janelas automáticas
+    # do dia são do PSP do pagador). Numa cobrança que falhou há mais de um dia
+    # a primeira tentativa está vencida e sai daqui; numa que acabou de falhar
+    # ela é de amanhã, e quem a dispara é o agendador — o mesmo caminho das
+    # tentativas 2 e 3, sem código paralelo.
+    registro = retry_state.get_retry_state(state["customer_id"])
+    if registro:
+        for devida in retry_state.tentativas_devidas(registro, momento):
+            await disparar_tentativa(registro, devida, momento)
 
     return {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
             "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
