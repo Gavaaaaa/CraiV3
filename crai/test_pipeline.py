@@ -84,17 +84,21 @@ def run_card_scenario(name, customer_id, amount, failure_code):
 
 # ── Churn Involuntário via Pix Automático ────────────────────────────────
 
-async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
+async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0,
+                           codigo_falha="AM04"):
     cabecalho(f"CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}",
-              f"{id_recorrencia} | R$ {valor:.2f} | cobrança recorrente falhada")
+              f"{id_recorrencia} | R$ {valor:.2f} | recusa do PSP: {codigo_falha}")
 
-    # Evento já normalizado pelo PixAutomaticoAdapter: 5 campos, sem chave Pix.
+    # Evento já normalizado pelo PixAutomaticoAdapter: campos de dado, sem
+    # chave Pix. `codigo_falha` é o motivo CRU da recusa; quem o traduz para o
+    # vocabulário interno é o PIX_CODE_MAP (crai/agent/pix_codes.py).
     evento = {
         "e2e_id": f"E60701190{id_recorrencia}",
         "valor": valor,
         "status": "cobranca_falhada",
         "ispb_pagador": "60701190",
         "id_recorrencia": id_recorrencia,
+        "codigo_falha": codigo_falha,
     }
 
     initial: AgentState = {
@@ -194,14 +198,23 @@ async def main():
     retry_state.limpar_tudo()
 
     # ── Cenários de Pix Automático (janela regulada BACEN) ──────────────
+    #
+    # O quinto campo é o motivo CRU da recusa, e é o que o Sprint 3 trouxe: até
+    # então toda falha de Pix era diagnosticada como falta de saldo, e os dois
+    # cenários de baixo — limite estourado e autorização revogada — teriam ido
+    # para retentativa, gastando tentativas do BACEN em algo que não pode
+    # passar. Agora eles vão direto para a mensagem personalizada, com o pedido
+    # certo: aumentar o limite, ou reautorizar a recorrência.
     pix_scenarios = [
-        ("Primeira falha — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0),
-        ("Já usou 2 das 3 tentativas",                "RN_joao_002",  149.00, 2),
-        ("Janela esgotada — 3 de 3 usadas",           "RN_pedro_003", 599.00, 3),
+        ("Saldo insuficiente — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0, "AM04"),
+        ("Saldo insuficiente — já usou 2 das 3",          "RN_joao_002",  149.00, 2, "AM04"),
+        ("Janela esgotada — 3 de 3 usadas",               "RN_pedro_003", 599.00, 3, "AM04"),
+        ("Limite do Pix Automático excedido",             "RN_ana_004",   899.00, 0, "AM02"),
+        ("Autorização de recorrência revogada",           "RN_luis_005",  199.00, 0, "MD01"),
     ]
     pix_results = []
-    for name, rec_id, valor, usadas in pix_scenarios:
-        result = await run_pix_scenario(name, rec_id, valor, usadas)
+    for name, rec_id, valor, usadas, codigo in pix_scenarios:
+        result = await run_pix_scenario(name, rec_id, valor, usadas, codigo)
         pix_results.append(result)
 
     # ── As tentativas 2 e 3: o agendador percorre a janela do BACEN ─────
@@ -212,7 +225,7 @@ async def main():
     # Só o primeiro cenário paga. Os outros dois seguem em aberto de
     # propósito: uma demo em que 100% recupera não mede nada, e a taxa de
     # recuperação (Sprint 6) precisa de denominador.
-    rec_pago, valor_pago = pix_scenarios[0][1], pix_scenarios[0][2]
+    rec_pago, valor_pago = pix_scenarios[0][1], pix_scenarios[0][2]  # noqa: E501
     confirmacao = await run_pix_confirmacao(rec_pago, valor_pago)
     # O reenvio do mesmo webhook — comportamento normal de PSP at-least-once —
     # não pode faturar de novo. Provado na própria demo, não só no pytest.
@@ -252,6 +265,22 @@ async def main():
     print(f"   Volume testado          : R$ {pix_amount:.2f}")
     print(f"   Com plano de retentativa: {len(com_plano)}/{len(pix_results)}")
     print(f"   Janela BACEN esgotada   : {sum(1 for r in pix_results if r.get('retry_exhausted'))}/{len(pix_results)}")
+    causas = {}
+    for r in pix_results:
+        causa = r.get("failure_cause", "?")
+        causas[causa] = causas.get(causa, 0) + 1
+    print(f"   Diagnóstico por causa   : "
+          f"{', '.join(f'{c}: {n}' for c, n in sorted(causas.items()))}")
+    assert len(causas) > 1, (
+        "INVARIANTE VIOLADO: todas as falhas de Pix receberam a mesma causa — o "
+        "PIX_CODE_MAP não está sendo aplicado e o diagnóstico voltou a ser cego")
+    nao_retentaveis = [r for r in pix_results
+                       if r.get("failure_cause") in ("limit_exceeded", "authorization_revoked")]
+    assert all(r.get("estrategia") == "mensagem_pagamento" for r in nao_retentaveis), (
+        "INVARIANTE VIOLADO: causa não retentável foi para retentativa — "
+        "tentativa do BACEN gasta em algo que não pode passar")
+    print(f"   Sem retentativa (por causa): {len(nao_retentaveis)} "
+          f"(limite excedido / autorização revogada → mensagem personalizada)")
     for r in com_plano:
         plano = r["pix_retry_schedule"]
         origem = plano[0]["origem"]

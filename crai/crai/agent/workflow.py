@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
+from .pix_codes import CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
@@ -172,9 +173,25 @@ async def infer_payday(state: AgentState) -> AgentState:
 
 
 # Causas em que retentar a cobrança pode, mecanicamente, resolver.
-# Cartão expirado / recusado / do_not_honor não passam por insistência —
-# o cliente precisa agir, então vão direto à mensagem personalizada.
-CAUSAS_RETENTAVEIS = {"insufficient_funds", "processing_error"}
+#
+# O conjunto é o mesmo de antes do Sprint 3 — `insufficient_funds` e
+# `processing_error` —, mas agora ele é ALCANÇÁVEL pelas outras duas pontas: até
+# aqui toda falha de Pix chegava como `insufficient_funds`, então a linha de
+# baixo nunca reprovava nada num evento de Pix. Com o PIX_CODE_MAP, os dois
+# casos não retentáveis passam a existir de verdade:
+#
+#   limit_exceeded         o valor excede o teto que o pagador configurou.
+#                          Nenhuma das 3 tentativas do BACEN passa enquanto o
+#                          teto não subir, e só o cliente pode subi-lo.
+#   authorization_revoked  não há mais mandato. Não existe cobrança a reenviar.
+#
+# Gastar tentativa regulada em qualquer um dos dois é queimar um direito do
+# recebedor em algo que não pode dar certo.
+#
+# Cartão expirado / recusado / do_not_honor seguem fora por outro motivo (o
+# cliente precisa agir), e continuam válidos enquanto o vocabulário do Stripe
+# existir no caminho legado.
+CAUSAS_RETENTAVEIS = set(CAUSAS_RETENTAVEIS_PIX)
 
 
 async def decide_recovery(state: AgentState) -> AgentState:
@@ -236,8 +253,13 @@ async def decide_recovery(state: AgentState) -> AgentState:
         estrategia = "retry_automatico"
     else:
         if causa not in CAUSAS_RETENTAVEIS:
-            motivo = (f"'{causa}' não se resolve por retentativa — o cliente "
-                      f"precisa agir (atualizar cartão ou pagar por outro meio)")
+            # A explicação por causa vem do vocabulário (pix_codes), e não de um
+            # texto genérico: "o cliente precisa agir" não diz ao operador — nem
+            # à banca — se o que falta é aumentar o limite do Pix ou reautorizar
+            # a recorrência, que são ações diferentes.
+            detalhe = EXPLICACAO_DA_CAUSA.get(
+                causa, "o cliente precisa agir (atualizar cartão ou pagar por outro meio)")
+            motivo = f"'{causa}' não se resolve por retentativa — {detalhe}"
         elif metodo == "pix_automatico":
             motivo = (f"as {MAX_TENTATIVAS_PIX} tentativas da janela regulada do "
                       f"BACEN já foram usadas")
@@ -374,10 +396,16 @@ async def update_roi_dashboard(state: AgentState) -> AgentState:
     return state
 
 
-# Causa atribuída a uma cobrança recorrente de Pix Automático que falhou.
-# No fluxo do BACEN, as duas janelas automáticas do dia do vencimento já
-# tentaram debitar a conta do pagador; se ambas falharam, a causa dominante é
-# ausência de saldo — que é exatamente o caso em que o Payday Engine agrega.
+# Causa DOMINANTE de uma cobrança recorrente de Pix Automático que falha: no
+# fluxo do BACEN, as duas janelas automáticas do dia do vencimento já tentaram
+# debitar a conta do pagador, e se ambas falharam a ausência de saldo é a
+# hipótese mais provável — é também o caso em que o Payday Engine agrega.
+#
+# Até o Sprint 3 esta constante era atribuída a TODA falha de Pix, e aí ela
+# deixava de ser hipótese para virar afirmação sobre um pagador de quem não se
+# sabia nada. Hoje quem decide é o `PIX_CODE_MAP` sobre o motivo que o PSP
+# enviou (ver `crai/agent/pix_codes.py`); a constante segue aqui porque é a
+# causa mais frequente e continua sendo o rótulo do caminho simulado.
 CAUSA_PIX_FALHA = "insufficient_funds"
 
 
@@ -428,7 +456,11 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
 
     return {
         **perfil,
-        "gateway_error_code": CAUSA_PIX_FALHA,
+        # Sprint 3: a causa vem do motivo que o PSP enviou, traduzido pelo
+        # PIX_CODE_MAP. Um evento sem motivo (ou com motivo não reconhecido)
+        # cai no default seguro do mapa, que é `processing_error` — e não mais
+        # `insufficient_funds`, que afirmava falta de saldo sem saber.
+        "gateway_error_code": causa_do_codigo(event.get("codigo_falha")),
         # Não existe bandeira em Pix; o encoder trata valor desconhecido.
         "card_brand": "n/a",
         # As duas janelas automáticas do dia são do PSP do pagador e não contam

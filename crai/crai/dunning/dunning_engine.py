@@ -17,7 +17,16 @@ from typing import TypedDict
 
 claude = AsyncAnthropic()
 
-# Chaves = códigos de erro do Stripe (mesmo vocabulário de AgentState.failure_cause).
+# Chaves = vocabulário de `AgentState.failure_cause`.
+#
+# O bloco de cima nasceu com os códigos do Stripe, quando o pipeline ativo era
+# de cartão. O de baixo entrou no Sprint 3, com o PIX_CODE_MAP: são as duas
+# causas de Pix que NÃO se resolvem por retentativa e que, por isso, chegam
+# sempre aqui. Cada uma pede uma ação diferente do cliente — aumentar o limite
+# do Pix Automático ou reautorizar a recorrência —, e uma mensagem genérica de
+# "não conseguimos cobrar" faria o cliente tentar pagar de novo pelo caminho
+# que está bloqueado. Os templates de cartão continuam para retrocompatibilidade
+# do caminho legado.
 FALLBACK_TEMPLATES = {
     "expired_card":       "Olá! Seu cartão expirou e não conseguimos cobrar R$ {amount:.2f}. Pague em segundos via {metodo}: {link}",
     "insufficient_funds": "Oi! Tivemos dificuldade ao cobrar R$ {amount:.2f}. Regularize via {metodo}: {link}",
@@ -25,6 +34,9 @@ FALLBACK_TEMPLATES = {
     "card_declined":      "Olá! Seu banco recusou a cobrança de R$ {amount:.2f}. Pague por {metodo}: {link}",
     "generic_decline":    "Olá! Não foi possível concluir a cobrança de R$ {amount:.2f}. Pague por {metodo}: {link}",
     "processing_error":   "Olá! Houve uma falha técnica no pagamento de R$ {amount:.2f}. Conclua por {metodo}: {link}",
+    # ── Pix Automático (Sprint 3) ────────────────────────────────────────
+    "limit_exceeded":        "Olá! A cobrança de R$ {amount:.2f} passou do limite do seu Pix Automático. Aumente o limite no app do seu banco ou pague agora por {metodo}: {link}",
+    "authorization_revoked": "Olá! A autorização do seu Pix Automático foi cancelada, então não conseguimos cobrar os R$ {amount:.2f}. Reative a recorrência ou pague por {metodo}: {link}",
 }
 
 # Rótulo do meio de pagamento para a mensagem.
@@ -71,6 +83,13 @@ class DunningEngine:
         if state["failure_cause"] == "processing_error":
             metodo = "boleto"
             motivo = "falha técnica do gateway — boleto evita novo processamento no mesmo canal"
+        elif state["failure_cause"] == "authorization_revoked":
+            # Oferecer Pix Automático a quem acabou de revogar a autorização é
+            # oferecer exatamente o caminho que o cliente fechou. O boleto é o
+            # meio que funciona hoje; reautorizar é o que a MENSAGEM pede.
+            metodo = "boleto"
+            motivo = ("autorização de recorrência revogada — o Pix Automático "
+                      "está indisponível até o cliente reautorizar")
         else:
             metodo = "pix_automatico"
             motivo = "Pix Automático recupera na hora, contornando o cartão"

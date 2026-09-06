@@ -555,6 +555,14 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Falha do PSP não consome tentativa: a marca de disparo só é gravada depois do aceite
   - ⚠️ **Limitação assumida (Gap 2):** o contador do BACEN segue no `MemorySaver` e o plano num JSON reescrito inteiro. Um processo, sem transação — reinício e segundo worker continuam sendo a dependência de banco já descrita em P1-14. O que muda com o DB é a implementação por trás dessas duas funções, não o nó do grafo nem o agendador
   - ⚠️ **Fora do escopo declarado:** o scheduler temporal de produção (cron/worker) é infraestrutura. O que existe aqui é a LÓGICA de disparo, completa e testável, mais o ponto onde o cron chama
+- [x] **Diagnóstico real de falha de Pix** — o PIX_CODE_MAP (Sprint 3)
+  - [x] `agent/pix_codes.py` — quatro causas internas (`insufficient_funds`, `limit_exceeded`, `authorization_revoked`, `processing_error`) com aliases textuais dos PSPs e códigos ISO 20022 do arranjo Pix
+  - [x] Schema normalizado ganhou `codigo_falha` de forma **aditiva** — os cinco campos anteriores intactos, e a chave Pix continua fora
+  - [x] `_features_pix` deixou de atribuir `insufficient_funds` a toda falha: a feature do classificador era constante, e o dataset de treino nasceria sem sinal
+  - [x] `limit_exceeded` e `authorization_revoked` **não** consomem tentativa do BACEN — retentar não pode dar certo nos dois, e a tentativa é um direito do recebedor
+  - [x] Templates de dunning próprios para as duas causas (aumentar o limite / reautorizar), e autorização revogada não oferece Pix Automático — é o canal que o cliente acabou de fechar
+  - [x] Default seguro `processing_error` para código não reconhecido: não afirma falta de saldo sobre um pagador de quem não se sabe nada
+  - ⚠️ **TODO(integração):** a lista de códigos ISO 20022 precisa ser conferida contra a documentação da conta Pagar.me antes de `CRAI_PAGARME_LIVE=1`. Código fora do mapa cai no default e sai no log — é assim que se descobre o que falta
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

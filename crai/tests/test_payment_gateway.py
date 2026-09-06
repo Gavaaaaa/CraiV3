@@ -89,7 +89,17 @@ CHAVE_PIX_PAGADOR = "12345678901"
 # A partir do Sprint 1 existe um sexto campo, `degradacoes`, que é metadado de
 # qualidade do parsing e não carrega nenhum dado do pagador (ver
 # TestPayloadsHostis.test_degradacoes_nao_carrega_dado_do_pagador).
-CAMPOS_NORMALIZADOS = {"e2e_id", "valor", "status", "ispb_pagador", "id_recorrencia"}
+# Os cinco campos de dado que o schema normalizado tem desde a Fase 3, mais o
+# `codigo_falha`, que o Sprint 3 acrescentou de forma ADITIVA — os cinco
+# anteriores seguem com o mesmo nome e o mesmo significado. Sem ele o
+# diagnóstico de Pix era cego: `_features_pix` atribuía `insufficient_funds` a
+# toda falha, e o classificador recebia uma feature constante.
+#
+# A promessa de privacidade continua sendo sobre TODOS os campos, e o novo não
+# a afrouxa: ele carrega código de recusa, nunca dado do pagador, e o teste
+# `test_pipeline_recebe_evento_sem_chave_pix` mede o dict inteiro.
+CAMPOS_NORMALIZADOS = {"e2e_id", "valor", "status", "ispb_pagador",
+                       "id_recorrencia", "codigo_falha"}
 CAMPO_QUALIDADE = "degradacoes"
 
 
@@ -152,12 +162,13 @@ class TestNormalizacaoDeEventos:
         assert resultado["status"] == status_esperado
 
     @pytest.mark.asyncio
-    async def test_schema_tem_os_cinco_campos_de_dado_mais_a_qualidade(self, adapter):
+    async def test_schema_tem_os_campos_de_dado_mais_a_qualidade(self, adapter):
         """Nem mais, nem menos: o contrato com o pipeline é fechado.
 
-        Cinco campos de dado + `degradacoes`. O sexto entrou no Sprint 1 e é
-        metadado de qualidade — a promessa de privacidade continua sendo sobre
-        os cinco.
+        Seis campos de dado + `degradacoes`. `degradacoes` entrou na Fase 3 e é
+        metadado de qualidade; `codigo_falha` entrou no Sprint 3 do churn
+        involuntário e é dado — o motivo cru da recusa, que o PIX_CODE_MAP
+        traduz. A promessa de privacidade vale para o dict inteiro.
         """
         resultado = await adapter.parse_pix_event(payload_pix("automatic_pix.charge_failed"))
         assert set(resultado.keys()) == CAMPOS_NORMALIZADOS | {CAMPO_QUALIDADE}
