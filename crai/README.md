@@ -66,7 +66,10 @@ crai/
 │   ├── retention_log.py             # Dataset de treino: 1 linha por ciclo, com tenant_id
 │   │                                #   (SQLite em data/, gitignored)
 │   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por TENANT e perfil
-│   ├── risk_scorer.py               # risk_score + criticidade (tom) a partir de eventos Segment
+│   ├── risk_scorer.py               # risk_score + criticidade (tom); aceita modelo
+│   │                                #   treinado via try/load/fallback, senão regras fixas
+│   ├── README_treino.md             # guia da fase de treino: formato do dataset,
+│   │                                #   limitações declaradas e como plugar o modelo
 │   └── state.py
 ├── ml/
 │   ├── failure_classifier.py        # XGBoost + Random Forest — train() + predict() + SHAP

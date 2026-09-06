@@ -1,0 +1,149 @@
+SPRINT 6 (churn voluntário) — risco plugável e o guia da fase de treino
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: 31a2450 (fim do Sprint 5)
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+Último dos seis. NÃO treina modelo nenhum, por decisão do plano: garante que a
+fase de treino seja "plugar", e não "reescrever".
+
+
+O QUE FOI FEITO
+================================================================================
+
+1. `risk_scorer.calculate_risk` consulta, ANTES das regras, se há modelo em
+   `crai/models/voluntary_risk.joblib`. Havendo, ele decide; não havendo — o
+   estado de hoje —, valem as regras fixas.
+
+   Mesmo `try/load/fallback` dos módulos de ML do involuntário
+   (`ml/anomaly_detector.py:315`, `ml/failure_classifier.py:688`): devolve
+   bool, loga o motivo, nunca levanta. Sem hierarquia de classes — a diferença
+   entre "tem modelo" e "não tem" cabe num `if`, como o plano pedia.
+
+2. `churn_voluntary/README_treino.md` — o guia que a fase de treino segue.
+
+3. `crai/ml/synthetic_data.py` NÃO foi tocado. Ver a seção própria abaixo.
+
+
+SEM MODELO, O COMPORTAMENTO É IDÊNTICO
+================================================================================
+
+Um ponto de extensão que muda o caso comum não é ponto de extensão, é
+regressão. Medido nos dez casos que o `risk_scorer` já produzia:
+
+    Cancellation Page Viewed                          -> 0.90
+    Cancellation Page Viewed {days_since_last: 99}    -> 0.90
+    Downgrade Clicked                                 -> 0.75
+    Session Started {days: 18, features: 1}           -> 0.66
+    Session Started {days: 30, features: 0}           -> 1.0
+    Session Started {days: 0,  features: 30}          -> 0.0
+    Session Started {}                                -> 0.0
+    Session Started {days: 7,  features: 3}           -> 0.283
+    Evento Desconhecido                               -> 0.0
+    ""                                                -> 0.0
+
+`TestSemModelo` é CATRACA: passa antes e depois do sprint, e existe só para
+travar essa igualdade. `_risco_por_regras` é o corpo do `calculate_risk`
+anterior, palavra por palavra.
+
+
+O PONTO MAIS PERIGOSO: A ORDEM DAS FEATURES
+================================================================================
+
+Um modelo treinado com as colunas em outra ordem devolve número PLAUSÍVEL e
+ERRADO — não levanta exceção, não aparece em log, e vira decisão de negócio.
+
+Por isso a ordem é contrato declarado em `FEATURES_DE_RISCO`:
+
+    ["days_since_last", "features_used_30d", "mrr",
+     "evento_cancelamento", "evento_downgrade", "evento_sessao"]
+
+e `carregar_modelo()` RECUSA um modelo cujo `voluntary_risk_meta.json` declare
+outra ordem, com log explícito. Travado por
+`test_ordem_de_features_divergente_e_recusada`, que salva um modelo com a lista
+invertida e verifica que o risco volta a 0.90 (regras).
+
+
+DEGRADAR, NÃO QUEBRAR
+================================================================================
+
+Um modelo defeituoso não pode derrubar o ciclo de retenção de ninguém. Medido:
+
+    meta com ordem trocada       -> recusa no load, regras fixas
+    meta ausente                 -> recusa no load, regras fixas
+    meta sem `features`          -> recusa no load, regras fixas
+    .joblib corrompido           -> recusa no load, regras fixas
+    `predict` que levanta        -> carrega, mas degrada na inferência
+    saída 1.5 / -0.2 / NaN / inf -> degrada (risco é probabilidade; um 1.5
+                                    atravessaria o corte de 0.90 e mandaria tom
+                                    crítico para todo mundo)
+    saída não numérica           -> degrada
+
+Aceita `predict_proba` (preferido) e `predict` — nem todo modelo tem os dois.
+
+
+AS DUAS LIMITAÇÕES, DECLARADAS NO GUIA
+================================================================================
+
+Combinadas com o autor do projeto e escritas em §3 e §4 do README_treino.md.
+São limitações CONHECIDAS e documentadas, não erros:
+
+1. O LABEL É ACEITAÇÃO DE OFERTA, NÃO CHURN. `accepted` responde "o cliente
+   aceitou a oferta?", não "o cliente cancelou?". Um cliente aceita 20% de
+   desconto e cancela dois meses depois: no dataset ele é `accepted = 1`. Um
+   modelo treinado nisso é de propensão a aceitar oferta — útil, e não o que o
+   nome `risk_score` sugere. O guia diz o que faltaria para ter churn de
+   verdade (um sinal de fim de assinatura num horizonte fixo) e onde ele
+   entraria (uma coluna a mais em `ciclos_retencao`).
+
+2. VIÉS DE SELEÇÃO. `route_after_risk` corta em 0.60: quem está abaixo não
+   recebe oferta e não tem desfecho. O modelo de risco decide quem entra no
+   próprio dataset dele.
+
+   O que mudou desde o Sprint 4: o caminho de risco baixo TAMBÉM grava linha,
+   com `offer_type` nulo. O viés não desaparece, mas passa de invisível a
+   MENSURÁVEL — o guia traz o recorte pronto (`df[df.offer_type.isna()]`) e
+   três tratamentos em ordem de custo, sendo o terceiro (explorar uma fração
+   dos de risco baixo) explicitamente decisão de produto, porque custa dinheiro
+   real.
+
+
+O GERADOR SINTÉTICO NÃO FOI ESTENDIDO
+================================================================================
+
+O plano permitia estendê-lo "somente se necessário". Ele de fato não produz as
+features do voluntário — o mapeamento medido:
+
+    days_since_last    <- days_since_last_login
+    features_used_30d  <- feature_adoption   (escala diferente: proporção)
+    mrr                <- mrr_brl
+    event              <- NÃO EXISTE (o gerador é de comportamento, não eventos)
+    billing_profile    <- NÃO EXISTE
+    accepted           <- NÃO EXISTE (o label de lá é `is_anomalous`)
+
+Três das seis features aproximáveis, e nenhuma delas é o label. Estender
+deixou de ser necessário quando o Sprint 4 criou o produtor de dado REAL:
+bootstrap sintético aqui treinaria um modelo sobre um alvo inventado. E
+`crai/ml/` é território do involuntário — mexer nele para gerar dado que
+ninguém vai usar é risco sem contrapartida. O mapeamento ficou documentado em
+§6 do guia, com esse raciocínio escrito.
+
+
+UM DETALHE DE TESTE QUE VALE REGISTRAR
+================================================================================
+
+Os testes que inspecionam O QUE o modelo recebeu não podem passar pelo disco:
+`joblib.dump`/`load` devolve uma CÓPIA, e o espião salvo não é o espião que o
+teste segura — `modelo.vistos` fica vazio para sempre. A primeira rodada falhou
+com `IndexError` por isso. O helper `_injetar()` põe a instância diretamente; o
+caminho do disco continua exercido pelos testes de `_salvar()`.
+
+
+GATES
+================================================================================
+
+    pytest tests/test_risk_pluggable.py -v  →  53 passed
+    pytest tests/ -q                        → 677 passed (baseline 624)
+    python test_pipeline.py                 →   exit 0
+
+`TestContratoDoReadme` fecha o ciclo: o guia não pode citar um símbolo que não
+existe no módulo, nem omitir as duas limitações. Se o README mentir sobre um
+nome, o passo a passo não roda — e ninguém descobre até a hora do treino.
