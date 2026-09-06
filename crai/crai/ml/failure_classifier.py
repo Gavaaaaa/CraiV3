@@ -32,6 +32,7 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
+from ..config import CUSTOS_PADRAO, custo_intervencao, custos_por_canal
 from .synthetic_data import generate_dataset
 
 logger = logging.getLogger(__name__)
@@ -42,13 +43,14 @@ MODELS_DIR = BASE_DIR / "models"
 LOGS_DIR = BASE_DIR / "logs" / "shap"
 
 # ── Custos de intervenção por canal (R$) ─────────────────────────────────
-INTERVENTION_COSTS = {
-    "bot_whatsapp": 0.05,
-    "email_auto": 0.02,
-    "sms": 0.08,
-    "ligacao_cs": 15.00,
-    "pix_boleto_link": 0.50,
-}
+#
+# A tabela mudou de casa no Sprint 5: custo de canal é parâmetro de NEGÓCIO e
+# mora em `crai/config.py`, junto do success fee. O nome continua aqui porque é
+# o que a suíte e o relatório de métricas importam, e porque `INTERVENTION_COSTS`
+# é o valor DEFAULT — o que o e-Profit usa em tempo de execução é
+# `custo_intervencao()`, que aplica os overrides de env. Sem env configurada os
+# dois são idênticos, que é o requisito deste sprint.
+INTERVENTION_COSTS = CUSTOS_PADRAO
 
 # ── Limiar de classificação — para o RELATÓRIO, não para a decisão ──────
 #
@@ -288,7 +290,7 @@ class FailureClassifier:
         auc = roc_auc_score(y_test, ensemble_proba)
 
         # e-Profit médio (usando bot_whatsapp como canal padrão)
-        cost = INTERVENTION_COSTS["bot_whatsapp"]
+        cost = custo_intervencao()
         eprofits = ensemble_proba * ltv_test - cost
         avg_eprofit = float(np.mean(eprofits[eprofits > 0])) if np.any(eprofits > 0) else 0.0
 
@@ -380,7 +382,7 @@ class FailureClassifier:
             return self._heuristic_fallback(features, channel)
 
         ltv = features.get("ltv_estimated", features.get("invoice_amount", 100) * 6)
-        cost = INTERVENTION_COSTS.get(channel, INTERVENTION_COSTS["bot_whatsapp"])
+        cost = custo_intervencao(channel)
 
         # Preparar input
         X = self._preprocess_single(features)
@@ -455,7 +457,7 @@ class FailureClassifier:
         best_eprofit = 0.0
         channel_eprofits = {}
 
-        for ch, cost in INTERVENTION_COSTS.items():
+        for ch, cost in custos_por_canal().items():
             ep = round(p_recovery * ltv - cost, 2)
             channel_eprofits[ch] = ep
             if ep > best_eprofit:
@@ -648,7 +650,7 @@ class FailureClassifier:
             p_recovery = max(p_recovery - 0.10, 0.05)
 
         ltv = features.get("ltv_estimated", features.get("invoice_amount", features.get("amount", 100)) * 6)
-        cost = INTERVENTION_COSTS.get(channel, INTERVENTION_COSTS["bot_whatsapp"])
+        cost = custo_intervencao(channel)
         eprofit = round(p_recovery * ltv - cost, 2)
 
         return {

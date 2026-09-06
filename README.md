@@ -328,6 +328,9 @@ cp .env.example .env
 | `CRAI_PAGARME_API_KEY` | Com `CRAI_PAGARME_LIVE=1` | Secret key do Pagar.me (Basic auth, senha vazia). Ligar o modo real sem ela **falha alto**, em vez de cair para simulado em silêncio |
 | `CRAI_PAGARME_ENDPOINT` | Não | Caminho da cobrança avulsa sobre a recorrência de Pix Automático. O default é um placeholder marcado `TODO(integração)` — o valor real depende da conta |
 | `CRAI_RETRY_STATE` | Não | Redireciona o arquivo de planos de retentativa pendentes (default `crai/data/pix_retry_state.json`). A suíte usa isto para não escrever no estado real |
+| `CRAI_SUCCESS_FEE_PCT` | Não | Percentual do valor recuperado que a CRAI cobra (default `0.15`). Faixa [0, 1]; valor torto cai no default com aviso no log — um `.env` errado não pode parar a cobrança de todos os clientes |
+| `CRAI_CUSTO_INTERVENCAO_WHATSAPP` | Não | Custo de uma mensagem pelo bot (default `0.05`). Entra no e-Profit, que é o que decide se a CRAI age |
+| `CRAI_CUSTO_TENTATIVA_PIX` | Não | Custo por instrução reenviada ao PSP (default `0.0`). Com zero, o e-Profit é idêntico ao de antes do Sprint 5 |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -570,6 +573,12 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] O fechamento de ciclo atribui ao tenant que ABRIU o ciclo — uma confirmação de outro tenant não reatribui a recuperação, e a divergência é logada
   - [x] Comportamento **idêntico** entre tenants nesta fase: propagação e atribuição, não regra. Decisão por tenant é RBAC/produto e entra por outra porta
   - [x] `/webhooks/stripe` e o registro `[CARTAO-DESATIVADO]` também atribuídos, para o caminho já estar pronto quando o cartão voltar
+- [x] **Custo e fee configuráveis** — os parâmetros de negócio saem do código (Sprint 5)
+  - [x] `crai/config.py` — success fee, custo por canal e custo por tentativa de Pix num lugar só, lidos de env a cada chamada
+  - [x] Defaults **idênticos** aos literais anteriores: sem env configurada, demo, testes e métricas do README dão exatamente os mesmos números
+  - [x] O custo do WhatsApp deixou de estar duplicado (nó de anomalia + `INTERVENTION_COSTS`); a tabela de canais mudou de casa para `config.py`, e `INTERVENTION_COSTS` segue como o valor default
+  - [x] `CRAI_CUSTO_TENTATIVA_PIX` refina o e-Profit com o custo das tentativas que ainda cabem na janela (Gap 6). Default zero: o valor real é contratual e não é conhecido aqui
+  - [x] Env torta cai no default com aviso, e a faixa impede fee negativo ou acima de 100% — um `.env` errado não derruba a cobrança de todos os clientes
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

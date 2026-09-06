@@ -4,7 +4,7 @@ O QUE ESTE ARQUIVO EXISTE PARA PROVAR. Até o Sprint 1, `recovered` era
 inicializado `False` em `_run_involuntary_pipeline` e nenhuma linha do projeto
 o punha em `True`. As consequências não eram cosméticas:
 
-    - o success fee (`amount * SUCCESS_FEE_PCT`) nunca disparava, e ele É a
+    - o success fee (`amount * success_fee_pct()`) nunca disparava, e ele É a
       receita do modelo Outcome-as-a-Service;
     - o HubSpot nunca via o estágio `recovered`;
     - o par (features, recovered) — o dataset supervisionado que o Sprint 6
@@ -34,7 +34,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from crai.agent.main_agent import crai_agent
-from crai.agent.workflow import SUCCESS_FEE_PCT, success_fee
+from crai.agent.workflow import success_fee
+from crai.config import success_fee_pct
 from crai.api import app as app_module
 from crai.api.idempotencia import CICLOS_FECHADOS, EVENTOS_DE_FALHA
 
@@ -95,9 +96,9 @@ class TestConfirmacaoFechaOCiclo:
         assert resposta.status_code == 200, resposta.text
         corpo = resposta.json()
         assert corpo["ciclo"] == "recuperado", corpo
-        assert corpo["fee"] == pytest.approx(round(VALOR * SUCCESS_FEE_PCT, 2)), (
+        assert corpo["fee"] == pytest.approx(round(VALOR * success_fee_pct(), 2)), (
             f"fee de {corpo['fee']} sobre R$ {VALOR:.2f} — esperado "
-            f"{SUCCESS_FEE_PCT:.0%} do valor recuperado")
+            f"{success_fee_pct():.0%} do valor recuperado")
         assert _estado(rec)["recovered"] is True, (
             "o checkpoint continua dizendo que o ciclo está aberto — o "
             "webhook de confirmação não gravou o desfecho")
@@ -288,7 +289,7 @@ class TestFeeSoOndeHouveRecuperacao:
 
     def test_success_fee_e_zero_sem_recuperacao(self):
         assert success_fee(VALOR, False) == 0.0
-        assert success_fee(VALOR, True) == round(VALOR * SUCCESS_FEE_PCT, 2)
+        assert success_fee(VALOR, True) == round(VALOR * success_fee_pct(), 2)
 
     def test_confirmacao_sem_identificacao_nao_derruba_o_webhook(self, cliente):
         """Sem `id_recorrencia` nem `e2e_id` não há ciclo a fechar — mas é 200.
@@ -325,7 +326,7 @@ class TestSimulacaoDoCicloCompleto:
         assert resposta.status_code == 200, resposta.text
         corpo = resposta.json()
         assert corpo["ciclo"] == "recuperado", corpo
-        assert corpo["fee"] == pytest.approx(round(VALOR * SUCCESS_FEE_PCT, 2))
+        assert corpo["fee"] == pytest.approx(round(VALOR * success_fee_pct(), 2))
 
     def test_simulate_respeita_o_portao_de_ambiente(self, cliente, monkeypatch):
         """O endpoint move faturamento: em produção ele não existe."""

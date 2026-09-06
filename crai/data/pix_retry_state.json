@@ -4,31 +4,31 @@
     "tenant_id": "demo_tenant",
     "e2e_id": "E60701190RN_maria_001",
     "valor_original": 299.9,
-    "pix_janela_ate": "2026-09-13T07:36:14.796102",
-    "atualizado_em": "2026-09-06T07:36:14.837617",
+    "pix_janela_ate": "2026-09-13T11:28:34.102764",
+    "atualizado_em": "2026-09-06T11:28:34.146312",
     "tentativas": [
       {
         "numero": 1,
-        "quando": "2026-09-07T07:36:14.796102",
+        "quando": "2026-09-07T11:28:34.102764",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-07T08:36:15.332383",
+        "disparada_em": "2026-09-07T12:28:34.641560",
         "id_cobranca": "ch_sim_7d1a992429dcf0fb"
       },
       {
         "numero": 2,
-        "quando": "2026-09-08T07:36:14.796102",
+        "quando": "2026-09-08T11:28:34.102764",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-08T08:36:15.341379",
+        "disparada_em": "2026-09-08T12:28:34.651592",
         "id_cobranca": "ch_sim_36e9d786a16d7f18"
       },
       {
         "numero": 3,
-        "quando": "2026-09-09T07:36:14.796102",
+        "quando": "2026-09-09T11:28:34.102764",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-09T08:36:15.348889",
+        "disparada_em": "2026-09-09T12:28:34.659590",
         "id_cobranca": "ch_sim_0139cd3a09f06736"
       }
     ]
@@ -38,15 +38,15 @@
     "tenant_id": "demo_tenant",
     "e2e_id": "E60701190RN_joao_002",
     "valor_original": 149.0,
-    "pix_janela_ate": "2026-09-13T07:36:14.943830",
-    "atualizado_em": "2026-09-06T07:36:15.090559",
+    "pix_janela_ate": "2026-09-13T11:28:34.366282",
+    "atualizado_em": "2026-09-06T11:28:34.400306",
     "tentativas": [
       {
         "numero": 3,
-        "quando": "2026-09-07T07:36:14.943830",
+        "quando": "2026-09-07T11:28:34.366282",
         "valor": 149.0,
         "origem": "fallback_uniforme",
-        "disparada_em": "2026-09-07T08:36:15.332383",
+        "disparada_em": "2026-09-07T12:28:34.641560",
         "id_cobranca": "ch_sim_0a5fa25c34105ae6"
       }
     ]

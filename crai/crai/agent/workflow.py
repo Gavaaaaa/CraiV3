@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
+from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
 from .pix_codes import CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
@@ -121,6 +122,33 @@ async def diagnose_failure(state: AgentState) -> AgentState:
     }
 
 
+def _custo_previsto_do_ciclo(state: AgentState) -> float:
+    """Quanto a CRAI espera gastar para tentar recuperar este ciclo.
+
+    A mensagem personalizada é o custo certo (o canal ativo é o bot de
+    WhatsApp). O custo por instrução reenviada ao PSP entra só para Pix
+    Automático, multiplicado pelas tentativas que a janela do BACEN ainda
+    permite — recuperar na 3ª tentativa custa 3× o PSP de recuperar na 1ª, e
+    até o Sprint 5 o e-Profit ignorava isso inteiramente (Gap 6).
+
+    É uma PREVISÃO, e o nome diz: este nó roda antes de `decide_recovery`, então
+    ainda não se sabe se haverá retentativa nem quantas. Usa o teto da janela,
+    que é o pior caso — subestimar o custo faria o agente agir onde não vale.
+    O custo REALIZADO por ciclo (tentativas efetivamente disparadas) é outro
+    número, e é o que o Sprint 6 grava no log.
+
+    Com `CRAI_CUSTO_TENTATIVA_PIX` não configurada o segundo termo é zero e o
+    resultado é idêntico ao de antes deste sprint — requisito, não coincidência:
+    as métricas de e-Profit publicadas no README não podem mudar em silêncio.
+    """
+    custo = custo_intervencao()
+    if state.get("payment_method") == "pix_automatico":
+        usadas = state.get("retry_count") or 0
+        restantes = max(0, MAX_TENTATIVAS_PIX - usadas)
+        custo += custo_tentativa_pix() * restantes
+    return round(custo, 4)
+
+
 async def check_anomaly(state: AgentState) -> AgentState:
     result = await _detector.check(state["customer_id"], state["payment_event"])
 
@@ -134,7 +162,7 @@ async def check_anomaly(state: AgentState) -> AgentState:
 
     # Recalcular e-Profit com score ajustado
     ltv = state.get("ltv_estimated", state["amount"] * 6)
-    cost = 0.05  # bot_whatsapp padrão
+    cost = _custo_previsto_do_ciclo(state)
     new_eprofit = round(float(adjusted_p * ltv - cost), 2)
 
     print(f"[AGENT] Anomalia ({result['method']}): {result['is_anomaly']} | "
@@ -374,18 +402,17 @@ async def trigger_dunning(state: AgentState) -> AgentState:
     }
 
 
-# Percentual do valor recuperado que a CRAI cobra — a receita do modelo
-# Outcome-as-a-Service. Vive aqui, e só aqui, porque o fechamento do ciclo
-# acontece em DOIS lugares desde o Sprint 1: neste nó (ciclo perdido/enviado) e
-# em `_fechar_ciclo_recuperado` (crai/api/app.py), quando o webhook de
-# confirmação do PSP chega. Duas cópias do percentual divergiriam no dia em que
-# uma fosse ajustada, e a divergência apareceria como diferença de faturamento.
-SUCCESS_FEE_PCT = 0.15
-
-
 def success_fee(amount: float, recovered: bool) -> float:
-    """O que a CRAI cobra por este ciclo. Zero quando não houve recuperação."""
-    return round(amount * SUCCESS_FEE_PCT, 2) if recovered else 0.0
+    """O que a CRAI cobra por este ciclo. Zero quando não houve recuperação.
+
+    O percentual vem de `crai/config.py` desde o Sprint 5 — é parâmetro de
+    contrato, não constante de código. Esta função continua sendo o ÚNICO ponto
+    que aplica o fee, porque o ciclo fecha em dois lugares (este nó, para o
+    caso perdido/enviado, e `_fechar_ciclo_recuperado` na API, quando a
+    confirmação do PSP chega) e duas contas separadas divergiriam como
+    diferença de faturamento.
+    """
+    return round(amount * success_fee_pct(), 2) if recovered else 0.0
 
 
 async def update_roi_dashboard(state: AgentState) -> AgentState:
