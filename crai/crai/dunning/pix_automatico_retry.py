@@ -45,6 +45,27 @@ ORIGEM_PAYDAY = "payday_engine"
 ORIGEM_FALLBACK = "fallback_uniforme"
 
 
+def fim_da_janela(vencimento: datetime) -> datetime:
+    """Último instante em que o recebedor ainda pode reenviar uma instrução.
+
+    A aritmética da janela mora aqui, e só aqui. Quem precisa saber até quando
+    o contador de tentativas vale — o `AgentState`, via `pix_janela_ate` — não
+    pode recalcular `+ 7 dias` por conta própria: duas cópias da mesma regra
+    regulatória divergem no dia em que uma delas for corrigida.
+    """
+    return vencimento + timedelta(days=JANELA_DIAS)
+
+
+def inicio_da_janela(prazo_final: datetime) -> datetime:
+    """Inverso de `fim_da_janela`: recupera o vencimento que ancorou a janela.
+
+    Um segundo evento da mesma cobrança precisa continuar a janela que já
+    estava aberta, não abrir outra. Sem isto, cada novo webhook empurraria o
+    prazo mais 7 dias à frente e o limite de 3 tentativas nunca venceria.
+    """
+    return prazo_final - timedelta(days=JANELA_DIAS)
+
+
 class PixRetryPolicyViolation(Exception):
     """Agendamento violaria uma regra do BACEN para o fluxo do Recebedor."""
 

@@ -25,8 +25,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     classification_report,
-    roc_auc_score,
     confusion_matrix,
+    precision_recall_fscore_support,
+    roc_auc_score,
 )
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
@@ -48,6 +49,88 @@ INTERVENTION_COSTS = {
     "ligacao_cs": 15.00,
     "pix_boleto_link": 0.50,
 }
+
+# ── Limiar de classificação — para o RELATÓRIO, não para a decisão ──────
+#
+# ATENÇÃO ao que este número é e ao que ele não é.
+#
+# Ele **não** é a regra de decisão do pipeline. Quem decide se a CRAI age é
+# `route_after_diagnosis` (crai/agent/main_agent.py), pela regra de e-Profit:
+# age quando `p_recovery * LTV > custo da intervenção`. Medida no holdout
+# abaixo, essa regra abandona 3 clientes em 3.000 e perde **zero** recuperáveis
+# — a recall OPERACIONAL do sistema é 1,000.
+#
+# Este limiar serve só para o relatório: acurácia, precisão, recall e matriz de
+# confusão precisam de um corte binário, e o modelo devolve probabilidade.
+#
+# O 0,50 herdado era arbitrário — herança de `predict_proba` genérico, sem
+# nenhuma justificativa de negócio. Ele fazia o relatório anunciar recall 0,548
+# num sistema que na prática não abandona quase ninguém: o número descrevia o
+# corte, não a CRAI.
+#
+# ── POR QUE 0,25, E POR QUE NÃO "PORQUE MAXIMIZA F2" ────────────────────
+#
+# Uma versão anterior deste comentário afirmava que 0,25 maximiza F2. **É
+# falso, e a própria máquina desmente.** Medido em
+# `generate_dataset(n_samples=15000, seed=42)`, split `random_state=42`,
+# `test_size=0.2` → holdout de 3.000 linhas, 1.349 recuperáveis:
+#
+#     limiar  acurácia  precisão  recall      F2   recuperáveis perdidos
+#       0,50     0,643     0,616   0,548  0,5603         610 / 1349
+#       0,40     0,634     0,572   0,738  0,6972         354 / 1349
+#       0,35     0,623     0,554   0,830  0,7548         229 / 1349
+#       0,30     0,597     0,531   0,895  0,7874         141 / 1349
+#     → 0,25     0,559     0,505   0,940  0,8020          81 / 1349
+#       0,20     0,514     0,480   0,968  0,8045          43 / 1349
+#       0,15     0,486     0,467   0,990  0,8083          14 / 1349
+#
+# O F2 **cresce monotonicamente** conforme o limiar cai. Não há máximo interior
+# para escolher. E o motivo é estrutural, não ruído: com taxa base de 0,4497,
+# o classificador TRIVIAL — prever "recupera" para todo mundo — tem F2 = 0,8034,
+# a apenas 0,005 do melhor valor da tabela. **Maximizar F2 aqui seleciona o
+# classificador que não classifica.** F2 é a métrica certa para comparar dois
+# modelos; é a métrica errada para escolher um corte.
+#
+# Então o corte vem de uma REGRA DE NEGÓCIO declarada, não de um argmax:
+#
+#     o maior limiar da grade que ainda sustenta recall >= RECALL_MINIMO (0,90)
+#
+# Ler: "o relatório pode ser conservador, desde que não deixe de reconhecer
+# mais de 10% dos clientes recuperáveis". 0,30 dá 0,895 e reprova; 0,25 dá
+# 0,940 e passa. A regra está implementada em `escolher_limiar()` e um teste
+# afirma que ela devolve exatamente esta constante — se alguém mudar o número
+# sem refazer a análise, a suíte quebra.
+#
+# A acurácia CAI de 0,643 para 0,559, e isso é esperado e aceito: acurácia
+# premia acertar a classe majoritária, que é exatamente a decisão sem valor
+# comercial. O gate do plano é AUC, que não depende de limiar nenhum.
+RECALL_MINIMO = 0.90
+LIMIAR_CLASSIFICACAO = 0.25
+
+# Limiares reportados na tabela de métricas, para a banca ver o trade-off
+# inteiro em vez de um ponto escolhido a dedo.
+LIMIARES_REPORTADOS = (0.50, 0.40, 0.35, 0.30, LIMIAR_CLASSIFICACAO, 0.20, 0.15)
+
+
+def escolher_limiar(metricas_por_limiar: list[dict],
+                    recall_minimo: float = RECALL_MINIMO) -> Optional[float]:
+    """A regra de escolha do limiar do relatório, executável.
+
+    Devolve o **maior** limiar que ainda sustenta `recall >= recall_minimo`.
+
+    Existe para que a justificativa de `LIMIAR_CLASSIFICACAO` não seja um
+    parágrafo de comentário que ninguém verifica. O teste
+    `TestEscolhaDoLimiar` roda esta função sobre a varredura real e exige que
+    ela devolva a constante — trocar o número sem refazer a medição quebra a
+    suíte, que é o ponto.
+
+    Devolve `None` quando nenhum limiar da grade alcança o recall mínimo: é o
+    sinal de que a grade (ou o modelo) precisa mudar, não de que se deve
+    arredondar o critério para baixo.
+    """
+    aprovados = [m["limiar"] for m in metricas_por_limiar
+                 if m["recall"] >= recall_minimo]
+    return max(aprovados) if aprovados else None
 
 # ── Features categóricas e numéricas ─────────────────────────────────────
 CATEGORICAL_FEATURES = ["gateway_error_code", "card_brand"]
@@ -161,8 +244,15 @@ class FailureClassifier:
         # Salvar modelos
         self._save_models()
 
+        op = metrics["recall_operacional"]
         print(f"[CLASSIFIER] Treino concluído — AUC: {metrics['auc']:.3f} | "
               f"e-Profit médio (teste): R$ {metrics['avg_eprofit']:.2f}")
+        print(f"[CLASSIFIER] Limiar do relatório {LIMIAR_CLASSIFICACAO:.2f} -> "
+              f"recall {metrics['recall_recovered']:.3f}, "
+              f"acurácia {metrics['accuracy']:.3f}")
+        print(f"[CLASSIFIER] Recall OPERACIONAL (regra de e-Profit, que é quem "
+              f"decide): {op['recall']:.3f} — "
+              f"{op['recuperaveis_perdidos']} recuperável(is) perdido(s)")
 
         return metrics
 
@@ -194,7 +284,7 @@ class FailureClassifier:
         rf_proba = self.rf.predict_proba(X_test)[:, 1]
         ensemble_proba = 0.7 * xgb_proba + 0.3 * rf_proba
 
-        y_pred = (ensemble_proba >= 0.5).astype(int)
+        y_pred = (ensemble_proba >= LIMIAR_CLASSIFICACAO).astype(int)
         auc = roc_auc_score(y_test, ensemble_proba)
 
         # e-Profit médio (usando bot_whatsapp como canal padrão)
@@ -207,15 +297,68 @@ class FailureClassifier:
 
         return {
             "auc": round(auc, 4),
+            "limiar_classificacao": LIMIAR_CLASSIFICACAO,
             "accuracy": round(report["accuracy"], 4),
             "precision_recovered": round(report.get("1", {}).get("precision", 0), 4),
             "recall_recovered": round(report.get("1", {}).get("recall", 0), 4),
             "f1_recovered": round(report.get("1", {}).get("f1-score", 0), 4),
             "confusion_matrix": cm,
+            # A tabela inteira, e não só o ponto escolhido: um limiar é uma
+            # decisão de negócio, e a banca tem que poder ver o que se ganha e
+            # o que se perde ao movê-lo.
+            "metricas_por_limiar": self._varrer_limiares(y_test, ensemble_proba),
+            # A recall que importa não é a do limiar: é a da regra que o
+            # pipeline realmente usa para desistir de um cliente.
+            "recall_operacional": self._recall_operacional(
+                y_test, ensemble_proba, ltv_test, cost),
             "avg_eprofit": round(avg_eprofit, 2),
             "n_positive_eprofit": int(np.sum(eprofits > 0)),
             "n_total_test": len(y_test),
             "classification_report": report,
+        }
+
+    @staticmethod
+    def _varrer_limiares(y_test: np.ndarray, proba: np.ndarray) -> list[dict]:
+        """Acurácia / precisão / recall / F2 em cada limiar reportado."""
+        linhas = []
+        for limiar in LIMIARES_REPORTADOS:
+            pred = (proba >= limiar).astype(int)
+            precisao, recall, _, _ = precision_recall_fscore_support(
+                y_test, pred, average="binary", zero_division=0)
+            # F2 pesa recall 2x precisão — a assimetria do dunning.
+            f2 = ((5 * precisao * recall) / (4 * precisao + recall)
+                  if (precisao + recall) > 0 else 0.0)
+            linhas.append({
+                "limiar": limiar,
+                "acuracia": round(float((pred == y_test).mean()), 4),
+                "precisao": round(float(precisao), 4),
+                "recall": round(float(recall), 4),
+                "f2": round(float(f2), 4),
+                "recuperaveis_perdidos": int(((y_test == 1) & (pred == 0)).sum()),
+                "em_uso": limiar == LIMIAR_CLASSIFICACAO,
+            })
+        return linhas
+
+    @staticmethod
+    def _recall_operacional(y_test: np.ndarray, proba: np.ndarray,
+                            ltv_test: np.ndarray, cost: float) -> dict:
+        """A recall da regra que o pipeline REALMENTE usa para desistir.
+
+        `route_after_diagnosis` abandona o cliente quando o e-Profit não é
+        positivo (`p * LTV <= custo`) ou quando o score fica abaixo de 5/100.
+        Como o custo do bot é R$ 0,05 e o LTV raramente é desprezível, essa
+        regra quase nunca desiste — e é ela, não o limiar do relatório, que
+        determina quantos clientes recuperáveis a CRAI deixa passar.
+        """
+        abandonados = ((proba * ltv_test - cost) <= 0) | ((proba * 100) < 5)
+        recuperaveis = int((y_test == 1).sum())
+        perdidos = int(((y_test == 1) & abandonados).sum())
+        return {
+            "regra": "e-Profit <= 0 ou recovery_score < 5 (route_after_diagnosis)",
+            "clientes_abandonados": int(abandonados.sum()),
+            "n_total": int(len(y_test)),
+            "recuperaveis_perdidos": perdidos,
+            "recall": round(1 - perdidos / recuperaveis, 4) if recuperaveis else None,
         }
 
     # ══════════════════════════════════════════════════════════════════════

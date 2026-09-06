@@ -21,10 +21,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# A DEMO RODA EM MODO SIMULAÇÃO, e isso é uma escolha, não um descuido.
+#
+# Em produção o grafo termina no envio e o desfecho chega depois, por
+# `POST /webhooks/retention-outcome` (Sprint 4). Uma demo assim mostraria quatro
+# clientes "aguardando retorno" e nenhum resultado — não dá para demonstrar
+# retenção sem o desfecho. Com a env ligada, `track_outcome` sorteia o aceite
+# pela taxa histórica do bandit e a demo fecha o ciclo na hora.
+#
+# `setdefault` e não atribuição: quem quiser ver o comportamento de produção
+# roda `CRAI_SIMULATE_OUTCOMES=0 python test_pipeline.py` e o script respeita.
+os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
+
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
 from crai.api.app import _registrar_cartao_desativado
-from crai.churn_voluntary.voluntary_agent import voluntary_churn_agent
+from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
 
 
@@ -89,14 +101,14 @@ async def run_voluntary_scenario(name, user_id, event, props):
     print(f"\n{'═'*64}\n  CHURN VOLUNTÁRIO — {name}\n  {user_id} | evento: {event}\n{'═'*64}")
 
     initial: ChurnVoluntaryState = {
-        "user_id": user_id, "event": event, "props": props,
-        "risk_score": 0.0, "profile": "CLT", "offer_type": None,
+        "tenant_id": "demo_tenant", "user_id": user_id, "event": event, "props": props,
+        "risk_score": 0.0, "profile": "CLT", "criticality": "padrao", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
-        "offer_sent": False, "accepted": None, "retained": False, "escalated_to_human": False,
+        "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,
     }
-    config = {"configurable": {"thread_id": user_id}}
-    return await voluntary_churn_agent.ainvoke(initial, config)
+    config = {"configurable": {"thread_id": f"demo_tenant:{user_id}"}}
+    return await agente_do_modo().ainvoke(initial, config)
 
 
 async def main():
@@ -132,8 +144,10 @@ async def main():
          {"on_site_now": True, "billing_profile": "PJ"}),
         ("Inatividade Prolongada",      "usr_diego_013",  "Session Started",
          {"days_since_last": 18, "features_used_30d": 1, "on_site_now": False, "billing_profile": "freelancer"}),
-        ("Risco Crítico (>=0.90)",      "usr_lara_014",   "Cancellation Page Viewed",
-         {"on_site_now": False, "billing_profile": "PJ"}),
+        # Único cenário com telefone: é o que exercita o canal WhatsApp do
+        # Sprint 3. Os outros três cobrem popup e e-mail.
+        ("Risco Crítico (>=0.90) — WhatsApp", "usr_lara_014", "Cancellation Page Viewed",
+         {"on_site_now": False, "billing_profile": "PJ", "phone": "+55 11 91234-5678"}),
     ]
     voluntary_results = []
     for name, uid, event, props in voluntary_scenarios:
@@ -162,11 +176,32 @@ async def main():
     print(f"   Recobranças automáticas : 0 (código isolado em dunning/legacy_card/)")
 
     retained = sum(1 for r in voluntary_results if r.get("retained"))
-    escalated = sum(1 for r in voluntary_results if r.get("escalated_to_human"))
+    criticos = sum(1 for r in voluntary_results if r.get("is_critical"))
+    # O invariante de produto, medido em vez de afirmado: nenhum resultado pode
+    # sair do grafo carregando escalação humana. `consulta_cs` e
+    # `escalated_to_human` deixaram de existir no Sprint 1 — esta linha reprova
+    # a demo se algum dia voltarem.
+    escalados = sum(1 for r in voluntary_results
+                    if r.get("escalated_to_human") or r.get("offer_type") == "consulta_cs")
+    assert escalados == 0, f"INVARIANTE VIOLADO: {escalados} escalação(ões) humana(s)"
     print(f"\n📈 Churn Voluntário:")
     print(f"   Sinais de risco processados : {len(voluntary_results)}")
     print(f"   Clientes retidos             : {retained}/{len(voluntary_results)}")
-    print(f"   Escalados para CS humano     : {escalated}/{len(voluntary_results)}")
+    canais = {}
+    for r in voluntary_results:
+        if r.get("channel"):
+            canais[r["channel"]] = canais.get(r["channel"], 0) + 1
+    distribuicao = ", ".join(f"{c}: {n}" for c, n in sorted(canais.items()))
+    print(f"   Sinalizados como críticos    : {criticos}/{len(voluntary_results)} (tom ajustado)")
+    print(f"   Canais escolhidos            : {distribuicao}")
+    print(f"   Escalações para humano        : 0/{len(voluntary_results)} (invariante verificado)")
+
+    # O dataset de treino, medido em vez de prometido. Em produção estes ciclos
+    # ficariam "aguardando" até o webhook de desfecho; aqui a demo os fecha.
+    from crai.churn_voluntary.retention_log import estatisticas
+    st = estatisticas()
+    print(f"   Ciclos no dataset de treino  : {st['total']} "
+          f"({st['com_desfecho']} com desfecho, {st['aguardando']} aguardando)")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 

@@ -1,0 +1,162 @@
+SPRINT 5 (churn voluntário) — isolamento por tenant no aprendizado
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: 6fa4ee3 (fim do Sprint 4)
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+
+O DEFEITO
+================================================================================
+
+`self.state` do bandit era `{profile: {offer: {α,β}}}` — GLOBAL. Todas as
+empresas clientes da CRAI dividiam o mesmo posterior: uma SaaS jurídica ensinava
+a CRAI sobre a base de uma SaaS de e-commerce, e o que saía era uma média que
+não servia a nenhuma das duas. O mesmo valia para o `_channel_history`
+(chaveado só por `user_id`, que colide entre empresas) e para o `thread_id` do
+checkpoint.
+
+Agora é `{tenant: {profile: {offer: {α,β}}}}` e o `tenant_id` atravessa a
+cadeia inteira: borda da API → estado do grafo → bandit → histórico de canal →
+`thread_id` do checkpoint → dataset de treino → negócio do HubSpot.
+
+
+AS ASSINATURAS MUDARAM, E `tenant_id` É POSICIONAL
+================================================================================
+
+    choose_offer(tenant_id, profile, risk_score, mrr=None)
+    record_outcome(tenant_id, profile, offer, accepted)
+    conversion_rates(tenant_id, profile)
+
+Posicional de propósito, sem default: um default silencioso deixaria uma chamada
+esquecida escrevendo no tenant errado SEM ERRO NENHUM — o pior desfecho possível
+numa camada de isolamento. Assim, esquecer é `TypeError` na hora.
+`test_chamada_sem_tenant_falha_alto` trava isso, e `test_ordem_dos_parametros`
+trava a ordem.
+
+Todas as chamadas foram atualizadas no mesmo commit, como o plano exigia: 3 em
+`voluntary_agent.py` (nó de oferta, desfecho simulado, desfecho real) e as dos
+testes.
+
+
+A BORDA
+================================================================================
+
+O tenant chega por header `x-tenant-id` ou pelo campo `tenant_id` do corpo — o
+header vence. Vale para os três caminhos: `/webhooks/segment`,
+`/simulate/churn-risk` e `/webhooks/retention-outcome`.
+
+    ausente                  -> default_tenant   (MVP declarado)
+    "acme", "acme-corp"      -> 200
+    "acme.com.br", UUID      -> 200
+    "com espaço"             -> 422
+    "com:dois_pontos"        -> 422
+    "acentuação"             -> 422
+    65 caracteres            -> 422
+    "default_tenant"         -> 422  (reservado)
+
+AUSENTE CAI NO DEFAULT; DECLARADO E TORTO É 422. A distinção é o ponto: cair no
+default em silêncio fundiria o aprendizado de quem TENTOU se identificar com o
+de todo mundo que não se identificou — exatamente o vazamento que a camada
+existe para impedir. Errar alto é a única leitura correta.
+
+O literal `default_tenant` é recusado vindo de fora: é o balde do "não
+declarado", e ninguém deve poder entrar nele de propósito.
+
+Formato `[A-Za-z0-9._-]{1,64}`. O `:` está proibido porque a chave do
+`_channel_history` é `f"{tenant}:{user}"` — um `:` no tenant tornaria a chave
+ambígua. Slug e UUID, que é o que um tenant realmente é, cabem folgados.
+
+NOTA DE TESTE: os casos não-ASCII são exercidos pelo CORPO, não pelo header.
+Header HTTP é latin-1 por especificação e um cliente real nem consegue ENVIAR
+`x-tenant-id: acentuação` — a codificação falha antes de sair da máquina dele.
+O caminho alcançável para esses valores é o JSON, e é ele que recusa.
+
+
+RETROCOMPATIBILIDADE — e um bug que os testes acharam
+================================================================================
+
+Arquivo no formato pré-tenant migra inteiro para `default_tenant`, sem erro e
+sem perder observação. Medido no arquivo REAL do projeto:
+
+    antes  {"CLT": {...}, "PJ": {...}, "freelancer": {...}}
+    depois {"default_tenant": {"CLT": ..., "PJ": ..., "freelancer": ...},
+            "demo_tenant":    {...}}                    <- criado pela demo
+    log    [BANDIT] Estado no formato pré-tenant — migrando para 'default_tenant'
+           [BANDIT] Posteriores carregados (458 observações em 1 tenant(s))
+
+>>> BUG ENCONTRADO PELOS TESTES EXISTENTES, no meu próprio detector.
+
+A primeira versão de `_e_formato_antigo` olhava se o TERCEIRO nível tinha
+`alpha`/`beta`. Os testes de posterior malformado do Sprint 1
+(`test_load_sobrevive_a_posterior_malformado`) reprovaram com `KeyError:
+'default_tenant'` em dois casos:
+
+    {"CLT": {"desconto_10": {"alpha": 1.0}}}   <- sem beta
+    {"CLT": {"desconto_10": [10, 12]}}         <- formato de tupla
+
+Os dois eram lidos como formato NOVO, criando um tenant chamado `CLT`. Ou seja:
+um arquivo antigo LEVEMENTE corrompido dividiria o aprendizado de um cliente em
+dois baldes, em silêncio — o defeito exato que a camada de tenant existe para
+impedir, causado por quem devia impedi-lo.
+
+A correção troca o discriminador para o SEGUNDO nível de chaves, que é exato
+porque os dois vocabulários são fechados e DISJUNTOS:
+
+    formato antigo   bruto[perfil] -> chaves em OFFERS
+    formato novo     bruto[tenant] -> chaves em PROFILES
+
+Contar chaves de vocabulário fechado sobrevive a qualquer lixo abaixo delas.
+Sem sinal nas chaves internas, decide pelo nome do topo. Travado por
+`test_formato_antigo_corrompido_ainda_migra`, com os cinco casos.
+
+
+PROPAGAÇÃO PONTA A PONTA
+================================================================================
+
+    _channel_history   chave composta `f"{tenant}:{user}"` via `chave_de_canal()`
+                       — uma função só, para os três consumidores não divergirem
+    thread_id          `f"{tenant}:{user}"` — dois clientes de empresas
+                       diferentes com o mesmo `user_id` dividiam o checkpoint.
+                       É o P0-6 um nível acima
+    retention_log      a coluna `tenant_id` existia desde o Sprint 4 gravando
+                       `default_tenant` para todo mundo; agora carrega o real
+    HubSpot            `tenant_id` entra como propriedade do deal em
+                       `register_retention_cycle`. `register_recovery_cycle`
+                       (involuntário) NÃO foi tocado
+
+Medido: dois eventos com `userId="joao"`, um por tenant, produzem DUAS entradas
+de histórico de canal e duas linhas de dataset. E o desfecho do tenant A fecha
+só o ciclo do tenant A — o do B continua aberto e o posterior do B não se move.
+
+
+DUAS COISAS QUE A SUÍTE PEGOU
+================================================================================
+
+1. `fake_voluntary` em `test_webhook_security.py` era um dublê com assinatura
+   fixa e quebrou com o parâmetro novo. Ganhou `**kwargs`: o que aquele fixture
+   mede é QUEM foi chamado, não com o quê.
+
+2. A asserção da A1-r10 sobre `_channel_history` fixava `chave.startswith(
+   "user:")`, e a chave virou composta. Passou a procurar o segmento `:user:` —
+   o teste volta a exercer o INVARIANTE em vez da string, que foi a lição da
+   própria A1-r9.
+
+3. A catraca do N-12 acusou 24 contra 23: um emoji na lista de tenants
+   inválidos do teste novo. Trocado por `"tenant#hash"`, que cobre a mesma
+   regra sem custo de encoding. `"acentuação"` continua cobrindo não-ASCII e é
+   representável em cp1252. Contribuição líquida: ZERO, como nos quatro
+   sprints anteriores.
+
+E uma que eu mesmo introduzi e a suíte expôs: `va._bandit` é global do MÓDULO, e
+sem reset um teste herda os posteriores que outro moveu — uma asserção sobre
+isolamento vira uma asserção sobre ordem de execução. A fixture do arquivo novo
+reseta o estado e o restaura no teardown.
+
+
+GATES
+================================================================================
+
+    pytest tests/test_tenant_isolation_voluntary.py -v  →  44 passed
+    pytest tests/ -q                                    → 624 passed (baseline 580)
+    python test_pipeline.py                             →   exit 0
+
+Demo: `[WHATSAPP] tenant=demo_tenant -> *********5678: ...` — o tenant chega até
+o sender, que já recebia o parâmetro desde o Sprint 3 sem ter o que pôr nele.

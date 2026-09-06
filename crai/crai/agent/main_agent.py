@@ -105,6 +105,37 @@ def build_crai_graph() -> StateGraph:
     graph.add_edge("trigger_dunning", "update_dashboard")
     graph.add_edge("update_dashboard", END)
 
+    # ⚠️ O contador de tentativas do BACEN mora AQUI, e só aqui.
+    #
+    # `MemorySaver` guarda o checkpoint em RAM, no processo. Isso tem três
+    # consequências que precisam estar escritas, e não descobertas depois:
+    #
+    #   1. Dois processos (dois workers do uvicorn, dois pods) têm memórias
+    #      separadas. O mesmo `id_recorrencia` atendido por workers diferentes
+    #      recebe 3 tentativas de cada um: 6 na mesma janela de 7 dias, contra
+    #      o limite de 3. A CRAI hoje só é correta rodando em UM processo.
+    #   2. Reiniciar o serviço zera o contador de todo mundo. Uma janela do
+    #      BACEN dura 7 dias; nenhum deploy nesse intervalo pode acontecer sem
+    #      reabrir o direito a 3 novas tentativas que já foram gastas.
+    #   3. `pix_janela_ate` (ver crai/agent/state.py) sofre do mesmo mal: a
+    #      marca de expiração da janela some junto com o contador.
+    #
+    # É dívida ASSUMIDA para a demo, não descuido: a POC roda em processo
+    # único, e trocar o checkpointer por um persistente (`SqliteSaver` /
+    # `PostgresSaver`, que o LangGraph já oferece com a mesma interface) é uma
+    # linha aqui mais uma migração — trabalho de produção, não de banca.
+    #
+    # CORREÇÃO DA AUDITORIA A1-r6: a versão anterior deste comentário terminava
+    # dizendo que "o limite regulatório é garantido pelo processo". Era falso, e
+    # de um jeito que importa: dentro de UM processo, N entregas simultâneas do
+    # mesmo `id_recorrencia` agendavam 3×N tentativas (medido: 6 e 9), porque o
+    # `ainvoke` lê o checkpoint na entrada e grava nó a nó, com `await` no meio.
+    # Trocar o checkpointer não consertaria isso — um `SqliteSaver` sem
+    # transação serializada tem a mesma corrida. O que consertou foi a trava por
+    # `thread_id` em `_run_involuntary_pipeline` (crai/api/app.py).
+    #
+    # O que vale hoje, com precisão: o limite é garantido DENTRO de um processo,
+    # pela trava; ENTRE processos não há nada, pelo motivo (1) acima.
     return graph.compile(checkpointer=MemorySaver())
 
 

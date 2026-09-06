@@ -1,0 +1,92 @@
+SPRINT 2 (churn voluntário) — 🔴 `mrr` cru de webhook assinado devolvia HTTP 500
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: 730205b (fim do Sprint 1)
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+Achado colateral, encontrado ao implementar o Sprint 2: a criticidade lê `mrr`,
+e ao ler descobri que ninguém validava a FORMA desse campo em lugar nenhum.
+
+
+O DEFEITO
+================================================================================
+
+`voluntary_agent.choose_offer` passava `state["props"].get("mrr")` cru para o
+bandit, e lá dentro o valor entra em aritmética:
+
+    offer_bandit.py:186   ltv_retido = MESES_LTV_RETIDO * mrr
+    offer_bandit.py:63-65 0.10 * 3 * mrr,  0.20 * 3 * mrr,  1.0 * mrr
+
+`props` é payload bruto de terceiro. A borda do `/webhooks/segment` validava a
+forma de `userId`, `anonymousId`, `event`, `properties` e `billing_profile` —
+`mrr` passava direto. Um `mrr: "2500"` sobrevive ao `6 * "2500"` (repetição de
+string!) e só estoura uma linha depois, no `float × str`.
+
+É a mesma família do P0-1 e do P0-5 da A1: campo não validado na borda que
+derruba um nó do grafo camadas abaixo, a partir de request ASSINADO.
+
+
+MEDIÇÃO — ANTES (730205b)
+================================================================================
+
+Webhook `/webhooks/segment` com assinatura HMAC-SHA1 VÁLIDA, evento legítimo,
+variando só a forma do `mrr`:
+
+    mrr='2500'       -> HTTP 500
+    mrr=[2500]       -> HTTP 500
+    mrr={'v': 1}     -> HTTP 500
+
+O log mostra o pipeline entrando normalmente antes de estourar:
+
+    [CHURN-VOL] user:usr_mrr | evento: Cancellation Page Viewed | risco: 0.90
+                | perfil: PJ | criticidade: critico
+    -> 500
+
+Ou seja: risco calculado, criticidade classificada, e o 500 acontece na escolha
+da oferta. Em produção, com o CRM ligado, o negócio já teria sido criado no
+HubSpot antes do erro — o mesmo desfecho que a A1 descreveu no
+`/simulate/churn-risk`.
+
+
+MEDIÇÃO — DEPOIS
+================================================================================
+
+    mrr='2500'       -> HTTP 200
+    mrr=[2500]       -> HTTP 200
+    mrr={'v': 1}     -> HTTP 200
+    mrr=4200.0       -> HTTP 200      (caminho válido intacto)
+    mrr=None         -> HTTP 200      (evento sem plano, como antes)
+
+
+A CORREÇÃO
+================================================================================
+
+Uma linha em `choose_offer`, usando o helper que o próprio Sprint 2 já precisava
+criar para a criticidade:
+
+    -   mrr = state["props"].get("mrr")
+    +   mrr = mrr_utilizavel(state["props"].get("mrr"))
+
+`mrr_utilizavel` (risk_scorer.py) devolve `float` para número finito e não
+negativo, e `None` para todo o resto: texto, lista, dict, bool, `inf`/`NaN` e
+inteiro grande demais para virar float. Sem número utilizável o bandit cai no
+`MRR_TIPICO` do perfil — que é exatamente o que ele já fazia quando o evento não
+trazia plano nenhum. O caminho numérico válido não muda em nada.
+
+A assinatura de `OfferBandit.choose_offer` NÃO foi tocada: o Sprint 5 vai mexer
+nela para receber `tenant_id`, e antecipar mudança de assinatura aqui só criaria
+conflito. A defesa fica no nó do grafo, na borda do bandit.
+
+TEXTO É RECUSADO DE PROPÓSITO. `"10,000"` é dez mil em en-US e dez em pt-BR, e o
+evento do Segment não declara locale. Adivinhar rebaixaria um cliente de
+R$ 10.000 para o tom padrão EM SILÊNCIO — o mesmo defeito que a A1 mediu no
+valor de cobrança. O parser que resolve isso direito existe
+(`payment_gateway._para_float`), mas mora no lado involuntário; promovê-lo a
+helper compartilhado é uma frente própria, não efeito colateral deste sprint.
+
+
+TRAVAS
+================================================================================
+
+    test_mrr_ilegivel_nao_derruba_a_escolha_de_oferta   (regressão)
+    test_mrr_numerico_continua_chegando_ao_bandit       (catraca do caminho válido)
+    test_mrr_inutilizavel_nao_quebra_e_nao_promove      (11 formas, parametrizado)
+    test_mrr_numerico_em_texto_nao_promove_por_engano   (fixa o custo declarado)

@@ -1,0 +1,121 @@
+SPRINT 1 (churn voluntário) — AUTONOMIA TOTAL: medição antes/depois
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: b38ba72
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+Método do "ANTES": as mudanças do Sprint 1 saíram da árvore com `git stash push`
+sobre os 5 arquivos alterados, mantendo o script de medição. O código medido é
+o de b38ba72.
+
+
+================================================================================
+ANTES (b38ba72)
+================================================================================
+
+[1] choose_offer devolve o braço de escalação humana?
+    Varredura: 3 perfis × risco 0.00→1.00 em passos de 0.05, OfferBandit(seed=42),
+    cold start (priors de benchmark).
+
+    perfil=CLT         riscos que devolveram consulta_cs:
+        [0.0, 0.1, 0.15, 0.35, 0.45, 0.55, 0.8, 0.85, 0.9, 0.95, 1.0]      11/21
+    perfil=PJ          riscos que devolveram consulta_cs:
+        [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.45, 0.5, 0.6, 0.65, 0.7, 0.8,
+         0.9, 0.95, 1.0]                                                   15/21
+    perfil=freelancer  riscos que devolveram consulta_cs:
+        [0.35, 0.65, 0.8, 0.9, 0.95, 1.0]                                   6/21
+
+    >>> ACHADO. A escalação NÃO estava contida no atalho `risk_score >= 0.90`.
+        O atalho garantia 9 pontos (3 perfis × 0.90, 0.95, 1.00). Os outros 23
+        vieram do próprio Thompson Sampling, que escolhia o braço humano em risco
+        baixo e médio — inclusive em 0.0.
+
+        Por quê: `consulta_cs` custava R$ 250 FIXOS enquanto os outros braços
+        custam percentual do MRR, e trazia um prior de aceitação alto. Em PJ
+        (MRR típico 550 → LTV retido 3300) o braço humano DOMINAVA o e-Profit
+        `p × LTV_retido − custo` pela média — 0.706×3300−250 = 2080, contra
+        1417 do desconto_20 e 1550 da pausa —, o que explica os 15/21. Em CLT e
+        freelancer ele perdia na média por pouco e ganhava na amostragem: prior
+        mais estreito (n=12 contra n=22 do desconto_20) significa posterior mais
+        largo, que às vezes amostra alto. É a exploração do bandit funcionando
+        como projetada — em cima de um braço que nunca deveria ter existido.
+
+        Total medido: 32 dos 63 pontos escalavam para humano, contra os 9 que a
+        docstring do método declarava ("risco crítico >= 0.90"). O invariante de
+        produto estava sendo violado em mais que o triplo do que o código dizia.
+
+[2] Schema do estado (ChurnVoluntaryState.__annotations__)
+        escalated_to_human presente: True
+        is_critical presente       : False
+
+[3] is_critical_risk
+        ImportError: cannot import name 'is_critical_risk' from
+        'crai.churn_voluntary.offer_bandit'
+
+[4] Vocabulário da oferta extinta
+        consulta_cs em OFFERS       : True
+        consulta_cs em OFFER_LABELS : True
+        consulta_cs em SEED_PRIORS  : True (nos 3 perfis)
+        offer_cost('consulta_cs')   : 250.0
+
+[5] send_offer com offer_type="consulta_cs"
+        campo escalated_to_human presente: True | valor: True
+
+[6] Estado persistido (models/bandit_state.json, fora do repositório)
+        98,4 KB · 10 chaves de topo: CLT, PJ, freelancer + 7 perfis gravados por
+        fuzz de webhook ("299,90", "abc", "", "null", inteiro de 400 dígitos,
+        "10,000", "XXXX…"). O braço humano acumulava 732 observações:
+        CLT α=372/β=258 (628 obs), PJ α=80/β=16 (94), freelancer α=7/β=5 (10).
+
+
+================================================================================
+DEPOIS (Sprint 1 aplicado)
+================================================================================
+
+[1] choose_offer
+        Nenhum dos 63 pontos (3 perfis × 21 riscos) devolve consulta_cs, e toda
+        oferta devolvida está em OFFERS.
+        Travado por test_nunca_oferece_consulta_cs.
+
+[2] Schema
+        escalated_to_human: ausente · is_critical: bool
+
+[3] is_critical_risk(0.89)=False · is_critical_risk(0.90)=True · CRITICAL_RISK_THRESHOLD=0.90
+
+[4] Vocabulário
+        consulta_cs fora de OFFERS, OFFER_LABELS, SEED_PRIORS e offer_cost
+        (offer_cost levanta KeyError). As 4 ofertas restantes têm prior, rótulo
+        e custo nos 3 perfis.
+
+[5] send_offer devolve {"offer_sent": True} — o campo não existe mais, nem False.
+
+[6] Estado persistido, após o primeiro `python test_pipeline.py` com o código novo
+        98,4 KB → 930 bytes · 3 perfis × 4 ofertas
+        Log da primeira execução:
+          [BANDIT] Saneamento descartou: 7 perfil(is) fora de [...],
+                   3 oferta(s) fora de [...], 0 posterior(es) malformado(s)
+        Segunda execução: nada a descartar, nenhum log de saneamento.
+        As 732 observações de consulta_cs foram DESCARTADAS, não redistribuídas:
+        elas mediam a aceitação de uma oferta que ninguém mais pode receber, e
+        diluí-las nos outros braços inventaria evidência que nunca houve.
+
+
+================================================================================
+GATES
+================================================================================
+
+    pytest tests/test_voluntary_autonomy.py -v   → 17 passed
+    pytest tests/ -q                             → 458 passed (baseline: 441)
+    python test_pipeline.py                      → OK
+
+Nota sobre o caminho: o plano do sprint escrevia `pytest crai/tests/`. Os testes
+deste repositório estão em `crai/tests/` a partir da RAIZ do repo — ou seja,
+`tests/` a partir de `D:\PTI\crai`. Não existe `crai/crai/tests/`.
+
+Resumo do voluntário na demo:
+    Sinais de risco processados : 4
+    Clientes retidos            : 3/4
+    Sinalizados como críticos   : 2/4 (tom ajustado)
+    Escalações para humano      : 0/4 (invariante verificado)
+
+Nenhuma ocorrência de "consulta_cs" ou "escalated_to_human" na saída do pipeline
+(grep -ci em ambos: 0). O cenário "Risco Crítico (>=0.90)" (usr_lara_014, PJ)
+passou a receber desconto_20 por Thompson Sampling, com P(aceite) 52,9%.

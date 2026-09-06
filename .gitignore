@@ -7,7 +7,9 @@ build/
 *.egg
 
 # Modelos treinados (regeneraveis via train())
-crai/models/
+# Padrao com /* (e nao com /) porque o git nao reabre um diretorio ignorado:
+# a excecao abaixo so funciona se o diretorio em si nao estiver ignorado.
+crai/models/*
 # ...exceto a calibracao: e um punhado de numeros medidos sobre a amostra real,
 # nao um binario. Precisa estar no clone limpo, senao a demo cai em
 # [SYNTH] MODO NAO-CALIBRADO na frente da banca.
@@ -21,6 +23,12 @@ crai/data/real/
 crai/data/synthetic/
 # Pacote de modelos da demo (gerado no Sprint 4)
 crai/models_demo.tar.gz
+# Log de ciclos de retencao — e o DATASET de treino do churn voluntario, e
+# carrega dado de cliente real (mrr, uso, desfecho). Nunca versionar: o
+# formato esta documentado em churn_voluntary/README_treino.md e o arquivo se
+# regenera sozinho a cada ciclo.
+crai/data/retention_cycles.db
+crai/data/retention_cycles.db-journal
 
 # Logs de auditoria SHAP (regeneraveis)
 crai/logs/
@@ -53,3 +61,9 @@ relatorio_*.txt
 # Cobertura
 .coverage
 htmlcov/
+
+# Config local do Claude Code — permissões e preferências da máquina de quem
+# está rodando, não do projeto. settings.local.json em particular é pessoal
+# por convenção (mesmo espírito de um .env.local); não deve ir para um repo
+# compartilhado.
+.claude/

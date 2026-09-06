@@ -5,6 +5,10 @@ from typing import TypedDict, Optional
 
 class ChurnVoluntaryState(TypedDict):
     # Input (do Segment SDK)
+    # Empresa cliente da CRAI. Separa o aprendizado do bandit e a memória de
+    # canal entre clientes diferentes — sem isto, uma SaaS jurídica ensinaria a
+    # CRAI sobre a base de uma SaaS de e-commerce.
+    tenant_id:  str
     user_id:    str
     event:      str           # Cancellation Page Viewed | Downgrade Clicked | Session Started
     props:      dict          # payload bruto do evento
@@ -12,12 +16,16 @@ class ChurnVoluntaryState(TypedDict):
     # Risco
     risk_score: float
     profile:    str           # CLT | PJ | freelancer
+    # Tom da mensagem, não desvio de fluxo: risco crítico sai com tom de alto
+    # cuidado. Nunca aciona humano.
+    is_critical: bool
+    criticality: str          # critico | alto | padrao
 
     # Oferta (Multi-Armed Bandit)
     offer_type: Optional[str]
 
     # Canal (LangGraph — roteamento com memória de histórico)
-    channel:       Optional[str]   # popup | email | sms
+    channel:       Optional[str]   # popup | email | whatsapp
     on_site_now:   bool
     prior_channel_success: Optional[str]
 
@@ -28,4 +36,3 @@ class ChurnVoluntaryState(TypedDict):
     offer_sent: bool
     accepted:   Optional[bool]
     retained:   bool
-    escalated_to_human: bool

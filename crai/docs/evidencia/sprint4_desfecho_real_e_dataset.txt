@@ -1,0 +1,196 @@
+SPRINT 4 (churn voluntário) — desfecho real, topologia nova e o dataset de treino
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: c02beb0 (fim do Sprint 3)
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+
+O DEFEITO CENTRAL
+================================================================================
+
+`track_outcome` decidia o aceite com `random.random()` e alimentava o posterior
+do bandit com isso. O sistema aprendia com uma moeda: cada rodada da demo movia
+α/β do `bandit_state.json` — o mesmo arquivo que o pipeline usa para escolher
+oferta de cliente de verdade.
+
+
+A TOPOLOGIA MUDOU (não é só uma função editada)
+================================================================================
+
+    PRODUÇÃO (default)
+        assess_risk → choose_offer → choose_channel
+            → generate_message → send_offer → update_crm → END
+
+    SIMULAÇÃO (CRAI_SIMULATE_OUTCOMES == "1")
+        ... send_offer → track_outcome → update_crm → END
+
+Em produção `accepted` fica None ao fim do grafo — "aguardando retorno", não
+"recusou". A diferença importa para o CRM e para o dataset.
+
+Por que topologia e não um `if` dentro do nó: um `track_outcome` que às vezes
+não faz nada continua sendo um nó no caminho, e o desenho do grafo — que é o
+que se lê para entender o sistema — mentiria sobre onde o fluxo termina.
+Travado por `test_topologias_sao_de_fato_diferentes`, que inspeciona os nós dos
+dois grafos compilados.
+
+DECISÃO DE ENGENHARIA: os DOIS grafos são compilados no import e o modo é lido
+a cada chamada (`agente_do_modo()`). Compilar só o da env congelaria o modo no
+carregamento do módulo — `test_pipeline.py` teria de setar a env antes do
+primeiro import de qualquer módulo `crai`, e a suíte não conseguiria exercitar
+os dois modos na mesma sessão, porque o módulo é importado uma vez por
+processo. É o mesmo padrão de `limiar_de_alto_valor()` e `_assinatura()`: env
+lida no uso, não no import.
+
+Só o literal `"1"` liga a simulação. `"true"`, `"sim"` e `" "` são produção —
+um modo que aprende com dado inventado não pode ser ligado por erro de
+digitação. Travado por `test_so_o_literal_1_liga_a_simulacao`.
+
+
+O WEBHOOK
+================================================================================
+
+`POST /webhooks/retention-outcome`, HMAC-SHA1 no formato do Segment, com
+SEGREDO PRÓPRIO (`RETENTION_OUTCOME_WEBHOOK_SECRET`): quem envia é o backend do
+cliente, não o Segment, e duas origens não dividem credencial. Fail closed —
+sem o segredo no ambiente, 401 em tudo.
+
+`verify_segment_signature` foi refatorado para `_verify_sha1_hmac(..., origem)`
+com o comportamento idêntico; os 82 testes de `test_webhook_security.py`
+continuam verdes.
+
+A BORDA VALIDA VOCABULÁRIO, não só tipo:
+
+    sem assinatura        -> 401     assinatura errada     -> 401
+    profile="abc"         -> 422     profile=""            -> 422
+    profile="299,90"      -> 422     offer_type="consulta_cs" -> 422
+    accepted="true"       -> 422     accepted=1            -> 422
+    user_id=""            -> 422     user_id ausente       -> 422
+    válido                -> 200 {"status":"contabilizado"}
+    REENVIO               -> 200 {"status":"ignorado"}
+
+`profile` e `offer_type` viram CHAVE de dicionário dentro do bandit, e
+`record_outcome` aceita qualquer string e persiste — foi assim que perfis como
+`""` e `"299,90"` entraram no `bandit_state.json` real. O Sprint 1 saneou a
+LEITURA; esta borda fecha a ESCRITA, que é onde o lixo nasce.
+
+`accepted` exige `bool` de verdade porque `"false"` é string não-vazia, logo
+`True` em Python: aceito, registraria aceite onde houve recusa e o bandit
+aprenderia o oposto do que aconteceu.
+
+
+DEDUPLICAÇÃO — sai de graça do dataset
+================================================================================
+
+O plano sugeria memória curta em RAM de `(user_id, offer_type)`. Foi feito pelo
+`retention_log`: a linha do ciclo registra se já tem desfecho, então
+`registrar_desfecho` devolve False no reenvio e o bandit não é tocado. Melhor
+que RAM por um motivo prático — SOBREVIVE A RESTART, que é exatamente quando um
+reenvio acontece.
+
+Medido: três envios idênticos → contabilizado, ignorado, ignorado, com α parado
+no valor do primeiro. Reenvio devolve 200, não 4xx: um erro faria o cliente
+retentar para sempre o que já foi processado.
+
+Desfecho órfão (oferta que este sistema nunca fez) também é ignorado — aprender
+com ele seria aprender com dado de origem desconhecida.
+
+
+O DATASET DE TREINO (acréscimo ao plano, aprovado)
+================================================================================
+
+Sem isto o sistema aprende e esquece: o `bandit_state.json` guarda α/β, que é
+um PLACAR agregado por (perfil × oferta), não um conjunto de dados. As features
+que produziram a decisão não sobreviviam ao nó do grafo, e o `MemorySaver`
+morre no restart. Rodar três meses e querer treinar daria α/β e nenhuma linha.
+
+`churn_voluntary/retention_log.py`, SQLite em `data/retention_cycles.db`
+(gitignored). Uma linha por ciclo:
+
+    X   event, days_since_last, features_used_30d, mrr, billing_profile,
+        on_site_now
+    contexto  risk_score, profile, criticality, offer_type, channel, offer_sent
+    y   accepted (NULL enquanto aberto), desfecho_em, origem_desfecho
+    chave  tenant_id (já gravado; o Sprint 5 é quem o preenche de verdade)
+
+SQLITE E NÃO PARQUET: a segunda escrita é um UPDATE numa linha gravada antes,
+possivelmente dias depois e em outro processo. Parquet é imutável por arquivo.
+`sqlite3` é stdlib, aceita `pandas.read_sql`, e sobra para o volume de um TCC.
+
+O CAMINHO DE RISCO BAIXO TAMBÉM GRAVA, com `offer_type` nulo. São os clientes
+que o sistema decidiu NÃO abordar. Sem eles o dataset só teria quem passou pelo
+corte de 0.60, e um modelo treinado nisso aprenderia sobre a população que ele
+mesmo selecionou. O viés não desaparece — não há desfecho para quem não recebeu
+oferta —, mas com as linhas gravadas ele fica MENSURÁVEL em vez de invisível.
+Vai documentado no README_treino.md (Sprint 6), junto com o fato de que o label
+atual é ACEITAÇÃO DE OFERTA, não churn real.
+
+O log é o primeiro consumidor de si mesmo: o webhook não carrega `risk_score`,
+`event` nem `channel`, e o HubSpot precisa deles — saem da linha do ciclo.
+
+NUNCA LEVANTA. `test_falha_de_escrita_nao_derruba_o_ciclo` monkeypatcha o
+`_conectar` para estourar e o webhook do Segment ainda devolve 200: perder uma
+linha de dataset é ruim; derrubar o ciclo de retenção de um cliente por causa
+do disco é pior.
+
+
+DUAS CATRACAS DO REPOSITÓRIO PEGARAM ESTE SPRINT — as duas estavam certas
+================================================================================
+
+1. `test_webhook_security.py::test_o_historico_de_canal_nao_e_compartilhado`
+   reprovou com `assert 0 == 2`. Não era a refatoração da assinatura: é que o
+   teste sempre dependeu do desfecho SIMULADO (o `random.random -> 0.0` que ele
+   mesmo força), e esse caminho deixou de ser o default. Corrigido tornando o
+   modo explícito (`monkeypatch.setenv("CRAI_SIMULATE_OUTCOMES", "1")`) — e o
+   invariante da A1-r10 ganhou cobertura no caminho NOVO, em
+   `test_identidades_distintas_nao_se_misturam`. A regra não perdeu proteção
+   por ter mudado de lugar.
+
+2. `test_encoding_saida.py` (N-12) reprovou com 25 ocorrências contra 23: o
+   `print` novo do desfecho duplicava os emoji ✅/❌ do `track_outcome`. A regra
+   do arquivo é que o inventário SÓ PODE DESCER, então a linha nova saiu em
+   ASCII em vez de declarar mais duas. Contribuição líquida deste sprint para o
+   N-12: ZERO, como nos três anteriores.
+
+
+CAUSA RAIZ FECHADA: tests/conftest.py
+================================================================================
+
+A demo acusou 169 ciclos no dataset depois de uma rodada da suíte. Mesma porta
+pela qual o `bandit_state.json` real ganhou 7 perfis de fuzz: qualquer teste que
+chame a API dispara o pipeline inteiro, e o pipeline persiste.
+
+O Sprint 1 tratou o sintoma (saneou a leitura, isolou `MODELS_DIR` nos arquivos
+novos). Agora a defesa é estrutural: `tests/conftest.py` com fixture `autouse`
+redireciona `CRAI_RETENTION_DB` para `tmp_path` em TODOS os testes — não é algo
+que cada arquivo novo precise lembrar de escrever.
+
+O bandit continua isolado por arquivo, de propósito: `test_metricas_declaradas`
+e `test_failure_classifier` LEEM os modelos reais de `crai/models/`, que é o
+gate de honestidade do README. Redirecionar `MODELS_DIR` globalmente quebraria
+o que eles existem para medir.
+
+Verificado: rodada completa da suíte NÃO cria `data/retention_cycles.db`.
+O banco poluído pelas rodadas anteriores foi removido.
+
+
+GATES
+================================================================================
+
+    pytest tests/test_retention_outcome.py -v  →  36 passed
+    pytest tests/ -q                           → 580 passed (baseline 544)
+    python test_pipeline.py                    →   exit 0
+
+Demo em MODO SIMULAÇÃO (o default do script):
+    Clientes retidos            : 1/4
+    Canais escolhidos           : email: 1, popup: 2, whatsapp: 1
+    Ciclos no dataset de treino : 4 (4 com desfecho, 0 aguardando)
+
+Demo em MODO PRODUÇÃO (`CRAI_SIMULATE_OUTCOMES=0 python test_pipeline.py`):
+    [CHURN-VOL] Ciclo registrado — aguardando retorno do cliente   (×4)
+    Clientes retidos            : 0/4
+    Ciclos no dataset de treino : 8 (4 com desfecho, 4 aguardando)
+
+Ponta a ponta em produção, com webhook assinado:
+    /webhooks/segment            -> 200, ciclo aberto, accepted=NULL
+    /webhooks/retention-outcome  -> 200, α+1, HubSpot deal stage=retained,
+                                    `_channel_history` alimentado pelo canal
+                                    que estava na linha do ciclo
+    reenvio                      -> 200 ignorado, α parado

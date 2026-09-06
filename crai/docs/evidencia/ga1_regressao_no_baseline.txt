@@ -1,0 +1,40 @@
+# Evidencia GA1 — os testes de regressao falham no BASELINE por comportamento
+
+A auditoria A1 reprovou o gate porque tests/test_payment_gateway.py nem COLETAVA
+no commit anterior: ImportError dos simbolos novos. Erro de colecao nao prova que
+um teste pega o defeito. Os rotulos viraram literais e a excecao passou a ser
+resolvida em tempo de execucao; agora o arquivo coleta no baseline e cada teste
+falha pelo comportamento que descreve.
+
+## Comando
+```
+git checkout baseline-pre-sprint -- crai/crai/     # so o CODIGO volta; testes ficam
+cd crai && python -m pytest tests/test_payment_gateway.py \
+    tests/test_payment_isolation.py tests/test_pix_automatico_retry.py -q
+```
+
+## Resultado
+```
+102 failed, 104 passed, 3 warnings in 12.69s
+
+falhas por classe de regressao:
+     42 TestPayloadsHostis
+     10 TestThreadIdNuncaColide
+     10 TestNenhumaTentativaDesperdicada
+     10 TestA1ValorAmbiguoNaoEChutado
+      6 TestA1PrecedenciaDeStatus
+      6 TestA1InfinityENaN
+      5 TestEndpointRecusaPayloadDegradado
+      5 TestA1ValorNaoPositivo
+      2 TestPerfilSinteticoUsaUmIdSo
+      2 TestNormalizacaoDeEventos
+      1 TestUmDefaultSoParaPaymentMethod
+      1 TestPrazoDeSeteDias
+      1 TestEndpointPixAutomatico
+      1 TestA1DegradacaoTemLeitor
+```
+
+## Com as correcoes aplicadas
+```
+304 passed, 3 warnings in 16.94s
+```

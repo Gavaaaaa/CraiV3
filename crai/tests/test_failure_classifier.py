@@ -29,6 +29,23 @@ from crai.ml.failure_classifier import (
     LOGS_DIR,
 )
 
+# Símbolos introduzidos pelo trabalho do limiar. Resolvidos em tempo de
+# execução, e não no `import` acima, para que este arquivo CONTINUE COLETANDO
+# no commit anterior — senão os 26 testes pré-existentes daqui morrem por
+# ImportError num baseline e nenhuma comparação de regressão vale.
+# Mesma disciplina já aplicada em tests/test_payment_gateway.py.
+LIMIAR_CLASSIFICACAO = getattr(classifier_module, "LIMIAR_CLASSIFICACAO", 0.25)
+RECALL_MINIMO = getattr(classifier_module, "RECALL_MINIMO", 0.90)
+LIMIARES_REPORTADOS = getattr(
+    classifier_module, "LIMIARES_REPORTADOS", (0.50, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15))
+
+
+def escolher_limiar(*args, **kwargs):
+    fn = getattr(classifier_module, "escolher_limiar", None)
+    if fn is None:
+        pytest.skip("escolher_limiar não existe neste commit")
+    return fn(*args, **kwargs)
+
 
 @pytest.fixture(scope="module")
 def classificador_treinado(tmp_path_factory):
@@ -344,3 +361,122 @@ class TestPersistence:
         assert "input_features" in log
         assert "output" in log
         assert "shap_explanation" in log
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# LIMIAR DO RELATÓRIO — a justificativa tem que ser executável
+#
+# Nasceram com a re-auditoria A1-r2, que encontrou o commit 4109d84 afirmando
+# no comentário que 0,25 "maximiza F2" quando a máquina mede F2 crescendo
+# monotonicamente até o fim da grade. Um número documentado que o código
+# desmente é pior que um número sem documentação: o primeiro convence a banca.
+# ══════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(scope="module")
+def classificador_declarado(tmp_path_factory):
+    """Treina na configuração que a documentação DECLARA: 15.000, seed 42.
+
+    A fixture barata (`classificador_treinado`, 1.000 linhas) não serve para
+    validar `LIMIAR_CLASSIFICACAO`: a curva de recall depende do tamanho do
+    dataset, e com 1.000 linhas a regra escolhe 0,20. Validar a constante
+    contra um dataset diferente do declarado seria repetir o defeito que a
+    re-auditoria encontrou — um número justificado por uma medição que não é a
+    que o comentário descreve.
+
+    Custa ~30s. É o preço de a documentação ser verificável.
+    """
+    models_dir = tmp_path_factory.mktemp("models_declarado")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(classifier_module, "MODELS_DIR", models_dir)
+        clf = FailureClassifier()
+        yield clf.train(n_samples=15000, test_size=0.2)
+
+
+class TestEscolhaDoLimiar:
+    """O limiar do relatório sai de uma regra declarada, não de um argmax."""
+
+    def test_a_regra_declarada_devolve_a_constante(self, classificador_declarado):
+        """`escolher_limiar` sobre a varredura real tem que dar LIMIAR_CLASSIFICACAO.
+
+        Este é o teste que impede a documentação de mentir: se alguém mudar
+        LIMIAR_CLASSIFICACAO sem refazer a análise, ou mudar o modelo a ponto de
+        deslocar a curva de recall, isto quebra.
+        """
+        metrics = classificador_declarado
+        escolhido = escolher_limiar(metrics["metricas_por_limiar"])
+        assert escolhido == LIMIAR_CLASSIFICACAO, (
+            f"a regra declarada (maior limiar com recall >= {RECALL_MINIMO}) "
+            f"escolhe {escolhido}, mas a constante é {LIMIAR_CLASSIFICACAO}")
+
+    def test_o_limiar_em_uso_sustenta_o_recall_minimo(self, classificador_declarado):
+        metrics = classificador_declarado
+        linha = next(m for m in metrics["metricas_por_limiar"] if m["em_uso"])
+        assert linha["limiar"] == LIMIAR_CLASSIFICACAO
+        assert linha["recall"] >= RECALL_MINIMO
+
+    def test_nenhum_limiar_maior_sustenta_o_recall_minimo(self, classificador_declarado):
+        """É o *maior* que passa — senão o relatório seria conservador à toa."""
+        metrics = classificador_declarado
+        maiores = [m for m in metrics["metricas_por_limiar"]
+                   if m["limiar"] > LIMIAR_CLASSIFICACAO]
+        assert maiores, "grade sem nenhum limiar acima do escolhido"
+        assert all(m["recall"] < RECALL_MINIMO for m in maiores)
+
+    def test_a_varredura_cobre_a_grade_declarada(self, classificador_treinado):
+        """A tabela reportada tem que ser a grade inteira, sem furos.
+
+        (Substituiu um teste de monotonicidade do recall, que a auditoria A1-r3
+        apontou como tautológico: baixar o limiar só pode aumentar o conjunto
+        de positivos, então recall não-crescente é verdade por construção, não
+        uma propriedade do código.)
+        """
+        _, metrics, _ = classificador_treinado
+        limiares = sorted(m["limiar"] for m in metrics["metricas_por_limiar"])
+        assert limiares == sorted(LIMIARES_REPORTADOS)
+        assert sum(m["em_uso"] for m in metrics["metricas_por_limiar"]) == 1
+
+    def test_regra_devolve_none_quando_nada_alcanca_o_minimo(self):
+        """Sem limiar aceitável, devolve None — não arredonda o critério."""
+        varredura = [{"limiar": 0.5, "recall": 0.10},
+                     {"limiar": 0.2, "recall": 0.40}]
+        assert escolher_limiar(varredura, recall_minimo=0.90) is None
+
+    def test_f2_nao_e_usado_para_escolher_o_limiar(self, classificador_treinado):
+        """O F2 máximo da grade NÃO é o limiar em uso — e isso é deliberado.
+
+        Com taxa base ~0,45, o classificador trivial ("recupera" para todos)
+        tem F2 ~0,80. Maximizar F2 selecionaria o corte que não classifica.
+        Este teste documenta que a implementação sabe disso.
+        """
+        _, metrics, _ = classificador_treinado
+        melhor_f2 = max(metrics["metricas_por_limiar"], key=lambda m: m["f2"])
+        assert melhor_f2["limiar"] <= LIMIAR_CLASSIFICACAO
+
+
+class TestLimiarNaoDecideNada:
+    """O limiar é do relatório. Quem decide é o e-Profit."""
+
+    def test_predict_nao_usa_o_limiar(self, classificador_treinado, monkeypatch):
+        """Mudar LIMIAR_CLASSIFICACAO não muda nenhuma saída de `predict`."""
+        clf, _, _ = classificador_treinado
+        caso = {
+            "tenure_months": 6, "day_of_month": 15, "invoice_amount": 300.00,
+            "avg_ticket": 300.00, "gateway_error_code": "insufficient_funds",
+            "card_brand": "visa", "payment_history_score": 0.60,
+            "failure_count_90d": 1, "hour_of_day": 10, "day_of_week": 2,
+            "attempt_count": 1, "ltv_estimated": 2000.00,
+        }
+        antes = clf.predict(caso)
+        monkeypatch.setattr(classifier_module, "LIMIAR_CLASSIFICACAO", 0.99)
+        depois = clf.predict(caso)
+        assert antes["recovery_score"] == depois["recovery_score"]
+        assert antes["eprofit"] == depois["eprofit"]
+
+    def test_recall_operacional_e_reportado_junto(self, classificador_treinado):
+        """A métrica que descreve o sistema de verdade não pode ficar de fora."""
+        _, metrics, _ = classificador_treinado
+        op = metrics["recall_operacional"]
+        assert "route_after_diagnosis" in op["regra"]
+        assert 0.0 <= op["recall"] <= 1.0
+        assert op["recuperaveis_perdidos"] >= 0
+        assert op["clientes_abandonados"] <= op["n_total"]

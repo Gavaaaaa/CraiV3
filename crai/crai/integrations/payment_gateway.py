@@ -44,6 +44,8 @@ tem nenhum caminho de código até crai/ml/ ou crai/agent/.
 
 import json
 import logging
+import math
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -132,14 +134,21 @@ DEGRADACAO_ENVELOPE_AUSENTE = "envelope_ausente"
 DEGRADACAO_LOTE_DE_1 = "lote_de_1"
 DEGRADACAO_VALOR_AUSENTE = "valor_ausente"
 DEGRADACAO_VALOR_ILEGIVEL = "valor_ilegivel"
+DEGRADACAO_VALOR_NAO_POSITIVO = "valor_nao_positivo"
 DEGRADACAO_STATUS_DESCONHECIDO = "status_desconhecido"
+# Campo de identificação que veio como estrutura (dict/list) em vez de escalar.
+# NÃO é bloqueante: o evento segue pelo caminho de identificação ausente, que
+# já sabe recusar quando não sobra nada (ver `_thread_id` em api/app.py).
+DEGRADACAO_IDENTIFICACAO_ILEGIVEL = "identificacao_ilegivel"
 
 DEGRADACOES_CONHECIDAS = frozenset({
     DEGRADACAO_ENVELOPE_AUSENTE,
     DEGRADACAO_LOTE_DE_1,
     DEGRADACAO_VALOR_AUSENTE,
     DEGRADACAO_VALOR_ILEGIVEL,
+    DEGRADACAO_VALOR_NAO_POSITIVO,
     DEGRADACAO_STATUS_DESCONHECIDO,
+    DEGRADACAO_IDENTIFICACAO_ILEGIVEL,
 })
 
 # Degradações que impedem o evento de entrar no pipeline de recuperação: sem
@@ -147,11 +156,18 @@ DEGRADACOES_CONHECIDAS = frozenset({
 DEGRADACOES_BLOQUEANTES = frozenset({
     DEGRADACAO_VALOR_AUSENTE,
     DEGRADACAO_VALOR_ILEGIVEL,
+    DEGRADACAO_VALOR_NAO_POSITIVO,
 })
 
 # ── Motivos de recusa (viram HTTP 422 na borda) ──────────────────────────
 MOTIVO_LOTE_NAO_SUPORTADO = "lote_nao_suportado"
 MOTIVO_PAYLOAD_NAO_E_OBJETO = "payload_nao_e_objeto"
+MOTIVO_SEM_IDENTIFICACAO = "evento_sem_identificacao"
+# Valor que não serve como cobrança: ilegível, não-finito, de magnitude
+# implausível ou não-positivo. Usado pelos endpoints que sintetizam o evento em
+# vez de recebê-lo do PSP — eles não têm a lista `degradacoes` do parser, mas
+# têm que recusar exatamente o mesmo conjunto de valores.
+MOTIVO_VALOR_NAO_UTILIZAVEL = "valor_nao_utilizavel"
 
 
 class PayloadPixInvalido(Exception):
@@ -197,33 +213,138 @@ def _primeiro_preenchido(fonte: dict, *caminhos: str, default=None):
 _LIXO_MONETARIO = str.maketrans("", "", "R$  \t\n")
 
 
-def _para_float(bruto) -> Optional[float]:
+# Um único separador seguido de EXATAMENTE três dígitos, com 1 a 3 dígitos
+# antes: "10,000", "1.299", "2,500". Sem o locale declarado pelo PSP não existe
+# leitura correta — pt-BR lê mil, en-US lê um vírgula alguma coisa, e as duas
+# são plausíveis. Ver `_para_float`.
+_GRUPO_DE_MILHAR_AMBIGUO = re.compile(r"^[+-]?\d{1,3}[.,]\d{3}$")
+
+# Teto de magnitude plausível para uma cobrança de assinatura, em reais.
+#
+# `math.isfinite` não basta. Ele aceita `1e300`, que é finito em float64 e vira
+# `inf` no `float32` do sklearn três nós adiante — reproduzindo o P0-1 (HTTP 500
+# a partir de webhook assinado) pelo caminho que a recusa de `inf`/`NaN` não
+# cobre: magnitude finita, mas absurda.
+#
+# R$ 1 trilhão é quatro ordens de grandeza acima do maior contrato de SaaS B2B
+# concebível e ainda seis ordens abaixo do ponto em que a aritmética de float32
+# começa a perder precisão. Qualquer coisa acima disso é payload corrompido ou
+# hostil, não cobrança: recusar é a leitura correta, e a recusa é barata (422,
+# que o PSP retenta).
+#
+# O teto é em REAIS, e vale igual nos dois caminhos: o campo em reais e o campo
+# em centavos, este último **depois** da divisão por 100. Checar só o número
+# cru daria a `total_cents` um teto de R$ 10 bilhões e a `valor` um de R$ 1
+# trilhão — dois limites para a mesma regra, dependendo de qual campo o PSP usa.
+VALOR_MAXIMO_PLAUSIVEL = 1e12
+
+
+def _texto_de_identificacao(bruto, campo: str, degradacoes: list[str]) -> str:
+    """Coage a texto **apenas** o que é escalar; o resto vira vazio (N-11).
+
+    `str()` sobre um dict ou uma lista sempre devolve alguma coisa — e essa
+    coisa vira identidade. Um `id_recorrencia: {"a": 1}` produzia o thread_id
+    literal `"{'a': 1}"`, que o `MemorySaver` aceita como qualquer outro: o
+    checkpoint de um cliente passa a ser nomeado por uma estrutura que ninguém
+    controla, e colide com quem mandar essa mesma string em texto.
+
+    Devolvendo vazio, o campo cai no caminho já definido para identificação
+    ausente: e2e anônimo, ou 422 quando não sobra nada que identifique o
+    pagador. Recusar é o comportamento correto; inventar um id, não.
+    """
+    if bruto is None:
+        return ""
+    if isinstance(bruto, (str, int, float)) and not isinstance(bruto, bool):
+        return str(bruto)
+    logger.warning(
+        "[PIX] Campo de identificação %r veio como %s, não como escalar — "
+        "descartado em vez de virar identidade por `str()`.",
+        campo, type(bruto).__name__,
+    )
+    if DEGRADACAO_IDENTIFICACAO_ILEGIVEL not in degradacoes:
+        degradacoes.append(DEGRADACAO_IDENTIFICACAO_ILEGIVEL)
+    return ""
+
+
+def _valor_utilizavel(valor: float, teto: float = VALOR_MAXIMO_PLAUSIVEL) -> Optional[float]:
+    """Último portão de `_para_float`: finito **e** de magnitude plausível.
+
+    `teto` existe porque o campo em centavos é comparado **na sua própria
+    unidade**. O teto do projeto é declarado em reais; um payload em centavos
+    carrega números 100× maiores para o mesmo dinheiro, então recusá-lo contra
+    o teto em reais recusaria R$ 10 bilhões achando que recusa R$ 1 trilhão.
+    Quem chama a partir do caminho de centavos passa `teto` já convertido.
+    """
+    if not math.isfinite(valor):
+        return None
+    if abs(valor) > teto:
+        logger.warning(
+            "[PIX] Valor %r excede o teto de magnitude plausível (%.0f na "
+            "unidade do campo; teto do projeto R$ %.0f). Finito, mas absurdo: "
+            "estouraria o float32 do modelo adiante. Recusando.",
+            valor, teto, VALOR_MAXIMO_PLAUSIVEL,
+        )
+        return None
+    return valor
+
+
+def _para_float(bruto, teto: float = VALOR_MAXIMO_PLAUSIVEL) -> Optional[float]:
     """Converte para float qualquer forma plausível de valor monetário.
 
     Aceita `None`, `int`, `float`, e strings em pt-BR (`"299,90"`,
     `"1.299,90"`, `"R$ 1.299,90"`) ou en-US (`"299.90"`, `"1,299.90"`).
-    O separador decimal é decidido por qual dos dois sinais aparece **por
-    último** — o outro é tratado como separador de milhar e removido.
+    Quando os dois separadores aparecem, o que vem **por último** é o decimal e
+    o outro é milhar — isso não tem ambiguidade.
 
-    **Nunca levanta.** Devolve `None` quando não consegue ler; quem chama
-    decide se isso vira degradação ou recusa. Levantar aqui era o P0-1: um
-    `ValueError` dentro do parser vira HTTP 500 e provoca tempestade de retry
-    no PSP.
+    **Recusa o que é ambíguo, em vez de chutar.** `"10,000"` pode ser dez mil
+    (en-US) ou dez (pt-BR); `"1.299"` pode ser mil duzentos e noventa e nove
+    (pt-BR) ou um vírgula duzentos e noventa e nove (en-US). Chutar aqui
+    transformaria R$ 10.000,00 em R$ 10,00 **em silêncio** — o pior desfecho
+    possível, porque atravessa o portão de qualidade e vira decisão de negócio
+    com o valor errado. Nesses casos devolve `None`, o evento é marcado como
+    degradado e a borda recusa com 422. Um 422 que o PSP retenta com o campo
+    bem formatado é barato; uma cobrança diagnosticada por um centésimo do
+    valor real, não.
 
-    Limite conhecido e aceito: `"1.299"` é ambíguo (mil duzentos e noventa e
-    nove em pt-BR, um vírgula duzentos e noventa e nove em en-US). Sem locale
-    declarado pelo PSP não há como decidir; fica lido como `1.299`, que é a
-    interpretação literal do texto.
+    Também recusa `inf` e `nan`: `json.loads` aceita os literais `Infinity` e
+    `NaN`, e qualquer um deles atravessando o parser reproduz o P0-1 um andar
+    adiante (o sklearn levanta `ValueError` e o FastAPI devolve 500).
+
+    E recusa **magnitude implausível** (`VALOR_MAXIMO_PLAUSIVEL`), que é o
+    mesmo defeito por outra porta: `1e300` é finito, passa por `math.isfinite`
+    e só vira `inf` no `float32` do sklearn, longe daqui. Ser finito não basta;
+    precisa ser um valor de cobrança.
+
+    **Nunca levanta** — nem `ValueError`, nem `OverflowError` (um inteiro JSON
+    de 401 dígitos chega como `int` de precisão arbitrária e derruba `float()`).
+    Quem chama decide se o `None` vira degradação ou recusa.
     """
     if bruto is None or isinstance(bruto, bool):
         return None
     if isinstance(bruto, (int, float)):
-        return float(bruto)
+        try:
+            valor = float(bruto)
+        except (OverflowError, ValueError):
+            # `json.loads` produz `int` de precisão arbitrária: um inteiro de
+            # 401 dígitos chega aqui inteiro e `float()` levanta OverflowError.
+            # Sem este except, a docstring abaixo é falsa e o 500 volta.
+            logger.warning("[PIX] Valor numérico grande demais para converter "
+                           "(%d dígitos) — recusando.", len(str(bruto)))
+            return None
+        return _valor_utilizavel(valor, teto)
     if not isinstance(bruto, str):
         return None
 
     texto = bruto.translate(_LIXO_MONETARIO)
     if not texto:
+        return None
+
+    if _GRUPO_DE_MILHAR_AMBIGUO.match(texto):
+        logger.warning(
+            "[PIX] Valor %r é ambíguo (um separador seguido de exatamente três "
+            "dígitos): milhar ou decimal depende do locale do PSP, que o payload "
+            "não declara. Recusando em vez de adivinhar.", bruto,
+        )
         return None
 
     ultima_virgula = texto.rfind(",")
@@ -234,9 +355,10 @@ def _para_float(bruto) -> Optional[float]:
         texto = texto.replace(",", "")
 
     try:
-        return float(texto)
-    except ValueError:
+        valor = float(texto)
+    except (ValueError, OverflowError):
         return None
+    return _valor_utilizavel(valor, teto)
 
 
 class PaymentGatewayAdapter(ABC):
@@ -291,22 +413,22 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         dados = self._resolver_envelope(raw_payload, degradacoes)
 
         normalizado = {
-            "e2e_id": str(_primeiro_preenchido(
+            "e2e_id": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "pix.end_to_end_id", "pix.e2e_id", "end_to_end_id", "e2e_id",
                 default="",
-            )),
+            ), "e2e_id", degradacoes),
             "valor": self._extrair_valor(dados, degradacoes),
             "status": self._extrair_status(raw_payload, dados, degradacoes),
-            "ispb_pagador": str(_primeiro_preenchido(
+            "ispb_pagador": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "pix.payer.ispb", "payer.ispb", "debtor.ispb",
                 "pix.debtor_ispb", "ispb_pagador", "ispb",
                 default="",
-            )),
-            "id_recorrencia": str(_primeiro_preenchido(
+            ), "ispb_pagador", degradacoes),
+            "id_recorrencia": _texto_de_identificacao(_primeiro_preenchido(
                 dados, "automatic_pix.recurrence_id", "automatic_pix.id",
                 "recurrence_id", "id_recorrencia", "recurrence.id",
                 default="",
-            )),
+            ), "id_recorrencia", degradacoes),
             "degradacoes": degradacoes,
         }
 
@@ -350,6 +472,23 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                 degradacoes.append(DEGRADACAO_LOTE_DE_1)
                 return dados[0]
 
+            if dados:
+                # Lista NÃO VAZIA cujo conteúdo não é objeto (N-9). Cair no
+                # nível raiz aqui seria trocar de fonte de dados em silêncio —
+                # exatamente o P0-3, que este método existe para fechar:
+                # `data: ["texto"]` com um `valor` solto na raiz produzia uma
+                # cobrança falhada válida, com `pipeline: true`, a partir de um
+                # payload que ninguém sabe ler.
+                #
+                # `data: []` é outra coisa e continua caindo na raiz: lista
+                # vazia é envelope ausente, não lote malformado — é o
+                # comportamento que o Sprint 1 fixou para o P0-3.
+                raise PayloadPixInvalido(
+                    MOTIVO_PAYLOAD_NAO_E_OBJETO,
+                    f"'data' é uma lista cujo conteúdo não é objeto "
+                    f"({type(dados[0]).__name__}) — não há evento para normalizar",
+                )
+
         logger.warning(
             "[PIX] Envelope 'data' ausente ou inutilizável (%s) — lendo do nível raiz.",
             type(dados).__name__,
@@ -369,13 +508,31 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             dados, "total_cents", "amount_cents", "pix.amount_cents", "valor_centavos",
         )
         if bruto_centavos is not None:
-            centavos = _para_float(bruto_centavos)
-            if centavos is not None:
-                return round(centavos / 100, 2)
-            logger.warning("[PIX] Campo de centavos ilegível (%r) — valor degradado para 0.0",
-                           bruto_centavos)
-            degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
-            return 0.0
+            # O teto é passado JÁ CONVERTIDO para centavos. Sem isso o
+            # `_para_float` aplicava o teto em reais sobre um número em
+            # centavos e recusava tudo acima de R$ 10 bilhões — 100× mais
+            # apertado que o campo em reais, para a mesma regra. E a checagem
+            # logo abaixo, que existe justamente para igualar os dois, virava
+            # ramo morto: nada que sobrevivesse a 1e12 centavos podia exceder
+            # 1e12 reais depois de dividido por 100.
+            centavos = _para_float(bruto_centavos,
+                                   teto=VALOR_MAXIMO_PLAUSIVEL * 100)
+            if centavos is None:
+                logger.warning("[PIX] Campo de centavos ilegível (%r) — valor "
+                               "degradado para 0.0", bruto_centavos)
+                degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+                return 0.0
+            # O teto de magnitude é declarado em REAIS. Aplicá-lo só antes da
+            # divisão deixaria este caminho com um teto 100× menor que o do
+            # campo em reais — dois limites diferentes para a mesma regra.
+            reais_de_centavos = _valor_utilizavel(round(centavos / 100, 2))
+            if reais_de_centavos is None:
+                logger.warning("[PIX] Campo de centavos (%r) fora da faixa "
+                               "plausível — valor degradado para 0.0", bruto_centavos)
+                degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
+                return 0.0
+            return PixAutomaticoAdapter._validar_positivo(
+                reais_de_centavos, bruto_centavos, degradacoes)
 
         bruto_reais = _primeiro_preenchido(dados, "pix.valor", "valor", "amount", "total")
         if bruto_reais is None:
@@ -388,19 +545,52 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             logger.warning("[PIX] Valor ilegível (%r) — valor degradado para 0.0", bruto_reais)
             degradacoes.append(DEGRADACAO_VALOR_ILEGIVEL)
             return 0.0
-        return round(reais, 2)
+        return PixAutomaticoAdapter._validar_positivo(
+            round(reais, 2), bruto_reais, degradacoes)
+
+    @staticmethod
+    def _validar_positivo(valor: float, bruto, degradacoes: list[str]) -> float:
+        """Uma cobrança de R$ 0,00 ou negativa não é uma cobrança.
+
+        Sem isto, um valor negativo atravessava o parser, virava LTV negativo,
+        e-Profit negativo e — porque o pipeline segue até o fim — um deal no
+        HubSpot com valor negativo. Melhor recusar na borda.
+        """
+        if valor > 0:
+            return valor
+        logger.warning(
+            "[PIX] Valor não-positivo (%r -> %.2f) — uma cobrança de R$ 0,00 ou "
+            "negativa não é uma cobrança.", bruto, valor,
+        )
+        degradacoes.append(DEGRADACAO_VALOR_NAO_POSITIVO)
+        return valor
 
     @staticmethod
     def _extrair_status(raw_payload: dict, dados: dict, degradacoes: list[str]) -> str:
         """Nome do evento do PSP → status normalizado, com três tentativas.
 
         1. `EVENT_STATUS_MAP` pelo nome do evento (caminho feliz).
-        2. Status CRU do objeto, com o mapa certo para o campo de onde veio —
-           é o que conserta o P0-4. Antes, o fallback comparava o status cru do
-           PSP contra `PIX_STATUSES`, que só tem tokens internos em português:
+        2. Status da **cobrança** (`status`, `charge_status`, `payment_status`).
+           É o que conserta o P0-4: antes, o fallback comparava o status cru do
+           PSP contra `PIX_STATUSES`, que só tem tokens internos em português —
            `"failed"` nunca casava, virava `desconhecido`, e a cobrança falhada
            sumia com HTTP 200. O branch era código morto.
-        3. Token interno da CRAI, para o PSP que já fala o dialeto de saída.
+        3. Status da **autorização** (`authorization_status`), só depois.
+        4. Token interno da CRAI, para o PSP que já fala o dialeto de saída.
+
+        **A ordem entre 2 e 3 importa e já esteve errada.** O campo
+        `authorization_status` descreve o CONTRATO de recorrência, que continua
+        aprovado enquanto o pagador não revoga; `status` descreve o QUE
+        ACONTECEU nesta cobrança. Ler a autorização primeiro fazia um payload
+        com `authorization_status: "approved"` e `status: "failed"` — que é a
+        forma mais comum, e é literalmente o formato da fixture de referência
+        deste repositório — virar `autorizacao_concedida`, sem degradação e sem
+        warning. A cobrança falhada sumia de novo, e de um jeito pior que o
+        P0-4 original, que ao menos logava.
+
+        Cada campo é consultado no seu mapa primeiro e no outro depois: PSPs
+        existem que mandam `revoked` no campo `status`, e perder isso foi o
+        preço de dividir o mapa único em dois.
         """
         evento = _primeiro_preenchido(
             raw_payload, "event", "event_type", "type", default="",
@@ -409,28 +599,32 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
         if status:
             return status
 
-        autorizacao = str(_primeiro_preenchido(
-            dados, "automatic_pix.authorization_status", "authorization_status",
-            default="",
-        )).strip().lower()
-        if autorizacao:
-            status = STATUS_CRU_AUTORIZACAO.get(autorizacao)
-            if status:
-                return status
-
         cobranca = str(_primeiro_preenchido(
             dados, "status", "charge_status", "payment_status", default="",
         )).strip().lower()
         if cobranca:
-            status = STATUS_CRU_COBRANCA.get(cobranca)
+            status = (STATUS_CRU_COBRANCA.get(cobranca)
+                      or STATUS_CRU_AUTORIZACAO.get(cobranca))
             if status:
                 return status
             if cobranca in PIX_STATUSES:
                 return cobranca
 
+        autorizacao = str(_primeiro_preenchido(
+            dados, "automatic_pix.authorization_status", "authorization_status",
+            default="",
+        )).strip().lower()
+        if autorizacao:
+            status = (STATUS_CRU_AUTORIZACAO.get(autorizacao)
+                      or STATUS_CRU_COBRANCA.get(autorizacao))
+            if status:
+                return status
+            if autorizacao in PIX_STATUSES:
+                return autorizacao
+
         logger.warning(
-            "[PIX] Evento não reconhecido (event=%r, authorization_status=%r, status=%r)",
-            evento, autorizacao, cobranca,
+            "[PIX] Evento não reconhecido (event=%r, status=%r, authorization_status=%r)",
+            evento, cobranca, autorizacao,
         )
         degradacoes.append(DEGRADACAO_STATUS_DESCONHECIDO)
         return STATUS_DESCONHECIDO

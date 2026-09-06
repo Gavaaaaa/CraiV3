@@ -1,0 +1,119 @@
+SPRINT 3 (churn voluntário) — WhatsApp como canal, sem tocar o involuntário
+Data: 05/09/2026 · Branch: sprint/a1-auditoria · Base: 1b397c2 (fim do Sprint 2)
+Ambiente: Windows 10, Python 3.12.10, PYTHONIOENCODING=utf-8, rodado de D:\PTI\crai
+
+
+DECISÃO DE ISOLAMENTO: OPÇÃO CONSERVADORA
+================================================================================
+
+O plano do sprint oferecia duas opções e pedia justificativa. Escolhida a
+CONSERVADORA — `whatsapp_sender.py` novo, consumido só pelo voluntário —, e o
+motivo é que a premissa da "opção limpa" não se sustenta neste repositório:
+
+    NÃO EXISTE ENVIO DE WHATSAPP PARA EXTRAIR DO INVOLUNTÁRIO.
+
+O que o `dunning_engine` tem é o RÓTULO do canal:
+
+    dunning_engine.py:80    return {**state, "channel": "whatsapp", ...}
+    dunning_engine.py:115   channel="whatsapp"      (estado inicial)
+    dunning_engine.py:110   _send_message -> print(...) e `sent: True`
+
+Sem cliente de BSP, sem Cloud API, sem número de destino, sem env, sem
+dependência no `requirements.txt`. Extrair isso produziria um módulo com um
+`print` dentro e um risco de regressão no involuntário em troca de nada.
+
+Consequência: NÃO há "duplicação temporária a unificar depois" — a nota que o
+plano mandava deixar não se aplica. Quando a integração real entrar, ela entra
+no `whatsapp_sender.py` e o `dunning_engine` passa a chamá-lo. A fronteira está
+travada por teste (`TestIsolamentoDoInvoluntario`), não só declarada.
+
+
+O QUE O CANAL DECIDE, E POR QUÊ
+================================================================================
+
+Ordem de decisão em `choose_channel`:
+
+  1. WHATSAPP   — há número utilizável E criticidade em ("critico", "alto")
+  2. HISTÓRICO  — canal lembrado, se ainda for entregável
+  3. POPUP      — cliente no site agora
+  4. E-MAIL     — fallback
+
+O item 1 vem ANTES do histórico DE PROPÓSITO, e isso é escolha de produto: o
+histórico diz por onde o cliente já converteu; a criticidade diz que ele está
+prestes a sair AGORA. Fixado em `test_criticidade_vence_o_historico`, que é o
+teste que reprova primeiro se um dia essa troca se provar errada.
+
+O item 2 exige entregabilidade: um histórico "whatsapp" sem telefone no evento
+atual é memória de um canal que não existe agora, e rotear para ele mandaria a
+oferta para o vazio.
+
+RAMO MORTO REMOVIDO: o `elif risk_score >= 0.90: channel = "email"` e o `else:
+channel = "email"` devolviam os dois a mesma coisa — a condição nunca decidiu
+nada desde que foi escrita. O caso que ela queria cobrir (risco alto fora do
+site) é agora o item 1. `test_ramo_morto_removido_sem_mudar_o_resultado` prova
+que quem não tem telefone continua indo para e-mail, exatamente como antes.
+
+
+PII: O NÚMERO NÃO CIRCULA INTEIRO
+================================================================================
+
+O projeto cifra a chave Pix do pagador (`security/tokenization.py`) porque ela
+identifica uma pessoa. Um telefone identifica a mesma pessoa e sairia em `print`
+para o stdout, que vira log de container. Mesma política aplicada ao canal novo:
+
+    log     : [WHATSAPP] -> *********5678: <mensagem>
+    retorno : {"to": "*********5678", ...}   — mascarado também no dict
+
+Travado por `test_numero_nunca_aparece_inteiro_no_log` (varre `capsys`) e
+`test_numero_nao_volta_inteiro_no_retorno`. O estado do grafo e o CRM não
+precisam do número, só da confirmação — e o que não circula não vaza.
+
+
+N-12: A CATRACA DE ENCODING PEGOU O MÓDULO NOVO, E ELA ESTAVA CERTA
+================================================================================
+
+Primeira rodada da suíte com o Sprint 3:
+
+    FAILED tests/test_encoding_saida.py::TestN12Catraca::test_nenhum_modulo_novo_entrou_na_lista
+    FAILED tests/test_encoding_saida.py::TestN12Catraca::test_o_total_bate_com_o_medido_na_auditoria
+    AssertionError: módulo fora do inventário declarado passou a imprimir
+      caractere que o console cp1252 não codifica:
+      crai/crai/integrations/whatsapp_sender.py -> linha 93 (U+2192)
+    AssertionError: total de 24 ocorrências contra 23 declaradas
+
+O `→` do log de envio. A catraca diz que "o número declarado só pode descer",
+então a correção foi trocar por `->` em ASCII, NÃO declarar uma 24ª ocorrência.
+Contribuição líquida deste sprint para o N-12: ZERO, como nos anteriores.
+
+Nota sobre o gate: `python test_pipeline.py` SEM `PYTHONIOENCODING=utf-8`
+continua morrendo em `test_pipeline.py:103` (emoji U+1F680), com exit 1. Isso é
+o N-12 pré-existente — verificado idêntico em `1b397c2` — e a solução sistêmica
+(`sys.stdout.reconfigure`) está declarada como Sprint 5 no README. No ambiente
+declarado do projeto, exit 0.
+
+
+GATES
+================================================================================
+
+    pytest tests/test_whatsapp_channel.py -v   →  40 passed
+    pytest tests/ -q                           → 544 passed (baseline 504)
+    python test_pipeline.py                    →   exit 0
+
+Involuntário: os 441 testes que existiam antes desta frente continuam verdes, e
+`TestIsolamentoDoInvoluntario` acrescenta prova direta —
+`DunningEngine.run_campaign` devolve `channel="whatsapp"`, `sent=True`,
+`payment_method="pix_automatico"`, e `dunning_engine` não importa o sender.
+
+Demo (`python test_pipeline.py`), agora com os três canais:
+
+    usr_marcos_011  critico  on_site, sem telefone   -> popup
+    usr_julia_012   alto     on_site, sem telefone   -> popup
+    usr_diego_013   padrao   sem telefone            -> email
+    usr_lara_014    critico  telefone presente       -> whatsapp
+
+    Canais escolhidos : email: 1, popup: 2, whatsapp: 1
+
+`/simulate/churn-risk` ganhou `phone` opcional pelo mesmo motivo do N-7: sem
+ele o endpoint da demo não exercitaria o código que a demo mostra. Medido:
+telefone válido -> 200 e envio; ausente -> 200; `"abc"` -> 200 e o canal cai
+para e-mail.

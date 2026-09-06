@@ -13,6 +13,14 @@ Três verificadores:
     verify_pix_automatico_signature  HMAC-SHA256 genérico no mesmo padrão do
                                      Stripe, para o webhook de Pix Automático
                                      que a Fase 3 vai criar
+    verify_retention_outcome_signature
+                                     HMAC-SHA1 no mesmo formato do Segment,
+                                     header 'x-signature', para o webhook de
+                                     desfecho de retenção (Sprint 4 do churn
+                                     voluntário). SEGREDO PRÓPRIO: quem envia é
+                                     o backend do cliente, não o Segment, e
+                                     duas origens diferentes não compartilham
+                                     credencial.
 
 Toda rejeição é logada com prefixo [SECURITY] e nunca inclui o segredo nem a
 assinatura esperada — só o motivo e um prefixo da assinatura recebida.
@@ -94,9 +102,14 @@ def verify_pix_automatico_signature(payload: bytes, sig_header: str, secret: str
     return _verify_timestamped_hmac(payload, sig_header, secret, origem="pix_automatico")
 
 
-def verify_segment_signature(payload: bytes, sig_header: str, secret: str) -> bool:
-    """Valida o header 'x-signature' do Segment (HMAC-SHA1 do payload cru)."""
-    origem = "segment"
+def _verify_sha1_hmac(payload: bytes, sig_header: str, secret: str,
+                      origem: str) -> bool:
+    """HMAC-SHA1 do payload cru contra o header, no formato do Segment.
+
+    Extraído de `verify_segment_signature` sem mudar uma linha do que ele fazia:
+    o webhook de desfecho de retenção usa o MESMO formato com OUTRO segredo, e
+    duplicar HMAC em módulo de segurança é pior que um parâmetro a mais.
+    """
     if not secret:
         return _reject(origem, "segredo não configurado no ambiente")
     if not sig_header:
@@ -106,3 +119,21 @@ def verify_segment_signature(payload: bytes, sig_header: str, secret: str) -> bo
     if not hmac.compare_digest(esperado, sig_header.strip()):
         return _reject(origem, f"HMAC não confere (assinatura recebida {_preview(sig_header)})")
     return True
+
+
+def verify_segment_signature(payload: bytes, sig_header: str, secret: str) -> bool:
+    """Valida o header 'x-signature' do Segment (HMAC-SHA1 do payload cru)."""
+    return _verify_sha1_hmac(payload, sig_header, secret, origem="segment")
+
+
+def verify_retention_outcome_signature(payload: bytes, sig_header: str,
+                                       secret: str) -> bool:
+    """Valida o 'x-signature' do webhook de desfecho de retenção.
+
+    Mesmo formato do Segment, segredo PRÓPRIO
+    (`RETENTION_OUTCOME_WEBHOOK_SECRET`). Sem o segredo no ambiente, todo
+    request é rejeitado com 401 — fail closed, como os outros três: um webhook
+    que ensina o bandit é exatamente o que não pode aceitar request forjado.
+    """
+    return _verify_sha1_hmac(payload, sig_header, secret,
+                             origem="retention_outcome")

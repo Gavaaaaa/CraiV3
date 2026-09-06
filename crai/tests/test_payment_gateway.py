@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import time
 
 import pytest
@@ -23,19 +24,10 @@ from crai.api import app as app_module
 from crai.integrations import payment_gateway as gateway_module
 from crai.integrations.payment_gateway import (
     CARD_NOT_IMPLEMENTED,
-    DEGRADACAO_ENVELOPE_AUSENTE,
-    DEGRADACAO_LOTE_DE_1,
-    DEGRADACAO_STATUS_DESCONHECIDO,
-    DEGRADACAO_VALOR_AUSENTE,
-    DEGRADACAO_VALOR_ILEGIVEL,
-    DEGRADACOES_CONHECIDAS,
-    MOTIVO_LOTE_NAO_SUPORTADO,
-    MOTIVO_PAYLOAD_NAO_E_OBJETO,
     STATUS_AUTORIZACAO_CONCEDIDA,
     STATUS_AUTORIZACAO_REVOGADA,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
-    PayloadPixInvalido,
     PaymentGatewayAdapter,
     PixAutomaticoAdapter,
 )
@@ -44,6 +36,48 @@ from crai.security.tokenization import (
     decrypt_sensitive_field,
     generate_key,
 )
+
+# ── Rótulos do Sprint 1, como LITERAIS e não como constantes importadas ──
+#
+# Isto é deliberado e a auditoria A1 é a razão. Importando `DEGRADACAO_*`,
+# `PayloadPixInvalido` e companhia direto do módulo, a suíte inteira morria com
+# `ImportError` no commit anterior: `pytest` nem **coletava** o arquivo. Um erro
+# de coleção não é prova de nada — não demonstra que o teste pega o defeito,
+# só que os símbolos não existiam ainda.
+#
+# Com literais, o arquivo coleta no baseline e cada teste falha pelo COMPORTAMENTO
+# que ele descreve: `KeyError: 'degradacoes'`, `ValueError` do float, ou
+# "DID NOT RAISE". É o que o gate GA1 exige de um teste de regressão.
+DEGR_ENVELOPE_AUSENTE = "envelope_ausente"
+DEGR_LOTE_DE_1 = "lote_de_1"
+DEGR_VALOR_AUSENTE = "valor_ausente"
+DEGR_VALOR_ILEGIVEL = "valor_ilegivel"
+DEGR_VALOR_NAO_POSITIVO = "valor_nao_positivo"
+DEGR_STATUS_DESCONHECIDO = "status_desconhecido"
+DEGR_IDENTIFICACAO_ILEGIVEL = "identificacao_ilegivel"
+DEGRADACOES_ESPERADAS = frozenset({
+    DEGR_ENVELOPE_AUSENTE, DEGR_LOTE_DE_1, DEGR_VALOR_AUSENTE,
+    DEGR_VALOR_ILEGIVEL, DEGR_VALOR_NAO_POSITIVO, DEGR_STATUS_DESCONHECIDO,
+})
+
+MOTIVO_LOTE = "lote_nao_suportado"
+MOTIVO_NAO_E_OBJETO = "payload_nao_e_objeto"
+MOTIVO_SEM_ID = "evento_sem_identificacao"
+
+
+class _NuncaLevantada(Exception):
+    """Sentinela para o baseline, onde `PayloadPixInvalido` não existe."""
+
+
+def excecao_de_recusa():
+    """A classe de recusa do adapter, resolvida em tempo de execução.
+
+    No baseline devolve a sentinela, então `pytest.raises` falha com
+    "DID NOT RAISE" (ou deixa passar a exceção real) — falha de comportamento,
+    não de importação.
+    """
+    return getattr(gateway_module, "PayloadPixInvalido", _NuncaLevantada)
+
 
 PIX_SECRET = "pix_secret_teste_fase3"
 
@@ -378,7 +412,7 @@ class TestPayloadsHostis:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bruto, esperado", [
-        ("299,90",       299.90),   # decimal pt-BR — hoje: ValueError → HTTP 500
+        ("299,90",       299.90),   # decimal pt-BR — antes: ValueError → HTTP 500
         ("1.299,90",     1299.90),  # milhar pt-BR
         ("R$ 299,90",    299.90),   # com símbolo de moeda
         ("R$ 1.299,90",  1299.90),  # milhar + moeda
@@ -406,7 +440,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 0.0
-        assert DEGRADACAO_VALOR_ILEGIVEL in resultado["degradacoes"]
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"]
 
     # ── P0-5: valor ausente é evento defeituoso, não R$ 0 ────────────────
 
@@ -419,7 +453,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 0.0
-        assert DEGRADACAO_VALOR_AUSENTE in resultado["degradacoes"]
+        assert DEGR_VALOR_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_valor_string_vazia_conta_como_ausente(self, adapter):
@@ -429,7 +463,7 @@ class TestPayloadsHostis:
 
         resultado = await adapter.parse_pix_event(payload)
 
-        assert DEGRADACAO_VALOR_AUSENTE in resultado["degradacoes"]
+        assert DEGR_VALOR_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_toda_degradacao_tambem_vira_warning(self, adapter, caplog):
@@ -457,7 +491,7 @@ class TestPayloadsHostis:
         assert resultado["valor"] == 299.90
         assert resultado["e2e_id"] == "E60701190202608261200abcdef123"
         assert resultado["id_recorrencia"] == "RN2026082600001"
-        assert DEGRADACAO_LOTE_DE_1 in resultado["degradacoes"]
+        assert DEGR_LOTE_DE_1 in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_lote_de_dois_e_recusado(self, adapter):
@@ -465,10 +499,10 @@ class TestPayloadsHostis:
         payload = payload_pix("automatic_pix.charge_failed")
         payload["data"] = [payload["data"], payload["data"]]
 
-        with pytest.raises(PayloadPixInvalido) as exc:
+        with pytest.raises(excecao_de_recusa()) as exc:
             await adapter.parse_pix_event(payload)
 
-        assert exc.value.motivo == MOTIVO_LOTE_NAO_SUPORTADO
+        assert exc.value.motivo == MOTIVO_LOTE
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("envelope", [{}, None, [], "texto", 42])
@@ -488,7 +522,7 @@ class TestPayloadsHostis:
 
         assert resultado["valor"] == 150.0
         assert resultado["id_recorrencia"] == "RN_raiz_001"
-        assert DEGRADACAO_ENVELOPE_AUSENTE in resultado["degradacoes"]
+        assert DEGR_ENVELOPE_AUSENTE in resultado["degradacoes"]
 
     @pytest.mark.asyncio
     async def test_sem_chave_data_nao_e_degradacao_silenciosa(self, adapter):
@@ -498,7 +532,7 @@ class TestPayloadsHostis:
         resultado = await adapter.parse_pix_event(payload)
 
         assert resultado["valor"] == 99.0
-        assert DEGRADACAO_ENVELOPE_AUSENTE in resultado["degradacoes"]
+        assert DEGR_ENVELOPE_AUSENTE in resultado["degradacoes"]
 
     # ── P0-4: o fallback de status era código morto ──────────────────────
 
@@ -553,7 +587,7 @@ class TestPayloadsHostis:
         payload = {"data": {"valor": 10.0, "status": "quantum_flux"}}
         resultado = await adapter.parse_pix_event(payload)
         assert resultado["status"] == "desconhecido"
-        assert DEGRADACAO_STATUS_DESCONHECIDO in resultado["degradacoes"]
+        assert DEGR_STATUS_DESCONHECIDO in resultado["degradacoes"]
 
     # ── Degenerados ─────────────────────────────────────────────────────
 
@@ -566,9 +600,9 @@ class TestPayloadsHostis:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", [None, [], "texto", 42, [{"valor": 1}]])
     async def test_payload_que_nao_e_objeto_e_recusado(self, adapter, payload):
-        with pytest.raises(PayloadPixInvalido) as exc:
+        with pytest.raises(excecao_de_recusa()) as exc:
             await adapter.parse_pix_event(payload)
-        assert exc.value.motivo == MOTIVO_PAYLOAD_NAO_E_OBJETO
+        assert exc.value.motivo == MOTIVO_NAO_E_OBJETO
 
     @pytest.mark.asyncio
     async def test_evento_integro_tem_degradacoes_vazia(self, adapter):
@@ -585,7 +619,7 @@ class TestPayloadsHostis:
 
         resultado = await adapter.parse_pix_event(payload)
 
-        assert all(d in DEGRADACOES_CONHECIDAS for d in resultado["degradacoes"])
+        assert all(d in DEGRADACOES_ESPERADAS for d in resultado["degradacoes"])
         assert CHAVE_PIX_PAGADOR not in json.dumps(resultado["degradacoes"])
 
 
@@ -666,3 +700,579 @@ class TestEndpointRecusaPayloadDegradado:
         assert r.status_code == 200
         assert r.json()["pipeline"] is True
         assert [c[0] for c in client.pipeline_calls] == ["pix_automatico"]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# AUDITORIA A1 — DEFEITOS INTRODUZIDOS PELO PRÓPRIO SPRINT 1
+#
+# A auditoria adversarial rodou em contexto limpo e devolveu BLOQUEADO. Os
+# testes abaixo travam cada defeito que ela encontrou. Quase todos reproduzem,
+# por caminhos novos, sintomas que o Sprint 1 alegava ter matado.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestA1ValorAmbiguoNaoEChutado:
+    """N-1: `_para_float` convertia errado, em silêncio."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto", ["10,000", "1,299", "2,500", "1.299", "0,500"])
+    async def test_um_separador_com_tres_digitos_e_recusado(self, adapter, bruto):
+        """"10,000" é dez mil em en-US e dez em pt-BR. Sem o locale declarado
+        pelo PSP, chutar transformaria R$ 10.000,00 em R$ 10,00 — e o valor
+        errado atravessaria o portão de qualidade como se fosse legítimo."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = bruto
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"], (
+            f"{bruto!r} virou {resultado['valor']} em vez de ser recusado")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto, esperado", [
+        ("1.299,90", 1299.90),     # dois separadores: não há ambiguidade
+        ("1,299.90", 1299.90),
+        ("299,90", 299.90),        # duas casas decimais: sem dúvida
+        ("12345,678", 12345.68),   # grupo de milhar não tem 5 dígitos antes
+    ])
+    async def test_o_que_nao_e_ambiguo_continua_passando(self, adapter, bruto, esperado):
+        """A recusa não pode virar paranoia: só o caso genuinamente ambíguo."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = bruto
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert resultado["valor"] == esperado
+        assert resultado["degradacoes"] == []
+
+    def test_valor_ambiguo_devolve_422_na_borda(self, client):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = "10,000"
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+
+class TestA1InfinityENaN:
+    """N-2: `Infinity`/`NaN` atravessavam o parser e derrubavam a API com 500."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("valor", [float("inf"), float("-inf"), float("nan")])
+    async def test_nao_finito_nao_vira_valor(self, adapter, valor):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = valor
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert math.isfinite(resultado["valor"])
+        assert DEGR_VALOR_ILEGIVEL in resultado["degradacoes"]
+
+    @pytest.mark.parametrize("literal", ["Infinity", "-Infinity", "NaN"])
+    def test_literal_no_corpo_do_webhook_devolve_400(self, client, literal):
+        """`json.loads` aceita esses três por extensão; o JSON padrão não os
+        tem, e nenhum PSP legítimo manda valor infinito."""
+        corpo = ('{"event":"automatic_pix.charge_failed","data":'
+                 '{"valor":' + literal + ',"recurrence_id":"RN_inf"}}').encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 400
+        assert client.pipeline_calls == []
+
+
+class TestA1PrecedenciaDeStatus:
+    """N-3 / N-4: a divisão em dois mapas quebrou a cobrança falhada."""
+
+    @pytest.mark.asyncio
+    async def test_status_da_cobranca_ganha_da_autorizacao(self, adapter):
+        """O caso mais comum, e o formato da fixture de referência deste
+        próprio repositório: `authorization_status: "approved"` (o contrato de
+        recorrência segue válido) junto de `status: "failed"` (esta cobrança
+        falhou).
+
+        Ler a autorização primeiro fazia a cobrança falhada virar
+        `autorizacao_concedida`, sem degradação e sem warning — pior que o
+        P0-4 original, que ao menos logava.
+        """
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["event"]
+        payload["data"]["status"] = "failed"
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert resultado["status"] == STATUS_COBRANCA_FALHADA
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bruto, esperado", [
+        ("revoked",    STATUS_AUTORIZACAO_REVOGADA),
+        ("cancelled",  STATUS_AUTORIZACAO_REVOGADA),
+        ("authorized", STATUS_AUTORIZACAO_CONCEDIDA),
+    ])
+    async def test_termo_de_autorizacao_no_campo_status_ainda_e_lido(
+        self, adapter, bruto, esperado,
+    ):
+        """N-4: o mapa único do plano cobria estes; dividir em dois os perdeu.
+        Cada campo consulta o seu mapa primeiro e o do outro depois."""
+        resultado = await adapter.parse_pix_event(
+            {"data": {"valor": 10.0, "status": bruto}})
+        assert resultado["status"] == esperado
+
+    @pytest.mark.asyncio
+    async def test_falha_no_campo_de_autorizacao_ainda_e_lida(self, adapter):
+        resultado = await adapter.parse_pix_event(
+            {"data": {"valor": 10.0, "authorization_status": "failed"}})
+        assert resultado["status"] == STATUS_COBRANCA_FALHADA
+
+    def test_cobranca_falhada_com_autorizacao_aprovada_aciona_o_pipeline(self, client):
+        """O N-3 ponta a ponta: com a precedência errada, este webhook
+        respondia `pipeline: false` e a receita sumia."""
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["event"]
+        payload["data"]["status"] = "failed"
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 200
+        assert r.json()["pipeline"] is True
+
+
+class TestA1ValorNaoPositivo:
+    """N-10: valor negativo virava LTV negativo e deal negativo no HubSpot."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("valor", [0, -1, -299.90, "-299,90"])
+    async def test_valor_zero_ou_negativo_e_degradacao(self, adapter, valor):
+        payload = payload_pix("automatic_pix.charge_failed")
+        del payload["data"]["total_cents"]
+        payload["data"]["valor"] = valor
+
+        resultado = await adapter.parse_pix_event(payload)
+
+        assert set(resultado["degradacoes"]) & {
+            DEGR_VALOR_NAO_POSITIVO, DEGR_VALOR_AUSENTE, DEGR_VALOR_ILEGIVEL}
+
+    def test_valor_negativo_devolve_422(self, client):
+        payload = payload_pix("automatic_pix.charge_failed")
+        payload["data"]["total_cents"] = -29990
+        corpo = json.dumps(payload).encode()
+
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+
+class TestA1DegradacaoTemLeitor:
+    """N-6: `degradacoes` não era lido por nenhum nó do grafo."""
+
+    def test_pipeline_anuncia_evento_degradado(self, capsys):
+        """A docstring prometia que 'o pipeline nunca recebe um default sem
+        saber que é default'. Sem um leitor, era só um campo bonito."""
+        import asyncio
+
+        from crai.agent.workflow import diagnose_failure
+
+        estado = {
+            "payment_event": {
+                "e2e_id": "E1", "valor": 299.90, "status": "cobranca_falhada",
+                "ispb_pagador": "60701190", "id_recorrencia": "RN_degr",
+                "degradacoes": [DEGR_ENVELOPE_AUSENTE],
+            },
+            "payment_method": "pix_automatico", "customer_id": "RN_degr",
+            "amount": 299.90,
+        }
+        asyncio.run(diagnose_failure(estado))
+
+        assert "[QUALIDADE]" in capsys.readouterr().out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A1-r2 — MAGNITUDE FINITA MAS ABSURDA (P0-1, o caminho que sobrou)
+#
+# A correção do N-2 fechou `Infinity` e `NaN`. Não fechou magnitude finita:
+# `1e300` passa por `math.isfinite`, chega ao `float32` do sklearn três nós
+# adiante e vira `inf` — mesmo 500, outra porta. E um inteiro JSON de 401
+# dígitos derrubava o próprio `_para_float` com `OverflowError`, contradizendo
+# a docstring que promete "nunca levanta".
+# ══════════════════════════════════════════════════════════════════════════
+
+INT_GIGANTE = int("9" * 401)
+
+
+class TestA1R2MagnitudeImplausivel:
+    """Ser finito não basta: precisa ser um valor de cobrança."""
+
+    def test_para_float_nunca_levanta_com_inteiro_gigante(self):
+        """A docstring promete que nunca levanta. Antes, levantava."""
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(INT_GIGANTE) is None
+
+    @pytest.mark.parametrize("valor", [1e300, -1e300, 1e13, "1e300"])
+    def test_para_float_recusa_magnitude_implausivel(self, valor):
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(valor) is None
+
+    def test_valores_plausiveis_continuam_passando(self):
+        conv = getattr(gateway_module, "_para_float", None)
+        if conv is None:
+            pytest.skip("_para_float não existe neste commit")
+        assert conv(299.90) == 299.90
+        assert conv("1.299,90") == 1299.90
+        assert conv(1e11) == 1e11      # R$ 100 bi ainda é plausível
+
+    @pytest.mark.parametrize("campo,valor", [
+        ("valor", 1e300),
+        ("valor", -1e300),
+        ("total_cents", 1e300),
+    ])
+    def test_webhook_recusa_com_422_e_nunca_500(self, client, campo, valor):
+        """O portão de qualidade tem que pegar isto ANTES do modelo."""
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {campo: valor, "id_recorrencia": "RN_mag"},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code < 500, f"HTTP {r.status_code} — P0-1 vivo por magnitude"
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+    def test_webhook_recusa_inteiro_gigante_sem_500(self, client):
+        """Inteiro de 401 dígitos: `json.loads` entrega `int` de precisão
+        arbitrária, e `float()` sobre ele levanta OverflowError."""
+        corpo = ('{"event":"automatic_pix.charge_failed","data":'
+                 '{"valor":' + "9" * 401 + ',"id_recorrencia":"RN_big"}}').encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code < 500, f"HTTP {r.status_code} — OverflowError escapou"
+        assert r.status_code == 422
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A1-r2 — /simulate/pix-falhado TEM QUE TER OS MESMOS PORTÕES
+#
+# É o endpoint que a demo usa. Sintetizava `degradacoes: []` e passava
+# `payload.valor` cru: `-500` criava negócio de R$ -500,00 no CRM, `NaN` criava
+# negócio de R$ nan, e `1e300` devolvia 500. O P0-5 e o N-10 inteiros, na porta
+# que a banca vai ver funcionando.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestA1R2SimuladorTemOsMesmosPortoes:
+
+    @pytest.fixture
+    def sim_client(self, monkeypatch):
+        monkeypatch.setenv("ENV", "demo")
+        chamadas = []
+
+        async def fake_involuntary(event, payment_method="card", **kwargs):
+            chamadas.append(kwargs.get("amount"))
+
+        monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
+        with TestClient(app_module.app) as c:
+            c.pipeline_calls = chamadas
+            yield c
+
+    @pytest.mark.parametrize("valor", [-500.0, 0.0, float("nan"), float("inf"), 1e300])
+    def test_valor_inutilizavel_e_recusado_com_422(self, sim_client, valor):
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_sim", "valor": valor, "ispb_pagador": "60701190"})
+        assert r.status_code < 500, f"HTTP {r.status_code} com valor={valor!r}"
+        assert r.status_code == 422, (
+            f"valor={valor!r} entrou no pipeline da demo (HTTP {r.status_code})")
+        assert sim_client.pipeline_calls == [], (
+            f"pipeline rodou com amount={sim_client.pipeline_calls}")
+
+    def test_valor_legitimo_continua_passando(self, sim_client):
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_sim", "valor": 299.90, "ispb_pagador": "60701190"})
+        assert r.status_code == 200
+        assert sim_client.pipeline_calls == [299.90]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A1-r3 — OS TRÊS FUROS QUE SOBRARAM
+#
+# A rodada 3 fechou o P0-1 por magnitude (1.317 webhooks, zero 5xx) e achou
+# que o MESMO defeito continuava vivo em três portas que a correção não tocou.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestA1R3ArredondaAntesDeValidar:
+    """`0 < valor < 0,005` virava R$ 0,00 e criava negócio no CRM."""
+
+    @pytest.fixture
+    def sim_client(self, monkeypatch):
+        monkeypatch.setenv("ENV", "demo")
+        chamadas = []
+
+        async def fake_involuntary(event, payment_method="card", **kwargs):
+            chamadas.append(kwargs.get("amount"))
+
+        monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
+        with TestClient(app_module.app) as c:
+            c.pipeline_calls = chamadas
+            yield c
+
+    @pytest.mark.parametrize("valor", [0.001, 0.004, 0.0049])
+    def test_valor_que_arredonda_para_zero_e_recusado(self, sim_client, valor):
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_r3", "valor": valor, "ispb_pagador": "60701190"})
+        assert r.status_code == 422, (
+            f"valor={valor} passou e vira R$ 0,00 no CRM (HTTP {r.status_code})")
+        assert sim_client.pipeline_calls == []
+
+    def test_um_centavo_continua_sendo_cobranca_valida(self, sim_client):
+        """O corte é em zero, não numa faixa arbitrária de valor baixo."""
+        r = sim_client.post("/simulate/pix-falhado", json={
+            "id_recorrencia": "RN_r3", "valor": 0.005, "ispb_pagador": "60701190"})
+        assert r.status_code == 200
+        assert sim_client.pipeline_calls == [0.01]
+
+    def test_nenhum_amount_zerado_chega_ao_pipeline(self, sim_client):
+        for v in (0.001, 0.002, 0.003, 0.004):
+            sim_client.post("/simulate/pix-falhado", json={
+                "id_recorrencia": "RN_z", "valor": v, "ispb_pagador": "60701190"})
+        assert 0.0 not in sim_client.pipeline_calls
+
+
+class TestA1R3OutrosSimulateNaoDevolvem500:
+    """O padrão do P0-5 se repetia nos dois /simulate/* não tocados."""
+
+    @pytest.fixture
+    def sim_client(self, monkeypatch):
+        monkeypatch.setenv("ENV", "demo")
+        with TestClient(app_module.app, raise_server_exceptions=False) as c:
+            yield c
+
+    @pytest.mark.parametrize("amount", [float("nan"), float("inf"), 1e300, 0.001])
+    def test_payment_failed_recusa_sem_500(self, sim_client, amount):
+        """`int(amount * 100)` levantava ValueError com nan/inf."""
+        r = sim_client.post("/simulate/payment-failed",
+                            content=json.dumps({"customer_id": "c1", "amount": amount}),
+                            headers={"content-type": "application/json"})
+        assert r.status_code < 500, f"HTTP {r.status_code} com amount={amount!r}"
+        assert r.status_code == 422
+
+    def test_payment_failed_legitimo_continua_passando(self, sim_client):
+        r = sim_client.post("/simulate/payment-failed",
+                            content=json.dumps({"customer_id": "c1", "amount": 299.90}),
+                            headers={"content-type": "application/json"})
+        assert r.status_code == 200
+
+    def test_churn_risk_recusa_contador_absurdo_sem_500(self, sim_client):
+        """Inteiro de 401 dígitos atravessava o Pydantic e estourava lá dentro
+        — com o negócio já criado no HubSpot antes do erro."""
+        corpo = '{"user_id":"u1","days_since_last":' + "9" * 401 + "}"
+        r = sim_client.post("/simulate/churn-risk", content=corpo,
+                            headers={"content-type": "application/json"})
+        assert r.status_code < 500, f"HTTP {r.status_code} — TypeError escapou"
+        assert r.status_code == 422
+
+    def test_churn_risk_legitimo_continua_passando(self, sim_client):
+        r = sim_client.post("/simulate/churn-risk",
+                            content=json.dumps({"user_id": "u1", "days_since_last": 14}),
+                            headers={"content-type": "application/json"})
+        assert r.status_code == 200
+
+
+class TestA1R3N9ListaQueNaoEObjeto:
+    """`data: ["texto"]` produzia cobrança falhada válida a partir da raiz."""
+
+    # `[]` fica de fora de propósito: lista vazia é envelope ausente e continua
+    # caindo na raiz com `envelope_ausente`, como o Sprint 1 fixou para o P0-3.
+    @pytest.mark.parametrize("data", [["texto"], [123], [None], [["aninhado"]]])
+    def test_lista_sem_objeto_e_recusada(self, client, data):
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed", "data": data,
+            "valor": 77, "id_recorrencia": "RN_n9",
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 422, (
+            f"data={data!r} virou evento válido (HTTP {r.status_code}) — o "
+            "parser trocou de fonte de dados em silêncio")
+        assert client.pipeline_calls == []
+
+    def test_lote_de_um_objeto_continua_desempacotando(self, client):
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": [{"valor": 77, "id_recorrencia": "RN_ok"}],
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 200
+
+
+class TestA1R3TetoIgualNosDoisCaminhos:
+    """Guardas de fronteira — **não** são a regressão que o nome promete.
+
+    A auditoria A1-r4 mediu: as duas funções abaixo passam idênticas em
+    `b9388d5`, o commit que elas supostamente validavam. 1e12 e 1e15 centavos
+    já caíam do lado certo antes da mudança, porque a mudança de `8ee67ae` era
+    ramo morto. Um teste que passa antes e depois não prova correção — é a
+    regra do plano, e a mensagem de commit as apresentou como prova mesmo
+    assim.
+
+    Ficam, porque travar a fronteira tem valor próprio. Mas a prova de que o
+    teto é o mesmo nas duas unidades está em `TestA1R4TetoIgualNasDuasUnidades`.
+    """
+
+    def test_centavos_usa_o_mesmo_teto_em_reais(self, client):
+        """1e12 centavos = R$ 10 bilhões: plausível, tem que passar."""
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"total_cents": 1e12, "id_recorrencia": "RN_c"},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 200
+
+    def test_centavos_acima_do_teto_em_reais_e_recusado(self, client):
+        """1e15 centavos = R$ 10 trilhões: acima do teto, tem que recusar."""
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"total_cents": 1e15, "id_recorrencia": "RN_c"},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 422
+
+
+class TestA1R4TetoIgualNasDuasUnidades:
+    """O mesmo dinheiro tem que atravessar os dois campos, ou o teto é dois.
+
+    Defeito da auditoria A1-r4. `_extrair_valor` chamava `_para_float` sobre o
+    campo em centavos **sem converter o teto de unidade**. Como `_para_float`
+    já recusa acima de 1e12, o campo em centavos ficava limitado a 1e12
+    centavos = R$ 10 bilhões, enquanto o campo em reais aceitava R$ 1 trilhão:
+    **dois tetos, 100× diferentes, para a mesma regra de negócio**. E a
+    checagem acrescentada em `8ee67ae` logo depois da divisão por 100 nunca
+    disparava — nada que sobrevivesse a 1e12 centavos podia exceder 1e12 reais
+    depois de dividido por 100. Ramo morto documentado como correção.
+
+    Medido em `8ee67ae`, por busca binária sobre o maior valor aceito:
+        via 'valor'       : R$ 1.000.000.000.000
+        via 'total_cents' : R$    10.000.000.000
+        razão             : 100,0x
+
+    `1e12` abaixo é o literal de `VALOR_MAXIMO_PLAUSIVEL`, escrito à mão pela
+    mesma razão que o resto deste arquivo escreve os rótulos à mão.
+    """
+
+    TETO_REAIS = 1e12
+
+    @staticmethod
+    def _valor_lido(campo: str, bruto) -> tuple:
+        degradacoes: list = []
+        valor = PixAutomaticoAdapter._extrair_valor({campo: bruto}, degradacoes)
+        return valor, degradacoes
+
+    def test_cem_bilhoes_passa_pelos_dois_campos(self):
+        """R$ 100 bi está abaixo do teto declarado: os dois campos têm que ler."""
+        alvo = self.TETO_REAIS / 10
+
+        por_reais, degr_reais = self._valor_lido("valor", alvo)
+        por_centavos, degr_centavos = self._valor_lido("total_cents", alvo * 100)
+
+        assert por_reais == alvo, f"campo em reais recusou {alvo}: {degr_reais}"
+        assert por_centavos == alvo, (
+            f"TETO ASSIMÉTRICO: R$ {alvo:,.0f} passa por 'valor' e é recusado por "
+            f"'total_cents' ({degr_centavos}) — a mesma regra com dois limites, "
+            "dependendo de qual campo o PSP usou"
+        )
+
+    def test_a_fronteira_e_a_mesma_nas_duas_unidades(self):
+        """Exatamente no teto: aceito nos dois. Acima: recusado nos dois."""
+        no_teto_reais, _ = self._valor_lido("valor", self.TETO_REAIS)
+        no_teto_cents, degr = self._valor_lido("total_cents", self.TETO_REAIS * 100)
+
+        assert no_teto_reais == self.TETO_REAIS
+        assert no_teto_cents == self.TETO_REAIS, (
+            f"o valor exatamente no teto é aceito em reais e recusado em "
+            f"centavos ({degr})"
+        )
+
+        acima = self.TETO_REAIS * 10
+        assert self._valor_lido("valor", acima)[0] == 0.0
+        assert self._valor_lido("total_cents", acima * 100)[0] == 0.0
+
+    def test_o_maior_valor_aceito_e_o_mesmo_nos_dois_campos(self):
+        """Busca binária: a razão entre os dois tetos tem que ser 1, não 100."""
+        def maior_aceito(campo: str, em_centavos: bool) -> float:
+            baixo, alto = 0.0, self.TETO_REAIS * 1_000
+            for _ in range(120):
+                meio = (baixo + alto) / 2
+                valor, _degr = self._valor_lido(
+                    campo, meio * 100 if em_centavos else meio)
+                if valor == 0.0:
+                    alto = meio
+                else:
+                    baixo = meio
+            return baixo
+
+        teto_reais = maior_aceito("valor", em_centavos=False)
+        teto_cents = maior_aceito("total_cents", em_centavos=True)
+
+        assert teto_cents > 0, "nenhum valor passou pelo campo em centavos"
+        razao = teto_reais / teto_cents
+        assert 0.99 < razao < 1.01, (
+            f"tetos diferentes: R$ {teto_reais:,.0f} via 'valor' contra "
+            f"R$ {teto_cents:,.0f} via 'total_cents' ({razao:,.1f}x de diferença)"
+        )
+
+
+class TestA1R3N11IdentidadeNaoEEstrutura:
+    """`str()` sobre dict/list virava identidade de checkpoint."""
+
+    @pytest.mark.parametrize("bruto", [{"a": 1}, ["x", "y"], {"nested": {"b": 2}}])
+    def test_estrutura_nao_vira_id_recorrencia(self, client, bruto):
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"valor": 77, "id_recorrencia": bruto, "e2e_id": "E_n11"},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 200
+        assert client.pipeline_calls, "evento legítimo deveria entrar no pipeline"
+        _, evento = client.pipeline_calls[-1]
+        assert evento["id_recorrencia"] == "", (
+            f"estrutura virou identidade: {evento['id_recorrencia']!r}")
+        assert DEGR_IDENTIFICACAO_ILEGIVEL in evento["degradacoes"]
+
+    def test_sem_nenhuma_identificacao_escalar_e_recusado(self, client):
+        """Estrutura em TODOS os campos de identidade → 422, não id inventado."""
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"valor": 77, "id_recorrencia": {"a": 1}, "e2e_id": ["z"]},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 422
+        assert client.pipeline_calls == []
+
+    def test_identidade_escalar_continua_intacta(self, client):
+        corpo = json.dumps({
+            "event": "automatic_pix.charge_failed",
+            "data": {"valor": 77, "id_recorrencia": "RN_ok", "ispb_pagador": 60701190},
+        }).encode()
+        r = client.post("/webhooks/pix-automatico", content=corpo,
+                        headers={"x-pix-signature": pix_header(corpo)})
+        assert r.status_code == 200
+        _, evento = client.pipeline_calls[-1]
+        assert evento["id_recorrencia"] == "RN_ok"
+        assert evento["ispb_pagador"] == "60701190"   # int escalar é aceito
+        assert DEGR_IDENTIFICACAO_ILEGIVEL not in evento["degradacoes"]
