@@ -331,9 +331,9 @@ class TestCriticidadeNoGrafo:
         recebidos = []
         real = va._bandit.choose_offer
 
-        def espiao(profile, risk_score, mrr=None):
+        def espiao(tenant_id, profile, risk_score, mrr=None):
             recebidos.append(mrr)
-            return real(profile, risk_score, mrr=mrr)
+            return real(tenant_id, profile, risk_score, mrr=mrr)
 
         monkeypatch.setattr(va._bandit, "choose_offer", espiao)
 
@@ -348,10 +348,12 @@ class TestCriticidadeNoGrafo:
         perfil, mesma oferta — a criticidade não toca a decisão do bandit."""
         from crai.churn_voluntary.offer_bandit import OfferBandit
 
+        from crai.churn_voluntary.offer_bandit import TENANT_PADRAO
+
         escolhas = []
         for risco in (0.10, 0.80, 0.95):
             bandit = OfferBandit(seed=7)
-            escolhas.append(bandit.choose_offer("PJ", risco, mrr=550.0))
+            escolhas.append(bandit.choose_offer(TENANT_PADRAO, "PJ", risco, mrr=550.0))
 
         assert len(set(escolhas)) == 1, (
             f"a oferta variou com o risco: {escolhas}")

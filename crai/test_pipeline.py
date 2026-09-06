@@ -101,13 +101,13 @@ async def run_voluntary_scenario(name, user_id, event, props):
     print(f"\n{'═'*64}\n  CHURN VOLUNTÁRIO — {name}\n  {user_id} | evento: {event}\n{'═'*64}")
 
     initial: ChurnVoluntaryState = {
-        "user_id": user_id, "event": event, "props": props,
+        "tenant_id": "demo_tenant", "user_id": user_id, "event": event, "props": props,
         "risk_score": 0.0, "profile": "CLT", "criticality": "padrao", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False, "is_critical": False,
     }
-    config = {"configurable": {"thread_id": user_id}}
+    config = {"configurable": {"thread_id": f"demo_tenant:{user_id}"}}
     return await agente_do_modo().ainvoke(initial, config)
 
 

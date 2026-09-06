@@ -178,21 +178,22 @@ class TestChooseChannel:
         provar errada, é este teste que reprova primeiro — que é exatamente o
         ponto de tê-lo.
         """
-        va._channel_history["usr_teste"] = "popup"
+        va._channel_history[va.chave_de_canal(None, "usr_teste")] = "popup"
         r = await va.choose_channel(_estado("critico"))
         assert r["channel"] == "whatsapp"
 
     @pytest.mark.asyncio
     async def test_historico_preservado_fora_da_criticidade(self):
         """CATRACA: a memória de canal do Sprint anterior continua valendo."""
-        va._channel_history["usr_teste"] = "popup"
+        # A chave é composta desde o Sprint 5: `f"{tenant_id}:{user_id}"`.
+        va._channel_history[va.chave_de_canal(None, "usr_teste")] = "popup"
         r = await va.choose_channel(_estado("padrao"))
         assert r["channel"] == "popup"
 
     @pytest.mark.asyncio
     async def test_historico_whatsapp_sem_numero_nao_roteia_para_o_vazio(self):
         """Memória de um canal que não existe agora é memória, não destino."""
-        va._channel_history["usr_teste"] = "whatsapp"
+        va._channel_history[va.chave_de_canal(None, "usr_teste")] = "whatsapp"
         r = await va.choose_channel(_estado("padrao", phone=None, on_site=True))
         assert r["channel"] == "popup"
 

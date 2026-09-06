@@ -5,6 +5,10 @@ from typing import TypedDict, Optional
 
 class ChurnVoluntaryState(TypedDict):
     # Input (do Segment SDK)
+    # Empresa cliente da CRAI. Separa o aprendizado do bandit e a memória de
+    # canal entre clientes diferentes — sem isto, uma SaaS jurídica ensinaria a
+    # CRAI sobre a base de uma SaaS de e-commerce.
+    tenant_id:  str
     user_id:    str
     event:      str           # Cancellation Page Viewed | Downgrade Clicked | Session Started
     props:      dict          # payload bruto do evento

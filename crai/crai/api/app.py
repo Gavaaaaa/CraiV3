@@ -13,6 +13,7 @@ correta — ver crai/agent/main_agent.py.
 """
 
 import os
+import re
 import json
 import math
 import asyncio
@@ -30,7 +31,7 @@ from pydantic import BaseModel
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
-from ..churn_voluntary.offer_bandit import OFFERS, PROFILES
+from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
@@ -551,6 +552,7 @@ async def segment_webhook(request: Request) -> JSONResponse:
         user_id=_identidade_voluntaria(
             "userId" if identificado else "anonymousId", user_id),
         event=evento, props=props,
+        tenant_id=_tenant_da_requisicao(request, payload, "SEGMENT"),
     )
     return JSONResponse({"status": "ok"})
 
@@ -601,7 +603,7 @@ async def retention_outcome_webhook(request: Request) -> JSONResponse:
 
     offer_type = _campo_com_forma(payload, "offer_type", (str,), "OUTCOME", obrigatorio=True)
     profile = _campo_com_forma(payload, "profile", (str,), "OUTCOME", obrigatorio=True)
-    tenant_id = _campo_com_forma(payload, "tenant_id", (str,), "OUTCOME")
+    tenant_id = _tenant_da_requisicao(request, payload, "OUTCOME")
 
     for campo, valor, vocabulario in (("offer_type", offer_type, OFFERS),
                                       ("profile", profile, PROFILES)):
@@ -646,6 +648,7 @@ class SimulateChurnRisk(BaseModel):
     features_used_30d: int = 2
     on_site_now: bool = True
     billing_profile: str = "CLT"
+    tenant_id: Optional[str] = None
     # Sem telefone o canal WhatsApp fica inalcançável pela demo, e o endpoint
     # deixaria de exercitar o código que a demo mostra — é o N-7 outra vez.
     # `Optional[str]` já barra lista e dict no Pydantic; a forma do número quem
@@ -654,7 +657,8 @@ class SimulateChurnRisk(BaseModel):
 
 
 @app.post("/simulate/churn-risk")
-async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
+async def simulate_churn_risk(request: Request,
+                             payload: SimulateChurnRisk) -> JSONResponse:
     _require_simulation_env()
     props = {
         # Contadores validados antes de entrar no pipeline: sem isto, um
@@ -674,9 +678,14 @@ async def simulate_churn_risk(payload: SimulateChurnRisk) -> JSONResponse:
     # cliente, e o endpoint da demo deixaria de exercitar o código que a demo
     # mostra. É o N-7 — já cobrado e fechado no lado involuntário, onde
     # `/simulate/pix-falhado` passa pelo mesmo `_thread_id` do webhook.
+    # Mesma validação do webhook, para o endpoint da demo exercitar o mesmo
+    # código (N-7): aqui também o tenant pode vir por header `x-tenant-id`.
+    tenant = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
     await _run_voluntary_pipeline(
         _identidade_voluntaria("userId", payload.user_id),
-        payload.event, props,
+        payload.event, props, tenant_id=tenant,
     )
     return JSONResponse({"status": "pipeline_executado", "user_id": payload.user_id})
 
@@ -794,6 +803,56 @@ def _recusar_inteiro_grande_demais(valor, origem: str, caminho: str = "propertie
             pilha.extend((v, f"{onde}.{k}", nivel + 1) for k, v in item.items())
         elif isinstance(item, (list, tuple)):
             pilha.extend((v, f"{onde}[{i}]", nivel + 1) for i, v in enumerate(item))
+
+
+# Um tenant é identificador de empresa cliente, não texto livre. O conjunto é
+# restrito de propósito: o valor vira CHAVE em três lugares — o dicionário do
+# bandit, o `_channel_history` (`f"{tenant}:{user}"`) e a coluna do dataset de
+# treino. Um `:` no tenant tornaria a chave de canal ambígua; um valor gigante
+# ou com caractere de controle vira chave de JSON persistido. Slug e UUID, que
+# é o que um tenant realmente é, cabem folgados aqui.
+_TENANT_VALIDO = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+TENANT_HEADER = "x-tenant-id"
+
+
+def _tenant_da_requisicao(request: Request, corpo: dict, origem: str) -> str:
+    """O tenant do evento: header `x-tenant-id`, senão `tenant_id` no corpo.
+
+    AUSENTE CAI EM `default_tenant`, e isso é MVP declarado: a CRAI ainda é
+    operada para um cliente por instalação, e exigir o campo quebraria os
+    webhooks já integrados. O dia em que houver dois clientes na mesma
+    instalação, esta é a linha que vira obrigatória.
+
+    DECLARADO EXPLICITAMENTE E TORTO É 422, não `default_tenant`. Cair no
+    default silenciosamente misturaria o aprendizado de quem tentou se
+    identificar com o de todo mundo que não se identificou — exatamente o
+    vazamento que a camada de tenant existe para impedir. Errar alto é a única
+    leitura correta aqui.
+
+    O literal `default_tenant` também é recusado vindo de fora: é o balde do
+    "não declarado", e ninguém deve poder entrar nele de propósito.
+    """
+    bruto = request.headers.get(TENANT_HEADER)
+    if bruto is None:
+        bruto = _campo_com_forma(corpo, "tenant_id", (str,), origem)
+    if bruto is None:
+        return TENANT_PADRAO
+
+    tenant = bruto.strip()
+    if tenant == TENANT_PADRAO:
+        logger.warning("[%s] tenant_id=%r é reservado — 422", origem, tenant)
+        raise HTTPException(status_code=422, detail={
+            "motivo": "tenant_reservado", "campo": "tenant_id",
+            "detalhe": (f"{TENANT_PADRAO!r} é o balde de quem não declara "
+                        "tenant; use o identificador real da empresa"),
+        })
+    if not _TENANT_VALIDO.match(tenant):
+        logger.warning("[%s] tenant_id=%r fora do formato aceito — 422", origem, tenant)
+        raise HTTPException(status_code=422, detail={
+            "motivo": "tenant_com_forma_invalida", "campo": "tenant_id",
+            "detalhe": "esperado 1-64 caracteres em [A-Za-z0-9._-]",
+        })
+    return tenant
 
 
 def _campo_com_forma(corpo: dict, campo: str, tipos: tuple, origem: str,
@@ -1033,9 +1092,10 @@ def _identidade_voluntaria(campo: str, valor: str) -> str:
     return prefixo + valor
 
 
-async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
+async def _run_voluntary_pipeline(user_id: str, event: str, props: dict,
+                                  tenant_id: str = TENANT_PADRAO):
     initial: ChurnVoluntaryState = {
-        "user_id": user_id, "event": event, "props": props,
+        "tenant_id": tenant_id, "user_id": user_id, "event": event, "props": props,
         "risk_score": 0.0, "profile": "CLT", "criticality": "padrao", "offer_type": None,
         "channel": None, "on_site_now": props.get("on_site_now", False),
         "prior_channel_success": None, "message": None,
@@ -1045,7 +1105,11 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict):
     # mesma coisa em todo lugar: no checkpoint, em `_channel_history` e no
     # HubSpot. Ter duas formas da identidade foi exatamente o defeito que a
     # A1-r10 mediu — a desambiguação chegava a um dos três consumidores.
-    config = {"configurable": {"thread_id": user_id}}
+    #
+    # O TENANT entra no `thread_id` pelo mesmo motivo: dois clientes de empresas
+    # diferentes podem ter o mesmo `user_id`, e sem o prefixo dividiriam o
+    # checkpoint. É o P0-6 um nível acima.
+    config = {"configurable": {"thread_id": f"{tenant_id}:{user_id}"}}
     # `agente_do_modo()` e não um agente fixo: o grafo de produção termina no
     # envio e o de simulação passa por `track_outcome`. Ver o docstring de
     # `voluntary_agent` — são topologias diferentes, escolhidas por

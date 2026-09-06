@@ -122,6 +122,11 @@ class HubSpotCRM:
                 "trigger_event": state.get("event", "unknown"),
                 "offer_type": state.get("offer_type", ""),
                 "channel": state.get("channel", ""),
+                # Qual empresa cliente da CRAI gerou este ciclo. Sem isto, um
+                # HubSpot compartilhado mistura os negócios de dois clientes no
+                # mesmo pipeline sem nada que os separe no relatório.
+                # `register_recovery_cycle` (involuntário) NÃO foi tocado.
+                "tenant_id": state.get("tenant_id", ""),
             },
         )
         return {"hubspot_contact_id": contact_id, "hubspot_deal_id": deal_id, "stage": stage}

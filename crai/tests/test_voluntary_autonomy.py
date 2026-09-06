@@ -46,6 +46,7 @@ from crai.churn_voluntary.offer_bandit import (
     OFFERS,
     PROFILES,
     SEED_PRIORS,
+    TENANT_PADRAO,
     OfferBandit,
     is_critical_risk,
     offer_cost,
@@ -79,7 +80,7 @@ class TestAutonomiaTotal:
         for profile in PROFILES:
             for passo in range(21):
                 risk = round(passo * 0.05, 2)
-                offer = bandit.choose_offer(profile, risk)
+                offer = bandit.choose_offer(TENANT_PADRAO, profile, risk)
                 assert offer != "consulta_cs", (
                     f"escalação humana devolvida para perfil={profile} risco={risk}")
                 assert offer in OFFERS, (
@@ -180,14 +181,17 @@ class TestSaneamentoDoEstadoPersistido:
         bandit = OfferBandit()
         assert bandit.load() is True
 
+        # O arquivo estava no formato pré-tenant: migra inteiro para o padrão.
+        assert set(bandit.state) == {TENANT_PADRAO}
+        perfis = bandit.state[TENANT_PADRAO]
         for profile in PROFILES:
-            assert "consulta_cs" not in bandit.state[profile]
-        assert "consulta_cs" not in bandit.conversion_rates("CLT")
+            assert "consulta_cs" not in perfis[profile]
+        assert "consulta_cs" not in bandit.conversion_rates(TENANT_PADRAO, "CLT")
         # O que era válido no arquivo sobreviveu intacto...
-        assert bandit.state["CLT"]["desconto_10"] == {"alpha": 10.0, "beta": 12.0}
-        assert bandit.state["PJ"]["desconto_20"] == {"alpha": 9.0, "beta": 8.0}
+        assert perfis["CLT"]["desconto_10"] == {"alpha": 10.0, "beta": 12.0}
+        assert perfis["PJ"]["desconto_20"] == {"alpha": 9.0, "beta": 8.0}
         # ...e o que faltava veio do benchmark, sem buraco no vocabulário.
-        assert set(bandit.state["CLT"]) == set(OFFERS)
+        assert set(perfis["CLT"]) == set(OFFERS)
 
     def test_load_descarta_perfis_de_fuzz(self, bandit_isolado):
         """`record_outcome` aceita qualquer string como perfil e persiste."""
@@ -202,7 +206,7 @@ class TestSaneamentoDoEstadoPersistido:
         bandit = OfferBandit()
         bandit.load()
 
-        assert set(bandit.state) == set(PROFILES)
+        assert set(bandit.state[TENANT_PADRAO]) == set(PROFILES)
 
     def test_load_reescreve_o_arquivo_ja_limpo(self, bandit_isolado):
         """Senão o mesmo lixo é relido e relogado em toda inicialização."""
@@ -214,15 +218,17 @@ class TestSaneamentoDoEstadoPersistido:
         OfferBandit().load()
 
         em_disco = json.loads(bandit_isolado.read_text(encoding="utf-8"))
-        assert set(em_disco) == set(PROFILES)
-        assert "consulta_cs" not in em_disco["CLT"]
+        assert set(em_disco) == {TENANT_PADRAO}, "não migrou para o formato com tenant"
+        assert set(em_disco[TENANT_PADRAO]) == set(PROFILES)
+        assert "consulta_cs" not in em_disco[TENANT_PADRAO]["CLT"]
 
     def test_load_sem_arquivo_usa_benchmark(self, bandit_isolado):
         """Cold start: sem arquivo, priors de benchmark e nada escrito em disco."""
         bandit = OfferBandit()
         assert bandit.load() is False
         assert bandit.is_fitted is False
-        assert set(bandit.state) == set(PROFILES)
+        assert set(bandit.state) == {TENANT_PADRAO}
+        assert set(bandit.state[TENANT_PADRAO]) == set(PROFILES)
         assert not bandit_isolado.exists()
 
     @pytest.mark.parametrize("lixo", [
@@ -244,10 +250,11 @@ class TestSaneamentoDoEstadoPersistido:
         bandit = OfferBandit()
         bandit.load()
 
-        assert set(bandit.state) == set(PROFILES)
-        assert set(bandit.state["CLT"]) == set(OFFERS)
+        perfis = bandit.state[TENANT_PADRAO]
+        assert set(perfis) == set(PROFILES)
+        assert set(perfis["CLT"]) == set(OFFERS)
         alpha, beta = SEED_PRIORS["CLT"]["desconto_10"]
-        assert bandit.state["CLT"]["desconto_10"] == {"alpha": 1.0 + alpha, "beta": 1.0 + beta}
+        assert perfis["CLT"]["desconto_10"] == {"alpha": 1.0 + alpha, "beta": 1.0 + beta}
 
     def test_sanear_estado_relata_o_que_descartou(self):
         """O descarte é logado, não silencioso: perder aprendizado sem dizer é
@@ -258,6 +265,7 @@ class TestSaneamentoDoEstadoPersistido:
             "abc": {"desconto_10": {"alpha": 2.0, "beta": 1.0}},
         })
 
-        assert descartes["perfis"] == ["abc"]
-        assert descartes["ofertas"] == ["CLT/consulta_cs"]
-        assert descartes["posteriores"] == ["CLT/desconto_10"]
+        # Os rótulos carregam o tenant desde o Sprint 5: `<tenant>/<perfil>/...`
+        assert descartes["perfis"] == [f"{TENANT_PADRAO}/abc"]
+        assert descartes["ofertas"] == [f"{TENANT_PADRAO}/CLT/consulta_cs"]
+        assert descartes["posteriores"] == [f"{TENANT_PADRAO}/CLT/desconto_10"]

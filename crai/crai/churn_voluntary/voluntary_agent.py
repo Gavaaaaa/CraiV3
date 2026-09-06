@@ -59,8 +59,18 @@ _bandit  = OfferBandit()
 _bandit.load()  # warm start dos posteriores simulados; senão, priors de benchmark
 _hubspot = HubSpotCRM()
 
-# Histórico simples de qual canal converteu por cliente (cold start em memória)
+# Histórico simples de qual canal converteu por cliente (cold start em memória).
+# A chave é COMPOSTA — `f"{tenant_id}:{user_id}"` — desde o Sprint 5: dois
+# clientes de empresas diferentes podem ter o mesmo `user_id`, e a memória de
+# canal de um decidiria o envio do outro. É o mesmo raciocínio do P0-6 no
+# checkpoint, um nível acima.
 _channel_history: dict[str, str] = {}
+
+
+def chave_de_canal(tenant_id: str, user_id: str) -> str:
+    """A chave do `_channel_history`. Uma função só, para os três consumidores
+    (nó de canal, desfecho simulado e desfecho real) não divergirem."""
+    return f"{tenant_id or TENANT_PADRAO}:{user_id}"
 
 OFFER_LABELS = {
     "desconto_10": "10% de desconto por 3 meses",
@@ -90,8 +100,9 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # usa o MRR típico do perfil, que é o que ele já fazia quando o evento não
     # trazia plano nenhum.
     mrr = mrr_utilizavel(state["props"].get("mrr"))
-    offer = _bandit.choose_offer(state["profile"], state["risk_score"], mrr=mrr)
-    p_estimado = _bandit.conversion_rates(state["profile"]).get(offer, 0.0)
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    offer = _bandit.choose_offer(tenant, state["profile"], state["risk_score"], mrr=mrr)
+    p_estimado = _bandit.conversion_rates(tenant, state["profile"]).get(offer, 0.0)
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
     return {**state, "offer_type": offer,
@@ -123,12 +134,12 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     `else` devolviam os dois `"email"`, então a condição nunca decidiu nada. O
     caso que ele queria cobrir — risco alto fora do site — agora é o item 1.
     """
-    user_id = state["user_id"]
     on_site = state["props"].get("on_site_now", state.get("on_site_now", False))
     criticality = state.get("criticality", "padrao")
     destino = destino_utilizavel(state["props"].get("phone"))
 
-    prior = _channel_history.get(user_id)
+    prior = _channel_history.get(
+        chave_de_canal(state.get("tenant_id"), state["user_id"]))
 
     if destino and criticality in ("critico", "alto"):
         channel = "whatsapp"
@@ -264,13 +275,14 @@ async def track_outcome(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     corrigir, e é por isso que o nó ficou isolado num modo declarado em vez de
     num `if` dentro do caminho de produção.
     """
-    rates = _bandit.conversion_rates(state["profile"])
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    rates = _bandit.conversion_rates(tenant, state["profile"])
     prob  = rates.get(state["offer_type"], 0.3)
     accepted = random.random() < prob
 
-    _bandit.record_outcome(state["profile"], state["offer_type"], accepted)
+    _bandit.record_outcome(tenant, state["profile"], state["offer_type"], accepted)
     if accepted:
-        _channel_history[state["user_id"]] = state["channel"]
+        _channel_history[chave_de_canal(tenant, state["user_id"])] = state["channel"]
 
     print(f"[CHURN-VOL] Resultado: {'✅ ACEITOU' if accepted else '❌ recusou'}")
     return {**state, "accepted": accepted, "retained": accepted}
@@ -338,11 +350,11 @@ async def registrar_resultado_externo(user_id: str, offer_type: str, profile: st
     if not registrar_desfecho(tenant_id, user_id, offer_type, accepted):
         return {"contabilizado": False, "ciclo": ciclo}
 
-    _bandit.record_outcome(profile, offer_type, accepted)
+    _bandit.record_outcome(tenant_id, profile, offer_type, accepted)
 
     canal = (ciclo or {}).get("channel")
     if accepted and canal:
-        _channel_history[user_id] = canal
+        _channel_history[chave_de_canal(tenant_id, user_id)] = canal
 
     # Rótulo em ASCII, não os emoji do `track_outcome`: a catraca do N-12
     # (tests/test_encoding_saida.py) diz que o inventário de caracteres que o

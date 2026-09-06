@@ -120,12 +120,12 @@ class TestModosDoGrafo:
         do grafo o ciclo está ABERTO: `accepted` é NULL no log, e o posterior
         do bandit não se moveu.
         """
-        antes = va._bandit.conversion_rates("PJ")
+        antes = va._bandit.conversion_rates(rl.TENANT_PADRAO, "PJ")
         linha = _disparar_ciclo(cliente)
 
         assert linha["accepted"] is None, "o grafo de produção decidiu o desfecho sozinho"
         assert linha["offer_sent"] == 1
-        assert va._bandit.conversion_rates("PJ") == antes, (
+        assert va._bandit.conversion_rates(rl.TENANT_PADRAO, "PJ") == antes, (
             "o posterior mudou sem desfecho real")
 
     def test_simulacao_fecha_o_ciclo_na_hora(self, cliente, monkeypatch):
@@ -164,14 +164,14 @@ class TestBordaDoWebhook:
         """Um endpoint que move o posterior é superfície de ataque: aberto,
         qualquer um faz a CRAI acreditar que uma oferta converte 100%."""
         linha = _disparar_ciclo(cliente)
-        antes = va._bandit.conversion_rates("PJ")
+        antes = va._bandit.conversion_rates(rl.TENANT_PADRAO, "PJ")
 
         r = cliente.post("/webhooks/retention-outcome", json={
             "user_id": "cliente_teste", "offer_type": linha["offer_type"],
             "profile": "PJ", "accepted": True})
 
         assert r.status_code == 401
-        assert va._bandit.conversion_rates("PJ") == antes
+        assert va._bandit.conversion_rates(rl.TENANT_PADRAO, "PJ") == antes
 
     def test_assinatura_errada_e_401(self, cliente):
         linha = _disparar_ciclo(cliente)
@@ -232,7 +232,7 @@ class TestDesfechoReal:
     def test_webhook_valido_move_o_posterior(self, cliente):
         linha = _disparar_ciclo(cliente)
         oferta = linha["offer_type"]
-        alpha_antes = va._bandit.state["PJ"][oferta]["alpha"]
+        alpha_antes = va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["alpha"]
 
         r = _enviar_desfecho(cliente, {
             "user_id": "cliente_teste", "offer_type": oferta,
@@ -240,18 +240,18 @@ class TestDesfechoReal:
 
         assert r.status_code == 200
         assert r.json()["status"] == "contabilizado"
-        assert va._bandit.state["PJ"][oferta]["alpha"] == alpha_antes + 1.0
+        assert va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["alpha"] == alpha_antes + 1.0
 
     def test_recusa_move_o_beta(self, cliente):
         linha = _disparar_ciclo(cliente)
         oferta = linha["offer_type"]
-        beta_antes = va._bandit.state["PJ"][oferta]["beta"]
+        beta_antes = va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["beta"]
 
         _enviar_desfecho(cliente, {
             "user_id": "cliente_teste", "offer_type": oferta,
             "profile": "PJ", "accepted": False})
 
-        assert va._bandit.state["PJ"][oferta]["beta"] == beta_antes + 1.0
+        assert va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["beta"] == beta_antes + 1.0
 
     def test_reenvio_nao_conta_duas_vezes(self, cliente):
         """Webhook reenvia — é o normal, não a exceção. Contar duas vezes
@@ -262,7 +262,7 @@ class TestDesfechoReal:
                    "profile": "PJ", "accepted": True}
 
         primeira = _enviar_desfecho(cliente, payload)
-        alpha_depois = va._bandit.state["PJ"][oferta]["alpha"]
+        alpha_depois = va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["alpha"]
         segunda = _enviar_desfecho(cliente, payload)
         terceira = _enviar_desfecho(cliente, payload)
 
@@ -270,19 +270,19 @@ class TestDesfechoReal:
         assert segunda.json()["status"] == "ignorado"
         assert terceira.json()["status"] == "ignorado"
         assert segunda.status_code == 200, "reenvio não é erro do cliente"
-        assert va._bandit.state["PJ"][oferta]["alpha"] == alpha_depois
+        assert va._bandit.state[rl.TENANT_PADRAO]["PJ"][oferta]["alpha"] == alpha_depois
 
     def test_desfecho_orfao_nao_ensina(self, cliente):
         """Desfecho de uma oferta que este sistema nunca fez: aprender com
         isso seria aprender com dado de origem desconhecida."""
-        antes = va._bandit.conversion_rates("CLT")
+        antes = va._bandit.conversion_rates(rl.TENANT_PADRAO, "CLT")
 
         r = _enviar_desfecho(cliente, {
             "user_id": "nunca_visto", "offer_type": "desconto_10",
             "profile": "CLT", "accepted": True})
 
         assert r.json()["status"] == "ignorado"
-        assert va._bandit.conversion_rates("CLT") == antes
+        assert va._bandit.conversion_rates(rl.TENANT_PADRAO, "CLT") == antes
 
     def test_aceite_alimenta_o_historico_de_canal(self, cliente):
         """O que `track_outcome` fazia no grafo, agora pelo caminho real — e o
@@ -293,7 +293,8 @@ class TestDesfechoReal:
             "user_id": "cliente_teste", "offer_type": linha["offer_type"],
             "profile": "PJ", "accepted": True})
 
-        assert va._channel_history["user:cliente_teste"] == linha["channel"]
+        assert va._channel_history[
+            va.chave_de_canal(rl.TENANT_PADRAO, "user:cliente_teste")] == linha["channel"]
 
     def test_recusa_nao_alimenta_o_historico(self, cliente):
         linha = _disparar_ciclo(cliente)
@@ -316,7 +317,8 @@ class TestDesfechoReal:
             "user_id": "colisao", "offer_type": linha["offer_type"],
             "profile": "PJ", "accepted": True})
 
-        assert list(va._channel_history) == ["user:colisao"], (
+        assert list(va._channel_history) == [
+            va.chave_de_canal(rl.TENANT_PADRAO, "user:colisao")], (
             "o desfecho gravou histórico sob identidade não qualificada")
 
 

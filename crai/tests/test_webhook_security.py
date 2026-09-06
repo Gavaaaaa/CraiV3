@@ -56,7 +56,10 @@ def client(monkeypatch):
     async def fake_involuntary(event, payment_method="card", **kwargs):
         chamadas.append(("involuntary", payment_method))
 
-    async def fake_voluntary(user_id, event, props, thread_id=None):
+    async def fake_voluntary(user_id, event, props, thread_id=None, **kwargs):
+        # `**kwargs` para o dublê não precisar acompanhar cada parâmetro novo do
+        # pipeline (`tenant_id` chegou no Sprint 5). O que este fixture mede é
+        # QUEM foi chamado, não com o quê.
         chamadas.append(("voluntary", user_id))
 
     monkeypatch.setattr(app_module, "_run_involuntary_pipeline", fake_involuntary)
@@ -969,10 +972,17 @@ class TestA1R8IdentidadeDoSegmentNaoColide:
             "protege o checkpoint e deixa o canal e o CRM colidindo"
         )
 
+        # A chave do `_channel_history` virou COMPOSTA no Sprint 5
+        # (`f"{tenant_id}:{user_id}"`), porque `user_id` sozinho colidia entre
+        # empresas clientes diferentes. O invariante medido aqui não mudou —
+        # duas identidades, duas entradas, e o identificado fora do site recebe
+        # e-mail —, só a forma da chave. O teste continua exercendo o
+        # INVARIANTE, não a string: procura o segmento `:user:` em vez de fixar
+        # o prefixo, que foi a lição da própria A1-r9.
         canais_do_identificado = [canal for chave, canal
                                   in va._channel_history.items()
                                   if chave.endswith("vitima_r10")
-                                  and chave.startswith("user:")]
+                                  and ":user:" in chave]
         assert canais_do_identificado == ["email"], (
             f"o cliente identificado, FORA do site, recebeu "
             f"{canais_do_identificado}; esperado ['email']. Ele herdou o canal "

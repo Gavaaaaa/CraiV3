@@ -63,8 +63,9 @@ crai/
 │   ├── voluntary_agent.py           # Grafo LangGraph: risk -> offer -> channel -> message -> CRM
 │   │                                #   DUAS topologias: produção termina no envio,
 │   │                                #   simulação passa por track_outcome (CRAI_SIMULATE_OUTCOMES)
-│   ├── retention_log.py             # Dataset de treino: 1 linha por ciclo (SQLite, gitignored)
-│   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por perfil
+│   ├── retention_log.py             # Dataset de treino: 1 linha por ciclo, com tenant_id
+│   │                                #   (SQLite em data/, gitignored)
+│   ├── offer_bandit.py              # Multi-Armed Bandit — melhor oferta por TENANT e perfil
 │   ├── risk_scorer.py               # risk_score + criticidade (tom) a partir de eventos Segment
 │   └── state.py
 ├── ml/
