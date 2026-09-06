@@ -324,8 +324,22 @@ async def trigger_dunning(state: AgentState) -> AgentState:
     }
 
 
+# Percentual do valor recuperado que a CRAI cobra — a receita do modelo
+# Outcome-as-a-Service. Vive aqui, e só aqui, porque o fechamento do ciclo
+# acontece em DOIS lugares desde o Sprint 1: neste nó (ciclo perdido/enviado) e
+# em `_fechar_ciclo_recuperado` (crai/api/app.py), quando o webhook de
+# confirmação do PSP chega. Duas cópias do percentual divergiriam no dia em que
+# uma fosse ajustada, e a divergência apareceria como diferença de faturamento.
+SUCCESS_FEE_PCT = 0.15
+
+
+def success_fee(amount: float, recovered: bool) -> float:
+    """O que a CRAI cobra por este ciclo. Zero quando não houve recuperação."""
+    return round(amount * SUCCESS_FEE_PCT, 2) if recovered else 0.0
+
+
 async def update_roi_dashboard(state: AgentState) -> AgentState:
-    fee = state["amount"] * 0.15 if state.get("recovered") else 0
+    fee = success_fee(state["amount"], bool(state.get("recovered")))
     eprofit = state.get("eprofit", 0)
     recovered_icon = "[OK]" if state.get("recovered") else "[X]"
     print(f"[ROI] {recovered_icon} R$ {state['amount']:.2f} | taxa R$ {fee:.2f} | e-Profit R$ {eprofit:.2f}")

@@ -35,9 +35,27 @@ os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
 
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
-from crai.api.app import _registrar_cartao_desativado
+from crai.api.app import _fechar_ciclo_recuperado, _registrar_cartao_desativado
 from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
+
+
+# ── Cabeçalho dos cenários ───────────────────────────────────────────────
+#
+# UM lugar com a régua, e não um literal por cenário. A régua usa U+2550, que o
+# console cp1252 do Windows não codifica (linha N-12 do README, catraca em
+# `tests/test_encoding_saida.py`): cada cópia do literal era uma ocorrência a
+# mais do mesmo defeito, e a quinta cópia — o cabeçalho da confirmação de
+# pagamento do Sprint 1 — foi a que estourou a catraca. Consolidar aqui reduz o
+# inventário em vez de aumentá-lo, e deixa um ponto único para trocar a régua
+# por ASCII no dia em que a dívida for paga de vez.
+
+REGUA = "═" * 64
+
+
+def cabecalho(titulo: str, detalhe: str = "") -> None:
+    linha_detalhe = f"\n  {detalhe}" if detalhe else ""
+    print(f"\n{REGUA}\n  {titulo}{linha_detalhe}\n{REGUA}")
 
 
 # ── Churn Involuntário ───────────────────────────────────────────────────
@@ -56,16 +74,16 @@ def make_stripe_event(customer_id, amount, failure_code):
 
 def run_card_scenario(name, customer_id, amount, failure_code):
     """Cartão: o evento é recebido e registrado, sem recobrança automática."""
-    print(f"\n{'═'*64}\n  CARTÃO (RECOBRANÇA DESATIVADA) — {name}\n"
-          f"  {customer_id} | R$ {amount:.2f} | {failure_code}\n{'═'*64}")
+    cabecalho(f"CARTÃO (RECOBRANÇA DESATIVADA) — {name}",
+              f"{customer_id} | R$ {amount:.2f} | {failure_code}")
     return _registrar_cartao_desativado(make_stripe_event(customer_id, amount, failure_code))
 
 
 # ── Churn Involuntário via Pix Automático ────────────────────────────────
 
 async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
-    print(f"\n{'═'*64}\n  CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}\n"
-          f"  {id_recorrencia} | R$ {valor:.2f} | cobrança recorrente falhada\n{'═'*64}")
+    cabecalho(f"CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}",
+              f"{id_recorrencia} | R$ {valor:.2f} | cobrança recorrente falhada")
 
     # Evento já normalizado pelo PixAutomaticoAdapter: 5 campos, sem chave Pix.
     evento = {
@@ -95,10 +113,32 @@ async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
     return await crai_agent.ainvoke(initial, config)
 
 
+async def run_pix_confirmacao(id_recorrencia, valor):
+    """A confirmação de pagamento que fecha o ciclo — o outro fim do loop.
+
+    Em produção este evento chega por `POST /webhooks/pix-automatico` com
+    status de cobrança confirmada, enviado pelo Pagar.me quando uma das
+    tentativas reenviadas é paga. A demo chama a mesma função que o webhook
+    chama (`_fechar_ciclo_recuperado`), e não uma versão paralela: o que a
+    banca vê é o código de produção, sem PSP real.
+
+    Sem esta metade, `recovered` nunca vira True, o success fee nunca aparece
+    e a demo mostra três clientes em retentativa e nenhuma recuperação — o
+    mesmo buraco que o `/webhooks/retention-outcome` fechou no voluntário.
+    """
+    cabecalho("CONFIRMAÇÃO DE PAGAMENTO (PIX AUTOMÁTICO)",
+              f"{id_recorrencia} | R$ {valor:.2f} | cobrança recorrente paga")
+    return await _fechar_ciclo_recuperado(
+        customer_id=id_recorrencia,
+        e2e_id=f"E60701190{id_recorrencia}_pago",
+        valor=valor,
+    )
+
+
 # ── Churn Voluntário ─────────────────────────────────────────────────────
 
 async def run_voluntary_scenario(name, user_id, event, props):
-    print(f"\n{'═'*64}\n  CHURN VOLUNTÁRIO — {name}\n  {user_id} | evento: {event}\n{'═'*64}")
+    cabecalho(f"CHURN VOLUNTÁRIO — {name}", f"{user_id} | evento: {event}")
 
     initial: ChurnVoluntaryState = {
         "tenant_id": "demo_tenant", "user_id": user_id, "event": event, "props": props,
@@ -129,6 +169,17 @@ async def main():
         result = await run_pix_scenario(name, rec_id, valor, usadas)
         pix_results.append(result)
 
+    # ── O ciclo se fecha: o pagamento chega e a recuperação é contabilizada ──
+    #
+    # Só o primeiro cenário paga. Os outros dois seguem em aberto de
+    # propósito: uma demo em que 100% recupera não mede nada, e a taxa de
+    # recuperação (Sprint 6) precisa de denominador.
+    rec_pago, valor_pago = pix_scenarios[0][1], pix_scenarios[0][2]
+    confirmacao = await run_pix_confirmacao(rec_pago, valor_pago)
+    # O reenvio do mesmo webhook — comportamento normal de PSP at-least-once —
+    # não pode faturar de novo. Provado na própria demo, não só no pytest.
+    reenvio = await run_pix_confirmacao(rec_pago, valor_pago)
+
     # ── Cenários de cartão (recobrança automática desativada na Fase 3) ──
     card_scenarios = [
         ("Cartão Expirado",   "cus_joao_002",  149.00, "expired_card"),
@@ -155,7 +206,7 @@ async def main():
         voluntary_results.append(result)
 
     # ── Resumo ───────────────────────────────────────────────────────────
-    print(f"\n{'═'*64}\n  RESUMO GERAL\n{'═'*64}")
+    cabecalho("RESUMO GERAL")
 
     pix_amount = sum(r["amount"] for r in pix_results)
     com_plano = [r for r in pix_results if r.get("pix_retry_schedule")]
@@ -168,6 +219,17 @@ async def main():
         origem = plano[0]["origem"]
         dias = ", ".join(t["quando"].strftime("%d/%m") for t in plano)
         print(f"     {r['customer_id']}: {len(plano)} tentativa(s) em {dias} ({origem})")
+
+    print(f"   Ciclos fechados por pagamento: 1/{len(pix_results)} "
+          f"({confirmacao['ciclo']}, fee R$ {confirmacao['fee']:.2f})")
+    print(f"   Reenvio da mesma confirmação  : {reenvio['ciclo']} "
+          f"(fee R$ {reenvio['fee']:.2f} — não recontado)")
+    assert confirmacao["fee"] > 0, (
+        "INVARIANTE VIOLADO: o ciclo fechou sem success fee — `recovered` não "
+        "chegou ao update_roi_dashboard")
+    assert reenvio["fee"] == 0, (
+        f"INVARIANTE VIOLADO: o reenvio da confirmação faturou "
+        f"R$ {reenvio['fee']:.2f} pela segunda vez")
 
     card_amount = sum(r["amount"] for r in card_results)
     print(f"\n💳 Cartão (recobrança automática desativada — Fase 3):")

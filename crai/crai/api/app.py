@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
+from ..agent.workflow import success_fee, update_roi_dashboard
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
@@ -44,6 +45,11 @@ from ..integrations.payment_gateway import (
     PayloadPixInvalido,
     PixAutomaticoAdapter,
     _para_float,
+)
+from .idempotencia import (
+    CICLOS_FECHADOS,
+    EVENTOS_DE_FALHA,
+    chave_do_evento,
 )
 from ..security.webhook_verification import (
     verify_stripe_signature,
@@ -331,6 +337,12 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
 
     status = evento["status"]
 
+    # A cobrança PAGA é o outro fim do ciclo, e é o evento que faltava.
+    # Ela não roda o pipeline de diagnóstico — não há falha a diagnosticar —,
+    # mas é a única origem que sabe que uma recuperação deu certo.
+    if status == STATUS_COBRANCA_CONFIRMADA:
+        return await _confirmar_cobranca_paga(evento)
+
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
         logger.info("[PIX] %s — registrado sem acionar recuperação "
@@ -363,6 +375,22 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
             "detalhe": ("evento sem id_recorrencia e sem e2e_id — sem isso, "
                         "clientes distintos dividiriam o mesmo checkpoint"),
         })
+
+    # Reenvio da MESMA falha não roda o pipeline de novo (Gap 3). A trava por
+    # `thread_id` e o contador do checkpoint já impediam o 3+3 de tentativas;
+    # o que continuava acontecendo era o custo: diagnóstico, LLM e — a partir
+    # do Sprint 2 — chamada ao PSP repetidos por um evento já tratado.
+    if not EVENTOS_DE_FALHA.registrar_se_novo(
+        chave_do_evento(evento["id_recorrencia"], evento["e2e_id"])
+    ):
+        logger.info("[PIX] Cobrança falhada reenviada (recorrencia=%s, e2e=%s) — "
+                    "pipeline não reexecutado.",
+                    evento["id_recorrencia"] or "desconhecida", evento["e2e_id"][:16])
+        # 200 e não 4xx: reenvio é comportamento correto do PSP, e um erro o
+        # faria retentar para sempre o que já foi processado. Mesma escolha do
+        # `/webhooks/retention-outcome`.
+        return JSONResponse({"status": "ok", "evento": status, "pipeline": False,
+                             "motivo": "evento_ja_processado"})
 
     await _run_involuntary_pipeline(
         event=evento,
@@ -496,6 +524,40 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
         invoice_id=evento["e2e_id"],
     )
     return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})
+
+
+class SimulatePixPago(BaseModel):
+    id_recorrencia: str = "RN_demo_001"
+    # O e2e da cobrança PAGA é outro que não o da falhada — é outra transação.
+    # Default derivado do id da recorrência para a demo não precisar inventá-lo.
+    e2e_id: Optional[str] = None
+    valor:  Optional[float] = None
+
+
+@app.post("/simulate/pix-pago")
+async def simulate_pix_pago(payload: SimulatePixPago) -> JSONResponse:
+    """Confirmação de pagamento sem PSP real — fecha o ciclo de recuperação.
+
+    É a outra metade de `/simulate/pix-falhado`, e existe pelo mesmo motivo que
+    `/webhooks/retention-outcome` existe no voluntário: sem uma origem de
+    desfecho, `recovered` nunca vira `True` e a demo mostra três clientes em
+    retentativa e nenhuma recuperação. Com este endpoint a banca vê o ciclo
+    inteiro — falha → agendamento → confirmação → fee.
+
+    Só fecha ciclo que a CRAI abriu: se não houver checkpoint com diagnóstico
+    para aquele `id_recorrencia`, responde `sem_ciclo_aberto` e não conta fee
+    (a mesma regra do webhook real — ver `_fechar_ciclo_recuperado`).
+    """
+    _require_simulation_env()
+
+    valor = _valor_de_simulacao(payload.valor) if payload.valor is not None else None
+    e2e_id = payload.e2e_id or f"E{payload.id_recorrencia}_pago"
+
+    resultado = await _fechar_ciclo_recuperado(
+        customer_id=payload.id_recorrencia, e2e_id=e2e_id, valor=valor,
+    )
+    return JSONResponse({"status": "confirmacao_processada",
+                         "id_recorrencia": payload.id_recorrencia, **resultado})
 
 
 # ── Churn Voluntário ─────────────────────────────────────────────────────
@@ -982,6 +1044,104 @@ def _trava_do_cliente(customer_id: str) -> asyncio.Lock:
         trava = asyncio.Lock()
         _travas_por_cliente[customer_id] = trava
     return trava
+
+
+async def _confirmar_cobranca_paga(evento: dict) -> JSONResponse:
+    """Trata o evento de cobrança PAGA vindo do PSP (Pagar.me).
+
+    Nem toda cobrança paga é uma recuperação, e essa distinção é o coração
+    deste handler. O Pix Automático cobra todo mês; a esmagadora maioria das
+    confirmações é a mensalidade que deu certo de primeira, e contar success
+    fee sobre elas transformaria a receita da CRAI em percentual do faturamento
+    do cliente. Só é recuperação a confirmação que fecha um ciclo que a CRAI
+    abriu — e quem sabe se há ciclo aberto é o checkpoint do `thread_id`.
+    """
+    customer_id = _thread_id(evento)
+    if customer_id is None:
+        # 200, não 422: uma confirmação é informativa. Recusá-la faria o PSP
+        # retentar indefinidamente um evento sobre o qual não há nada a fazer.
+        logger.info("[PIX] Cobrança confirmada sem identificação — registrada "
+                    "sem fechar ciclo.")
+        return JSONResponse({"status": "ok", "evento": evento["status"],
+                             "pipeline": False, "ciclo": "sem_identificacao"})
+
+    resultado = await _fechar_ciclo_recuperado(
+        customer_id=customer_id,
+        e2e_id=evento["e2e_id"] or "e2e_desconhecido",
+        valor=evento.get("valor") or None,
+    )
+    return JSONResponse({"status": "ok", "evento": evento["status"],
+                         "pipeline": False, **resultado})
+
+
+async def _fechar_ciclo_recuperado(
+    customer_id: str,
+    e2e_id: str,
+    valor: Optional[float] = None,
+) -> dict:
+    """Marca `recovered=True` e fecha o ciclo: ROI com fee + estágio no CRM.
+
+    POR QUE UMA FUNÇÃO DEDICADA, E NÃO UM `ainvoke` A MAIS. Reprocessar o grafo
+    na confirmação seria ativamente errado, não apenas caro:
+
+      - `diagnose_failure` rodaria o ensemble sobre um evento que não é falha;
+      - `schedule_retry_pix` agendaria MAIS tentativas na janela do BACEN para
+        uma cobrança que **acabou de ser paga** — gastando tentativas
+        regulatórias contra o próprio cliente;
+      - `trigger_dunning` mandaria mensagem de cobrança a quem já pagou.
+
+    O caminho certo é o inverso: **ler** o checkpoint (que guarda o diagnóstico
+    do ciclo aberto), gravar nele o desfecho e reaproveitar o nó de fechamento
+    (`update_roi_dashboard`) fora do grafo. É o mesmo nó, o mesmo log `[ROI]` e
+    o mesmo `register_recovery_cycle` que o caminho perdido usa — sem
+    reexecutar nenhuma decisão.
+
+    Returns:
+        dict com `ciclo` ∈ {recuperado, reenvio, sem_ciclo_aberto,
+        ja_recuperado} e o `fee` efetivamente contado (0.0 quando não houve).
+    """
+    # (a) Idempotência da confirmação: o mesmo e2e_id não conta fee duas vezes.
+    if not CICLOS_FECHADOS.registrar_se_novo(chave_do_evento(customer_id, e2e_id)):
+        logger.info("[PIX] Confirmação reenviada (%s / %s) — fee não recontado.",
+                    customer_id, e2e_id[:16])
+        return {"ciclo": "reenvio", "fee": 0.0}
+
+    config = {"configurable": {"thread_id": customer_id}}
+
+    # A trava do cliente cobre a leitura e a escrita do checkpoint pelo mesmo
+    # motivo que cobre o `ainvoke`: uma confirmação chegando junto com uma
+    # falha do mesmo `thread_id` intercalaria leitura e gravação.
+    async with _trava_do_cliente(customer_id):
+        snapshot = await crai_agent.aget_state(config)
+        estado = dict(getattr(snapshot, "values", None) or {})
+
+        # (b) Pagamento que nunca falhou: mensalidade normal, não recuperação.
+        if not estado or estado.get("failure_cause") is None:
+            logger.info("[PIX] Cobrança confirmada para %s sem ciclo de "
+                        "recuperação aberto — mensalidade normal, sem fee.",
+                        customer_id)
+            return {"ciclo": "sem_ciclo_aberto", "fee": 0.0}
+
+        # (c) Ciclo já fechado por outra entrega (e2e diferente, mesmo ciclo).
+        if estado.get("recovered"):
+            logger.info("[PIX] Ciclo de %s já constava como recuperado — "
+                        "confirmação registrada sem novo fee.", customer_id)
+            return {"ciclo": "ja_recuperado", "fee": 0.0}
+
+        # O valor autoritativo é o da cobrança que FALHOU e abriu o ciclo: é
+        # sobre ele que o fee é calculado. O valor do evento de confirmação
+        # entra só como fallback, para o caso de um checkpoint sem `amount`.
+        estado["amount"] = estado.get("amount") or valor or 0.0
+        estado["recovered"] = True
+
+        await crai_agent.aupdate_state(config, {"recovered": True})
+
+        print(f"[PIX] Cobrança confirmada — ciclo de recuperação de "
+              f"{customer_id} fechado com sucesso (e2e {e2e_id[:16]})")
+        # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot.
+        await update_roi_dashboard(estado)
+
+    return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True)}
 
 
 async def _run_involuntary_pipeline(

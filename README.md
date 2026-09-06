@@ -426,6 +426,11 @@ curl -X POST http://localhost:8000/simulate/pix-falhado \
   -H "Content-Type: application/json" \
   -d '{"id_recorrencia":"RN_teste","valor":299.90,"ispb_pagador":"60701190"}'
 
+# Churn involuntário — confirmação de pagamento (fecha o ciclo e conta o fee)
+curl -X POST http://localhost:8000/simulate/pix-pago \
+  -H "Content-Type: application/json" \
+  -d '{"id_recorrencia":"RN_teste"}'
+
 # Churn voluntário
 curl -X POST http://localhost:8000/simulate/churn-risk \
   -H "Content-Type: application/json" \
@@ -530,6 +535,13 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] `/webhooks/stripe` mantido, registrando as falhas com `[CARTAO-DESATIVADO]`
   - [x] `parse_card_event` reservado para o roadmap — cartão não implementado nesta fase
   - [x] Demo reprodutível: `hashlib.md5` no lugar do `hash()` randomizado por processo
+- [x] **Ciclo de recuperação fechado** — confirmação real de pagamento (Sprint 1)
+  - [x] Status de cobrança confirmada do PSP fecha o ciclo: `recovered=True`, success fee no `[ROI]`, estágio `recovered` no CRM
+  - [x] Fechamento **fora do grafo** (`_fechar_ciclo_recuperado`) — reprocessar o pipeline agendaria tentativas do BACEN contra quem acabou de pagar
+  - [x] Fee só onde houve recuperação: confirmação sem ciclo aberto é mensalidade normal, não recuperação
+  - [x] Idempotência dos **dois** lados (janela de 7 dias, `api/idempotencia.py`): reenvio da confirmação não fatura duas vezes; reenvio da falha não reexecuta o pipeline
+  - [x] `/simulate/pix-pago` — a banca vê o loop inteiro (falha → agendamento → confirmação → fee) sem PSP real
+  - ⚠️ A janela de idempotência é memória de processo: reinício a esquece e dois processos têm janelas separadas — mesma dependência de DB do `MemorySaver` (P1-14)
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

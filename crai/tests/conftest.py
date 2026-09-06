@@ -34,6 +34,8 @@ O QUE É ISOLADO E O QUE NÃO É:
 
 import pytest
 
+from crai.api.idempotencia import limpar_tudo as limpar_idempotencia
+
 
 @pytest.fixture(autouse=True)
 def banco_de_ciclos_isolado(tmp_path, monkeypatch):
@@ -45,3 +47,22 @@ def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     explicitamente — e aí a intenção fica escrita.
     """
     monkeypatch.setenv("CRAI_RETENTION_DB", str(tmp_path / "ciclos_de_teste.db"))
+
+
+@pytest.fixture(autouse=True)
+def janelas_de_idempotencia_limpas():
+    """Nenhum teste herda os eventos que outro teste enviou.
+
+    As janelas de idempotência (`crai/api/idempotencia.py`) são estado de
+    módulo: vivem enquanto o processo viver. Numa suíte, isso significa que um
+    arquivo que envia `RN_x/E_x` faz o arquivo seguinte, que envia o mesmo par,
+    receber `pipeline: False` — falha que aparece só quando os dois rodam
+    juntos, na ordem errada, e some quando o teste é rodado sozinho.
+
+    É a mesma classe de acoplamento que a fixture do banco de ciclos acima
+    fecha, e a defesa é a mesma: estrutural, na suíte inteira, em vez de uma
+    linha que cada arquivo novo precise lembrar de escrever.
+    """
+    limpar_idempotencia()
+    yield
+    limpar_idempotencia()

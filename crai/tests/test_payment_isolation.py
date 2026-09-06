@@ -31,6 +31,7 @@ from crai.agent import workflow as workflow_module
 from crai.agent.main_agent import build_crai_graph, crai_agent, route_after_decision
 from crai.agent.workflow import decide_recovery, schedule_retry_pix
 from crai.api import app as app_module
+from crai.api.idempotencia import limpar_tudo as limpar_idempotencia
 from crai.dunning import pix_automatico_retry as pix_retry_module
 from crai.dunning.pix_automatico_retry import MAX_TENTATIVAS as MAX_TENTATIVAS_PIX
 
@@ -478,11 +479,24 @@ class TestP0_6RegressaoPeloWebhook:
         assert all(i for i in ids), f"thread_id vazio entregue ao MemorySaver: {ids}"
 
     def test_o_mesmo_pagador_mantem_o_seu_checkpoint(self, monkeypatch):
-        """O contrário também precisa valer, senão o cliente perde a memória."""
+        """O contrário também precisa valer, senão o cliente perde a memória.
+
+        Para um pagador ANÔNIMO a identidade é derivada do próprio evento
+        (e2e + ISPB + valor), então "o mesmo pagador de novo" é, por
+        construção, o mesmo corpo de novo. Como a janela de idempotência do
+        Sprint 1 descarta o reenvio antes do pipeline, o segundo evento aqui
+        representa o CICLO SEGUINTE — a mesma cobrança recorrente um mês
+        depois, já fora do TTL de 7 dias da janela. Esquecer a janela é
+        exatamente o que a passagem do tempo faria; o que o teste mede é que a
+        derivação de identidade continua estável entre um ciclo e outro.
+        """
         corpo = self._corpo("E_PAGADOR_A", "60701190", 299.90)
-        ids = self._thread_ids_entregues(monkeypatch, [corpo, corpo])
-        assert len(ids) == 2
-        assert ids[0] == ids[1]
+        primeiro = self._thread_ids_entregues(monkeypatch, [corpo])
+        limpar_idempotencia()
+        segundo = self._thread_ids_entregues(monkeypatch, [corpo])
+
+        assert len(primeiro) == 1 and len(segundo) == 1
+        assert primeiro[0] == segundo[0]
 
     def test_literal_rec_desconhecida_nao_chega_ao_memorysaver(self, monkeypatch):
         """O default degenerado do baseline não pode voltar por caminho nenhum."""
@@ -539,15 +553,20 @@ class TestA1R4LimiteBacenAtravessaOsWebhooks:
 
         monkeypatch.setattr(workflow_module._pix_retry, "schedule", espiao)
 
-        corpo = json.dumps({
-            "event": "automatic_pix.charge_failed",
-            "e2e_id": f"E{id_recorrencia}",
-            "valor": VALOR,
-            "id_recorrencia": id_recorrencia,
-        }).encode()
-
+        # Cobrancas DISTINTAS do mesmo contrato (um e2e cada), e nao o mesmo
+        # corpo repetido: o reenvio identico agora para antes, na janela de
+        # idempotencia do Sprint 1, e o que este teste mede e o contador do
+        # checkpoint entre execucoes — que so e exercido por eventos que de
+        # fato chegam ao pipeline. Ver o mesmo comentario em
+        # `TestA1R5AJanelaDoBacenExpira._webhooks_no_tempo`.
         with TestClient(app_module.app) as c:
-            for _ in range(quantos):
+            for indice in range(quantos):
+                corpo = json.dumps({
+                    "event": "automatic_pix.charge_failed",
+                    "e2e_id": f"E{id_recorrencia}_{indice}",
+                    "valor": VALOR,
+                    "id_recorrencia": id_recorrencia,
+                }).encode()
                 resposta = c.post("/webhooks/pix-automatico", content=corpo,
                                   headers=self._assinar(corpo))
                 assert resposta.status_code == 200, resposta.text
@@ -661,18 +680,32 @@ class TestA1R5AJanelaDoBacenExpira:
         monkeypatch.setattr(workflow_module, "datetime", RelogioCongelado)
         monkeypatch.setattr(pix_retry_module, "datetime", RelogioCongelado)
 
-        corpo = json.dumps({
-            "event": "automatic_pix.charge_failed",
-            "e2e_id": f"E{id_recorrencia}",
-            "valor": VALOR,
-            "id_recorrencia": id_recorrencia,
-        }).encode()
+        # UM e2e POR COBRANCA, e nao um corpo repetido. O `end_to_end_id` e
+        # unico por transacao no arranjo Pix — duas cobrancas de meses
+        # diferentes nunca compartilham o mesmo. Repetir o corpo era atalho de
+        # escrita, e desde a janela de idempotencia do Sprint 1
+        # (`crai/api/idempotencia.py`) esse atalho passou a descrever outra
+        # coisa: um REENVIO da mesma cobranca, que e justamente o que aquela
+        # janela existe para descartar. O que este teste mede — se o contador
+        # do BACEN expira com o tempo — so e observavel quando os eventos sao
+        # cobrancas distintas do mesmo contrato, que e o caso real.
+        #
+        # O `id_recorrencia` continua o mesmo nos dois: e ele, e nao o e2e, que
+        # define o `thread_id` e portanto o checkpoint (ver `_thread_id`).
+        def corpo_da_cobranca(indice: int) -> bytes:
+            return json.dumps({
+                "event": "automatic_pix.charge_failed",
+                "e2e_id": f"E{id_recorrencia}_{indice}",
+                "valor": VALOR,
+                "id_recorrencia": id_recorrencia,
+            }).encode()
 
         estados = []
         config = {"configurable": {"thread_id": id_recorrencia}}
         with TestClient(app_module.app) as c:
-            for momento in momentos:
+            for indice, momento in enumerate(momentos):
                 relogio["agora"] = momento
+                corpo = corpo_da_cobranca(indice)
                 resposta = c.post("/webhooks/pix-automatico", content=corpo,
                                   headers=self._assinar(corpo))
                 assert resposta.status_code == 200, resposta.text
@@ -833,10 +866,18 @@ class TestA1R6ConcorrenciaNaJanelaDoBacen:
         return {"x-pix-signature": f"t={ts},v1={mac}",
                 "content-type": "application/json"}
 
-    def _corpo(self, id_recorrencia: str) -> bytes:
+    def _corpo(self, id_recorrencia: str, indice: int = 0) -> bytes:
+        """Uma cobranca do contrato `id_recorrencia`, com e2e proprio.
+
+        O `indice` distingue COBRANCAS, nao entregas: desde o Sprint 1 a janela
+        de idempotencia descarta a reentrega byte a byte antes do pipeline, e o
+        que esta classe mede e a corrida ENTRE execucoes do mesmo `thread_id` —
+        que continua existindo, e e a mais perigosa, quando dois eventos
+        legitimos e distintos do mesmo contrato chegam juntos.
+        """
         return json.dumps({
             "event": "automatic_pix.charge_failed",
-            "e2e_id": f"E_{id_recorrencia}", "valor": VALOR,
+            "e2e_id": f"E_{id_recorrencia}_{indice}", "valor": VALOR,
             "id_recorrencia": id_recorrencia,
         }).encode()
 
@@ -874,8 +915,8 @@ class TestA1R6ConcorrenciaNaJanelaDoBacen:
 
     @pytest.mark.parametrize("quantos", [2, 3])
     def test_webhooks_concorrentes_nao_dobram_a_janela(self, monkeypatch, quantos):
-        corpo = self._corpo(f"RN_r6_conc_{quantos}")
-        lotes = self._agendadas(monkeypatch, [corpo] * quantos)
+        corpos = [self._corpo(f"RN_r6_conc_{quantos}", i) for i in range(quantos)]
+        lotes = self._agendadas(monkeypatch, corpos)
         total = sum(len(lote) for lote in lotes)
 
         assert total <= MAX_TENTATIVAS_PIX, (
@@ -893,8 +934,8 @@ class TestA1R6ConcorrenciaNaJanelaDoBacen:
         Vale como asserção independente do total: duas tentativas nº 1 na
         mesma janela são duas execuções que se enxergaram como a primeira.
         """
-        corpo = self._corpo("RN_r6_conc_num")
-        lotes = self._agendadas(monkeypatch, [corpo] * 3)
+        corpos = [self._corpo("RN_r6_conc_num", i) for i in range(3)]
+        lotes = self._agendadas(monkeypatch, corpos)
         numeros = [t.numero for lote in lotes for t in lote]
 
         assert len(numeros) == len(set(numeros)), (
