@@ -339,6 +339,7 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
         tentativas=plano,
         pix_janela_ate=prazo_final,
         e2e_id=state.get("invoice_id"),
+        tenant_id=state.get("tenant_id"),
     )
 
     # A primeira tentativa sai AGORA quando já é devida. "Devida" é a data que a
@@ -348,7 +349,8 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     # a primeira tentativa está vencida e sai daqui; numa que acabou de falhar
     # ela é de amanhã, e quem a dispara é o agendador — o mesmo caminho das
     # tentativas 2 e 3, sem código paralelo.
-    registro = retry_state.get_retry_state(state["customer_id"])
+    registro = retry_state.get_retry_state(state["customer_id"],
+                                          tenant_id=state.get("tenant_id"))
     if registro:
         for devida in retry_state.tentativas_devidas(registro, momento):
             await disparar_tentativa(registro, devida, momento)

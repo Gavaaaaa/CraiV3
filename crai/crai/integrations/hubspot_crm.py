@@ -90,6 +90,12 @@ class HubSpotCRM:
                 "amount": str(round(state["amount"], 2)),
                 "failure_cause": state.get("failure_cause", "unknown"),
                 "recovery_score": str(round(state.get("recovery_score", 0), 3)),
+                # Qual empresa cliente da CRAI gerou este ciclo (Sprint 4 do
+                # involuntário). Sem isto, um HubSpot compartilhado mistura os
+                # negócios de dois clientes no mesmo pipeline de recuperação
+                # sem nada que os separe no relatório — o mesmo defeito que o
+                # voluntário já tinha fechado em `register_retention_cycle`.
+                "tenant_id": state.get("tenant_id", ""),
             },
         )
         return {"hubspot_contact_id": contact_id, "hubspot_deal_id": deal_id, "stage": stage}

@@ -52,6 +52,12 @@ CAMINHO_PADRAO = DATA_DIR / "pix_retry_state.json"
 
 ENV_CAMINHO = "CRAI_RETRY_STATE"
 
+# O balde de quem não declara tenant. Espelha o literal do churn voluntário
+# (`offer_bandit.TENANT_PADRAO`) sem importá-lo: um módulo de dunning não deve
+# depender do pacote do outro churn só por uma constante. Que os dois não
+# divirjam é asserção de teste, não esperança — ver `test_tenant_involuntary`.
+TENANT_PADRAO = "default_tenant"
+
 
 def caminho_do_estado() -> Path:
     """Lido a cada chamada para o teste poder redirecionar via env."""
@@ -107,12 +113,18 @@ def _data(valor) -> Optional[datetime]:
 def chave(customer_id: str, tenant_id: Optional[str] = None) -> str:
     """A identidade de um plano.
 
-    O `tenant_id` já entra na chave, ainda que o involuntário só o ganhe no
-    Sprint 4: quando ele chegar, os planos de duas empresas clientes não podem
-    se sobrepor por compartilharem um `id_recorrencia`. Sem tenant a chave é só
-    o cliente, e o que estava gravado continua legível.
+    Os planos de duas empresas clientes não podem se sobrepor por
+    compartilharem um `id_recorrencia` — daí o prefixo.
+
+    `default_tenant` NÃO prefixa, e isso é deliberado: é o balde de quem não
+    declara tenant, que é o caso da instalação de um cliente só. Prefixá-lo
+    tornaria ilegível todo plano gravado antes do Sprint 4 sem separar nada —
+    quem não declara tenant já compartilha o mesmo espaço por definição. Um
+    tenant real continua prefixado, e `"x:a"` nunca colide com `"a"`.
     """
-    return f"{tenant_id}:{customer_id}" if tenant_id else customer_id
+    if not tenant_id or tenant_id == TENANT_PADRAO:
+        return customer_id
+    return f"{tenant_id}:{customer_id}"
 
 
 def save_retry_state(

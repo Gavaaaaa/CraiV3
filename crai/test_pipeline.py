@@ -103,6 +103,9 @@ async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0,
 
     initial: AgentState = {
         "payment_event": evento, "payment_method": "pix_automatico",
+        # Mesma empresa cliente dos cenários de churn voluntário: a demo mostra
+        # os dois pipelines de UM tenant, que é como a CRAI é operada hoje.
+        "tenant_id": "demo_tenant",
         "customer_id": id_recorrencia, "invoice_id": evento["e2e_id"], "amount": valor,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
@@ -139,6 +142,7 @@ async def run_pix_confirmacao(id_recorrencia, valor):
         customer_id=id_recorrencia,
         e2e_id=f"E60701190{id_recorrencia}_pago",
         valor=valor,
+        tenant_id="demo_tenant",
     )
 
 
@@ -295,7 +299,8 @@ async def main():
     assert all(n <= 3 for n in por_cliente.values()), (
         f"INVARIANTE VIOLADO: mais de 3 tentativas na janela do BACEN: {por_cliente}")
     print(f"   Ciclos fechados por pagamento: 1/{len(pix_results)} "
-          f"({confirmacao['ciclo']}, fee R$ {confirmacao['fee']:.2f})")
+          f"({confirmacao['ciclo']}, fee R$ {confirmacao['fee']:.2f}, "
+          f"tenant {confirmacao.get('tenant_id', '?')})")
     print(f"   Reenvio da mesma confirmação  : {reenvio['ciclo']} "
           f"(fee R$ {reenvio['fee']:.2f} — não recontado)")
     assert confirmacao["fee"] > 0, (

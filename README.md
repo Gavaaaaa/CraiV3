@@ -563,6 +563,13 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Templates de dunning próprios para as duas causas (aumentar o limite / reautorizar), e autorização revogada não oferece Pix Automático — é o canal que o cliente acabou de fechar
   - [x] Default seguro `processing_error` para código não reconhecido: não afirma falta de saldo sobre um pagador de quem não se sabe nada
   - ⚠️ **TODO(integração):** a lista de códigos ISO 20022 precisa ser conferida contra a documentação da conta Pagar.me antes de `CRAI_PAGARME_LIVE=1`. Código fora do mapa cai no default e sai no log — é assim que se descobre o que falta
+- [x] **Isolamento por tenant no involuntário** — paridade com o voluntário (Sprint 4)
+  - [x] `AgentState.tenant_id`, preenchido na borda pelo mesmo portão do voluntário (`x-tenant-id` no header, senão `tenant_id` no corpo, senão `default_tenant`)
+  - [x] Tenant declarado e torto é **422**; ausente é o balde do MVP — a diferença entre não saber e saber errado
+  - [x] Propagado ao deal de recuperação no HubSpot, ao reenvio no Pagar.me e à chave do plano de retentativa (dois clientes podem ter o mesmo `id_recorrencia`)
+  - [x] O fechamento de ciclo atribui ao tenant que ABRIU o ciclo — uma confirmação de outro tenant não reatribui a recuperação, e a divergência é logada
+  - [x] Comportamento **idêntico** entre tenants nesta fase: propagação e atribuição, não regra. Decisão por tenant é RBAC/produto e entra por outra porta
+  - [x] `/webhooks/stripe` e o registro `[CARTAO-DESATIVADO]` também atribuídos, para o caminho já estar pronto quando o cartão voltar
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

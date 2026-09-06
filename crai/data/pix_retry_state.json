@@ -1,52 +1,52 @@
 {
-  "RN_maria_001": {
+  "demo_tenant:RN_maria_001": {
     "customer_id": "RN_maria_001",
-    "tenant_id": null,
+    "tenant_id": "demo_tenant",
     "e2e_id": "E60701190RN_maria_001",
     "valor_original": 299.9,
-    "pix_janela_ate": "2026-09-13T07:31:48.095890",
-    "atualizado_em": "2026-09-06T07:31:48.140511",
+    "pix_janela_ate": "2026-09-13T07:36:14.796102",
+    "atualizado_em": "2026-09-06T07:36:14.837617",
     "tentativas": [
       {
         "numero": 1,
-        "quando": "2026-09-07T07:31:48.095890",
+        "quando": "2026-09-07T07:36:14.796102",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-07T08:31:48.626831",
+        "disparada_em": "2026-09-07T08:36:15.332383",
         "id_cobranca": "ch_sim_7d1a992429dcf0fb"
       },
       {
         "numero": 2,
-        "quando": "2026-09-08T07:31:48.095890",
+        "quando": "2026-09-08T07:36:14.796102",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-08T08:31:48.635863",
+        "disparada_em": "2026-09-08T08:36:15.341379",
         "id_cobranca": "ch_sim_36e9d786a16d7f18"
       },
       {
         "numero": 3,
-        "quando": "2026-09-09T07:31:48.095890",
+        "quando": "2026-09-09T07:36:14.796102",
         "valor": 299.9,
         "origem": "payday_engine",
-        "disparada_em": "2026-09-09T08:31:48.644863",
+        "disparada_em": "2026-09-09T08:36:15.348889",
         "id_cobranca": "ch_sim_0139cd3a09f06736"
       }
     ]
   },
-  "RN_joao_002": {
+  "demo_tenant:RN_joao_002": {
     "customer_id": "RN_joao_002",
-    "tenant_id": null,
+    "tenant_id": "demo_tenant",
     "e2e_id": "E60701190RN_joao_002",
     "valor_original": 149.0,
-    "pix_janela_ate": "2026-09-13T07:31:48.355769",
-    "atualizado_em": "2026-09-06T07:31:48.390944",
+    "pix_janela_ate": "2026-09-13T07:36:14.943830",
+    "atualizado_em": "2026-09-06T07:36:15.090559",
     "tentativas": [
       {
         "numero": 3,
-        "quando": "2026-09-07T07:31:48.355769",
+        "quando": "2026-09-07T07:36:14.943830",
         "valor": 149.0,
         "origem": "fallback_uniforme",
-        "disparada_em": "2026-09-07T08:31:48.626831",
+        "disparada_em": "2026-09-07T08:36:15.332383",
         "id_cobranca": "ch_sim_0a5fa25c34105ae6"
       }
     ]

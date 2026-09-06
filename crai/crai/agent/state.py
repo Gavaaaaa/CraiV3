@@ -23,6 +23,23 @@ class AgentState(TypedDict):
     # Input
     payment_event:  dict            # evento de origem (Pix normalizado ou Stripe cru)
     payment_method: PaymentMethod   # preenchido na entrada, nunca inferido depois
+
+    # Qual empresa cliente da CRAI gerou este ciclo. O churn voluntário já era
+    # isolado por tenant; o involuntário não era, e a assimetria tinha efeito
+    # prático: dois clientes da CRAI num mesmo HubSpot misturavam negócios no
+    # mesmo pipeline sem nada que os separasse no relatório, e as tentativas
+    # reenviadas ao PSP não eram atribuíveis a quem as pagou.
+    #
+    # Nesta fase o campo é PROPAGAÇÃO E ATRIBUIÇÃO, não regra: o comportamento
+    # de recuperação é idêntico para todos os tenants. Decisão que dependa de
+    # tenant é RBAC/produto, e entra por outra porta.
+    #
+    # Ausente vira `default_tenant` — MVP declarado, mesma escolha do
+    # `_tenant_da_requisicao` do voluntário: a CRAI ainda é operada para um
+    # cliente por instalação, e exigir o campo quebraria os webhooks já
+    # integrados.
+    tenant_id:      str
+
     customer_id:    str
     amount:         float
     invoice_id:     str

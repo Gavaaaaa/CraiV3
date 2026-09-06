@@ -328,6 +328,13 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     # divergiram no dia em que uma delas foi corrigida; agora há uma só.
     corpo = _objeto_json_do_corpo(raw, "PIX")
 
+    # Qual empresa cliente da CRAI mandou este evento. Mesmo portão do
+    # voluntário (`x-tenant-id` no header, senão `tenant_id` no corpo, senão
+    # `default_tenant`): um tenant declarado e torto é 422, ausência é o balde
+    # do MVP. Lido ANTES do parse porque vale para todo status, inclusive a
+    # confirmação de pagamento, que não passa pelo pipeline.
+    tenant_id = _tenant_da_requisicao(request, corpo, "PIX")
+
     try:
         evento = await _pix_adapter.parse_pix_event(corpo)
     except PayloadPixInvalido as e:
@@ -341,7 +348,7 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     # Ela não roda o pipeline de diagnóstico — não há falha a diagnosticar —,
     # mas é a única origem que sabe que uma recuperação deu certo.
     if status == STATUS_COBRANCA_CONFIRMADA:
-        return await _confirmar_cobranca_paga(evento)
+        return await _confirmar_cobranca_paga(evento, tenant_id)
 
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
@@ -398,6 +405,7 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
         customer_id=customer_id,
         amount=evento["valor"],
         invoice_id=evento["e2e_id"] or "e2e_desconhecido",
+        tenant_id=tenant_id,
     )
     return JSONResponse({"status": "ok", "evento": status, "pipeline": True})
 
@@ -425,6 +433,13 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
     event = _objeto_json_do_corpo(payload, "STRIPE")
 
+    # Lido mesmo com a recobrança de cartão fora do pipeline ativo: o registro
+    # `[CARTAO-DESATIVADO]` é evento de negócio de ALGUÉM, e quando o cartão
+    # voltar (ver `dunning/legacy_card/`) o caminho já estará atribuído. Um
+    # tenant torto é recusado aqui como nos outros webhooks — a validação não
+    # depende do que o pipeline faz depois.
+    tenant_id = _tenant_da_requisicao(request, event, "STRIPE")
+
     # `data` e `data.object` são percorridos com `.get()` encadeado em
     # `_dados_stripe`, e `amount_due` entra numa divisão. Um `data` que não é
     # objeto, ou um `amount_due` que não é número, estourava ali.
@@ -451,7 +466,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     _recusar_inteiro_grande_demais(dados, "STRIPE", "data")
 
     if event.get("type") == "invoice.payment_failed":
-        _registrar_cartao_desativado(event)
+        _registrar_cartao_desativado(event, tenant_id)
         return JSONResponse({
             "status": "ok", "pipeline": False,
             "motivo": "recobranca_automatica_de_cartao_fora_do_pipeline_ativo",
@@ -463,16 +478,21 @@ class SimulatePayment(BaseModel):
     customer_id:  str   = "cus_demo_001"
     amount:       float = 299.90
     failure_code: str   = "insufficient_funds"
+    tenant_id: Optional[str] = None
 
 
 @app.post("/simulate/payment-failed")
-async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
+async def simulate_payment_failed(request: Request,
+                                  payload: SimulatePayment) -> JSONResponse:
     """Falha de cartão simulada — mesmo tratamento do webhook real: só registra."""
     _require_simulation_env()
     # `_build_fake_stripe_event` faz `int(amount * 100)`: com `nan` ou `inf`
     # isso levanta ValueError e o FastAPI devolve 500.
     payload.amount = _valor_de_simulacao(payload.amount, "amount")
-    _registrar_cartao_desativado(_build_fake_stripe_event(payload))
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+    _registrar_cartao_desativado(_build_fake_stripe_event(payload), tenant_id)
     return JSONResponse({
         "status": "registrado", "pipeline": False,
         "customer_id": payload.customer_id,
@@ -484,10 +504,13 @@ class SimulatePixFalha(BaseModel):
     id_recorrencia: str   = "RN_demo_001"
     valor:          float = 299.90
     ispb_pagador:   str   = "60701190"
+    codigo_falha:   str   = "AM04"      # ver crai/agent/pix_codes.py
+    tenant_id: Optional[str] = None
 
 
 @app.post("/simulate/pix-falhado")
-async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
+async def simulate_pix_falhado(request: Request,
+                               payload: SimulatePixFalha) -> JSONResponse:
     """Cobrança recorrente de Pix Automático que falhou, sem PSP real."""
     _require_simulation_env()
 
@@ -506,6 +529,10 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
         "status": STATUS_COBRANCA_FALHADA,
         "ispb_pagador": payload.ispb_pagador,
         "id_recorrencia": payload.id_recorrencia,
+        # O motivo cru da recusa, que o PIX_CODE_MAP traduz (Sprint 3). Sem
+        # ele o endpoint da demo exercitaria só o default do mapa, e deixaria
+        # de exercitar o código que a demo mostra — é o N-7 outra vez.
+        "codigo_falha": payload.codigo_falha,
         # Sintetizado após a validação acima: chega aqui sem degradação porque
         # o que degradaria já foi recusado, não porque ninguém olhou.
         "degradacoes": [],
@@ -518,16 +545,23 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
     if customer_id is None:
         raise HTTPException(status_code=422, detail={"motivo": MOTIVO_SEM_IDENTIFICACAO})
 
+    # Mesmo portão de tenant do webhook assinado, pelo mesmo motivo (N-7): o
+    # endpoint da demo tem que exercitar o código que a demo mostra.
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+
     await _run_involuntary_pipeline(
         event=evento, payment_method="pix_automatico",
         customer_id=customer_id, amount=valor,
-        invoice_id=evento["e2e_id"],
+        invoice_id=evento["e2e_id"], tenant_id=tenant_id,
     )
     return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})
 
 
 class SimulatePixPago(BaseModel):
     id_recorrencia: str = "RN_demo_001"
+    tenant_id: Optional[str] = None
     # O e2e da cobrança PAGA é outro que não o da falhada — é outra transação.
     # Default derivado do id da recorrência para a demo não precisar inventá-lo.
     e2e_id: Optional[str] = None
@@ -535,7 +569,8 @@ class SimulatePixPago(BaseModel):
 
 
 @app.post("/simulate/pix-pago")
-async def simulate_pix_pago(payload: SimulatePixPago) -> JSONResponse:
+async def simulate_pix_pago(request: Request,
+                            payload: SimulatePixPago) -> JSONResponse:
     """Confirmação de pagamento sem PSP real — fecha o ciclo de recuperação.
 
     É a outra metade de `/simulate/pix-falhado`, e existe pelo mesmo motivo que
@@ -553,8 +588,13 @@ async def simulate_pix_pago(payload: SimulatePixPago) -> JSONResponse:
     valor = _valor_de_simulacao(payload.valor) if payload.valor is not None else None
     e2e_id = payload.e2e_id or f"E{payload.id_recorrencia}_pago"
 
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+
     resultado = await _fechar_ciclo_recuperado(
         customer_id=payload.id_recorrencia, e2e_id=e2e_id, valor=valor,
+        tenant_id=tenant_id,
     )
     return JSONResponse({"status": "confirmacao_processada",
                          "id_recorrencia": payload.id_recorrencia, **resultado})
@@ -967,18 +1007,24 @@ def _campo_com_forma(corpo: dict, campo: str, tipos: tuple, origem: str,
     return valor
 
 
-def _registrar_cartao_desativado(event: dict) -> dict:
+def _registrar_cartao_desativado(event: dict, tenant_id: str = TENANT_PADRAO) -> dict:
     """Registra uma falha de cartão sem acionar recobrança automática.
 
     O prefixo [CARTAO-DESATIVADO] existe para deixar explícito, no log e na
     demo, que o evento chegou e foi reconhecido — o que não aconteceu foi a
     retentativa, que aguarda a reimplementação descrita no roadmap da Fase 3.
+
+    `tenant_id` entra no registro mesmo com o cartão fora do pipeline (Sprint
+    4): a falha é evento de negócio de ALGUÉM, e um log sem dono é um log que
+    não serve de evidência quando dois clientes dividem a instalação.
     """
     dados = _dados_stripe(event)
+    dados["tenant_id"] = tenant_id
     aviso = (f"[CARTAO-DESATIVADO] {dados['customer_id']} | fatura "
-             f"{dados['invoice_id']} | R$ {dados['amount']:.2f} — evento registrado, "
-             f"recobrança automática de cartão fora do pipeline ativo "
-             f"(aguardando reimplementação; ver crai/dunning/legacy_card/)")
+             f"{dados['invoice_id']} | R$ {dados['amount']:.2f} | tenant "
+             f"{tenant_id} — evento registrado, recobrança automática de cartão "
+             f"fora do pipeline ativo (aguardando reimplementação; ver "
+             f"crai/dunning/legacy_card/)")
     print(aviso)
     logger.warning(aviso)
     return dados
@@ -1046,7 +1092,7 @@ def _trava_do_cliente(customer_id: str) -> asyncio.Lock:
     return trava
 
 
-async def _confirmar_cobranca_paga(evento: dict) -> JSONResponse:
+async def _confirmar_cobranca_paga(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSONResponse:
     """Trata o evento de cobrança PAGA vindo do PSP (Pagar.me).
 
     Nem toda cobrança paga é uma recuperação, e essa distinção é o coração
@@ -1069,6 +1115,7 @@ async def _confirmar_cobranca_paga(evento: dict) -> JSONResponse:
         customer_id=customer_id,
         e2e_id=evento["e2e_id"] or "e2e_desconhecido",
         valor=evento.get("valor") or None,
+        tenant_id=tenant_id,
     )
     return JSONResponse({"status": "ok", "evento": evento["status"],
                          "pipeline": False, **resultado})
@@ -1078,6 +1125,7 @@ async def _fechar_ciclo_recuperado(
     customer_id: str,
     e2e_id: str,
     valor: Optional[float] = None,
+    tenant_id: str = TENANT_PADRAO,
 ) -> dict:
     """Marca `recovered=True` e fecha o ciclo: ROI com fee + estágio no CRM.
 
@@ -1134,6 +1182,21 @@ async def _fechar_ciclo_recuperado(
         estado["amount"] = estado.get("amount") or valor or 0.0
         estado["recovered"] = True
 
+        # O tenant AUTORITATIVO é o do ciclo, não o do evento de confirmação:
+        # quem rodou a recuperação foi aquele, e é a ele que o resultado é
+        # atribuído. Um evento que declare outro tenant não pode reatribuir uma
+        # recuperação alheia — mas a divergência fica registrada, porque ou é
+        # erro de integração do cliente ou é tentativa de atribuição indevida,
+        # e as duas precisam ser vistas.
+        tenant_do_ciclo = estado.get("tenant_id") or tenant_id
+        if tenant_id != TENANT_PADRAO and tenant_id != tenant_do_ciclo:
+            logger.warning(
+                "[PIX] Confirmação de %s declarou tenant %r, mas o ciclo foi "
+                "aberto por %r — atribuindo ao tenant do ciclo.",
+                customer_id, tenant_id, tenant_do_ciclo,
+            )
+        estado["tenant_id"] = tenant_do_ciclo
+
         await crai_agent.aupdate_state(config, {"recovered": True})
 
         print(f"[PIX] Cobrança confirmada — ciclo de recuperação de "
@@ -1141,7 +1204,8 @@ async def _fechar_ciclo_recuperado(
         # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot.
         await update_roi_dashboard(estado)
 
-    return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True)}
+    return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True),
+            "tenant_id": estado["tenant_id"]}
 
 
 async def _run_involuntary_pipeline(
@@ -1151,6 +1215,7 @@ async def _run_involuntary_pipeline(
     amount: float,
     invoice_id: str,
     retries_done: Optional[int] = None,
+    tenant_id: str = TENANT_PADRAO,
 ) -> None:
     """Monta o state inicial e roda o grafo de churn involuntário.
 
@@ -1188,6 +1253,7 @@ async def _run_involuntary_pipeline(
     """
     initial: AgentState = {
         "payment_event": event, "payment_method": payment_method,
+        "tenant_id": tenant_id,
         "customer_id": customer_id, "invoice_id": invoice_id, "amount": amount,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
