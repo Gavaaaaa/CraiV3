@@ -56,7 +56,14 @@ def _token_do_header(authorization: Optional[str]) -> str:
     return partes[1].strip()
 
 
-async def get_tenant_id(authorization: Optional[str] = Header(default=None)) -> str:
+async def get_conta(authorization: Optional[str] = Header(default=None)) -> dict:
+    """A conta autenticada: `{tenant_id, email, sub}`.
+
+    Para as rotas que precisam de mais que o tenant — o envio de insights por
+    e-mail usa o `email` do token como destinatário, e SÓ ele: uma empresa
+    logada não escolhe para quem a CRAI manda e-mail. `get_tenant_id` é o
+    atalho para quem só precisa do tenant.
+    """
     token = _token_do_header(authorization)
     try:
         claims = supabase_auth.validar_token(token)
@@ -83,4 +90,13 @@ async def get_tenant_id(authorization: Optional[str] = Header(default=None)) -> 
         raise _401("tenant_com_forma_invalida",
                    "claim `tenant_id` fora do formato: esperado 1-64 caracteres "
                    "em [A-Za-z0-9._-]")
-    return tenant
+    email = claims.get("email")
+    return {
+        "tenant_id": tenant,
+        "email": email.strip() if isinstance(email, str) and email.strip() else None,
+        "sub": claims.get("sub"),
+    }
+
+
+async def get_tenant_id(authorization: Optional[str] = Header(default=None)) -> str:
+    return (await get_conta(authorization))["tenant_id"]

@@ -6,11 +6,12 @@ expiração e a claim `tenant_id`. Não existe tabela de empresa, senha nem API
 key própria aqui — ver `README.md` ao lado.
 """
 
-from .auth import get_tenant_id
+from .auth import get_conta, get_tenant_id
 from .supabase_auth import (
     ConfiguracaoAusente,
     TokenInvalido,
     validar_token,
 )
 
-__all__ = ["get_tenant_id", "validar_token", "TokenInvalido", "ConfiguracaoAusente"]
+__all__ = ["get_tenant_id", "get_conta", "validar_token", "TokenInvalido",
+           "ConfiguracaoAusente"]

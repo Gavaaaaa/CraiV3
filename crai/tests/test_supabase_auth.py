@@ -321,7 +321,7 @@ class TestWebhooksIntocados:
         for rota in app_module.app.routes:
             deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
             nomes = {getattr(d.call, "__name__", "") for d in deps}
-            usa = "get_tenant_id" in nomes
+            usa = bool(nomes & {"get_tenant_id", "get_conta"})
             e_self_service = rota.path.startswith(SELF_SERVICE)
             assert usa == e_self_service, (
                 f"{rota.path}: usa get_tenant_id={usa}, self-service={e_self_service}")

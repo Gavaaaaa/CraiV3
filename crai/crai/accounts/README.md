@@ -152,12 +152,33 @@ Pix, Stripe) não dependem dela e continuam funcionando como antes.
 
 ```python
 from fastapi import Depends
-from ..accounts import get_tenant_id
+from ..accounts import get_tenant_id, get_conta
 
 @app.get("/insights")
 async def insights(tenant_id: str = Depends(get_tenant_id)):
     ...
+
+@app.post("/insights/enviar")
+async def enviar(conta: dict = Depends(get_conta)):   # {tenant_id, email, sub}
+    ...
 ```
+
+## As rotas do self-service (contrato estável a partir do Sprint 4)
+
+Todas exigem `Authorization: Bearer <token>`. Os webhooks (`/webhooks/*`)
+e os `/simulate/*` NÃO passam por aqui e continuam como sempre.
+
+| rota | o que faz | resposta |
+|------|-----------|----------|
+| `POST /clientes/importar` | multipart: `arquivo` (.csv/.xlsx) + `mapeamento` (JSON opcional). Upsert por `customer_id_externo`. | `{importados, rejeitados:[{linha,motivo}], colunas_nao_encontradas, linhas_sem_dado_comportamental}` |
+| `GET /insights` | ranking upload ∪ SDK, um por cliente, risco decrescente. `?limite=N`, `?criticidade_minima=alto\|critico`. | `{total_clientes, clientes_em_risco:[{customer_id_externo, risk_score, criticality, explicacao, origem, atualizado_em, ...}], gerado_em, filtros}` |
+| `POST /insights/enviar` | manda o resumo para o `email` do token. Mesmos filtros. Sem SMTP, simula. | `{enviado, simulado, destinatario, linhas, total_clientes, gerado_em}` (502 se o SMTP falhar) |
+
+Regras que valem nas três: o tenant vem do JWT e só dele (`x-tenant-id`
+e campos no corpo são ignorados); `risk_score: null` +
+`criticality: "dado_insuficiente"` significa "sem dado de atividade", não
+"sem risco"; quando o mesmo cliente está no upload e no SDK, vence o dado
+mais recente e `origem` diz qual foi.
 
 ## Testando sem frontend
 

@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import logging
 import weakref
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -39,8 +40,9 @@ from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
-from ..churn_voluntary import clientes_importados, importacao
-from ..accounts import get_tenant_id
+from ..churn_voluntary import clientes_importados, importacao, insights_unificados
+from ..integrations import email_sender
+from ..accounts import get_conta, get_tenant_id
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
     MOTIVO_SEM_IDENTIFICACAO,
@@ -870,6 +872,85 @@ async def importar_clientes(
         raise HTTPException(status_code=500, detail={
             "motivo": "base_nao_configurada", "detalhe": str(e)})
     return JSONResponse(relatorio)
+
+
+CRITICIDADES_FILTRAVEIS = ("alto", "critico")
+
+
+def _filtros_de_insights(limite: Optional[int], criticidade_minima: Optional[str]) -> tuple:
+    """Valida os query params do /insights: 422 com motivo, nunca filtro silencioso."""
+    if limite is not None and limite < 1:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "limite_invalido", "campo": "limite",
+            "detalhe": "esperado inteiro >= 1"})
+    crit = criticidade_minima.strip().lower() if criticidade_minima else None
+    if crit is not None and crit not in CRITICIDADES_FILTRAVEIS:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "criticidade_invalida", "campo": "criticidade_minima",
+            "detalhe": f"esperado um de {', '.join(CRITICIDADES_FILTRAVEIS)}"})
+    return limite, crit
+
+
+def _insights_do_tenant(tenant_id: str, limite, criticidade_minima) -> dict:
+    try:
+        ranking = insights_unificados.clientes_em_risco(tenant_id)
+    except clientes_importados.ConfiguracaoAusente as e:
+        logger.error("[INSIGHTS] %s", e)
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    filtrado = insights_unificados.filtrar(ranking, limite, criticidade_minima)
+    return {
+        "total_clientes": len(ranking),
+        "clientes_em_risco": filtrado,
+        "gerado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "filtros": {"limite": limite, "criticidade_minima": criticidade_minima},
+    }
+
+
+@app.get("/insights")
+async def insights(
+    limite: Optional[int] = None,
+    criticidade_minima: Optional[str] = None,
+    tenant_id: str = Depends(get_tenant_id),
+) -> JSONResponse:
+    """O ranking de clientes em risco da empresa autenticada — upload ∪ SDK.
+
+    Cada linha traz `origem: "upload" | "sdk"` e `atualizado_em`; quando o
+    mesmo cliente está nas duas origens, aparece UMA vez, com o dado mais
+    recente. `?limite=N` corta a lista; `?criticidade_minima=alto|critico`
+    filtra (`dado_insuficiente` nunca passa por esse filtro).
+    `total_clientes` é o total ANTES dos filtros.
+    """
+    limite, crit = _filtros_de_insights(limite, criticidade_minima)
+    return JSONResponse(_insights_do_tenant(tenant_id, limite, crit))
+
+
+@app.post("/insights/enviar")
+async def enviar_insights(
+    limite: Optional[int] = None,
+    criticidade_minima: Optional[str] = None,
+    conta: dict = Depends(get_conta),
+) -> JSONResponse:
+    """Manda o resumo do ranking para o e-mail DA CONTA AUTENTICADA.
+
+    O destinatário é o `email` do token do Supabase, e só ele: uma empresa
+    logada não escolhe para quem a CRAI escreve. Sem SMTP configurado, o
+    envio é simulado (logado) e a resposta diz `simulado: true` — mesmo
+    padrão do WhatsApp e do HubSpot.
+    """
+    if not conta.get("email"):
+        raise HTTPException(status_code=422, detail={
+            "motivo": "conta_sem_email",
+            "detalhe": "o token não traz `email`; o destinatário é sempre o "
+                       "e-mail da conta autenticada"})
+    limite, crit = _filtros_de_insights(limite, criticidade_minima)
+    dados = _insights_do_tenant(conta["tenant_id"], limite, crit)
+    resultado = email_sender.send_insights_email(
+        conta["tenant_id"], dados["clientes_em_risco"], conta["email"],
+        total_clientes=dados["total_clientes"])
+    status = 200 if resultado["enviado"] else 502
+    return JSONResponse({**resultado, "total_clientes": dados["total_clientes"],
+                         "gerado_em": dados["gerado_em"]}, status_code=status)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

@@ -241,6 +241,40 @@ def registrar_desfecho(tenant_id: str, user_id: str, offer_type: str,
         return False
 
 
+def ultimo_ciclo_por_cliente(tenant_id: str) -> list[dict]:
+    """A linha MAIS RECENTE de cada cliente deste tenant — o "estado atual" do SDK.
+
+    Leitura para o self-service (Sprint 4 do onboarding): o `/insights` junta
+    esta lista com a base importada. Vive aqui, e não no módulo de insights,
+    porque o schema é deste arquivo — quem grava é quem sabe ler.
+
+    Uma linha por `user_id`, a de maior `id` (o autoincrement é a ordem de
+    gravação, e `registrado_em` tem resolução de segundo). Como o resto do
+    módulo, NUNCA levanta: falha de leitura devolve lista vazia com log — o
+    insight do upload continua saindo mesmo se o banco do SDK estiver fora.
+    """
+    try:
+        with _conectar() as conn:
+            linhas = conn.execute(
+                """SELECT c.tenant_id, c.user_id, c.registrado_em, c.event,
+                          c.days_since_last, c.features_used_30d, c.mrr,
+                          c.billing_profile, c.risk_score, c.criticality,
+                          c.offer_type, c.channel, c.accepted
+                     FROM ciclos_retencao c
+                     JOIN (SELECT user_id, MAX(id) AS ultimo
+                             FROM ciclos_retencao
+                            WHERE tenant_id = ?
+                         GROUP BY user_id) u
+                       ON u.ultimo = c.id
+                    WHERE c.tenant_id = ?""",
+                (tenant_id, tenant_id),
+            ).fetchall()
+            return [dict(l) for l in linhas]
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao ler último ciclo por cliente: {e}")
+        return []
+
+
 def estatisticas() -> dict:
     """Contagem para a demo e para saber se há dataset suficiente para treinar."""
     try:
