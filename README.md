@@ -332,6 +332,7 @@ cp .env.example .env
 | `CRAI_CUSTO_INTERVENCAO_WHATSAPP` | Não | Custo de uma mensagem pelo bot (default `0.05`). Entra no e-Profit, que é o que decide se a CRAI age |
 | `CRAI_CUSTO_TENTATIVA_PIX` | Não | Custo por instrução reenviada ao PSP (default `0.0`). Com zero, o e-Profit é idêntico ao de antes do Sprint 5 |
 | `CRAI_RECOVERY_DB` | Não | Redireciona o log de ciclos de recuperação (default `crai/data/recovery_cycles.db`). É o dataset de treino do involuntário; a suíte usa isto para não escrever no banco real |
+| `CRAI_PERFIL_DB` | Não | Fonte real do perfil do cliente (tenure, histórico, ticket). Sem ela o perfil é **sintético** — ver `crai/crai/agent/README_treino.md` |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -588,6 +589,12 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Idempotente por `UNIQUE (tenant_id, e2e_id)`: vale mesmo quando um restart apagou a janela de idempotência da API, e um desfecho registrado nunca volta atrás
   - [x] A demo imprime o resumo de negócio ao final, e reexecutá-la não infla os números
   - ⚠️ O endpoint de métricas **não tem autenticação** nesta fase — declarado, não escondido. O projeto não tem camada de auth além da assinatura dos webhooks; em produção ele fica atrás do mesmo controle de acesso do dashboard, e `tenant_id` ali é filtro, não permissão
+- [x] **Prontidão para treino com dados reais** (Sprint 7)
+  - [x] `agent/perfil_provider.py` — o perfil passa por um provedor plugável. `SyntheticPerfilProvider` é o default e reproduz **exatamente** os valores anteriores; `DBPerfilProvider` é o stub com o ponto de conexão marcado
+  - [x] `ml/ltv.py` — a fórmula de LTV numa única casa. Estava escrita duas vezes, com fatores de retenção diferentes, e divergiria em silêncio: o LTV é o multiplicador do e-Profit, não uma feature que o treino veria
+  - [x] Nenhum valor mudou: 5.000 perfis e 5.000 LTVs vetorizados conferidos contra a implementação anterior, zero divergências
+  - [x] `crai/crai/agent/README_treino.md` — as 12 entradas e a origem de cada uma, como plugar a fonte real, o mapeamento código Pagar.me → `failure_cause`, e o passo a passo para ler `recovery_cycles.db` e alimentar o `train()`
+  - [x] As 10 limitações conhecidas tabeladas para a banca, cada uma com o ponto de troca no código
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

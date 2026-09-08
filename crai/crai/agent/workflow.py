@@ -1,6 +1,5 @@
 """crai/agent/workflow.py — Nós do pipeline de churn involuntário."""
 
-import numpy as np
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
@@ -9,7 +8,7 @@ from .pix_codes import CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_cod
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
-from ..ml.synthetic_data import seed_por_cliente
+from .perfil_provider import provedor_padrao
 from ..dunning.pix_automatico_retry import (
     MAX_TENTATIVAS as MAX_TENTATIVAS_PIX,
     PixAutomaticoRetryPolicy,
@@ -38,6 +37,12 @@ _payday.load()
 # A política de Pix reaproveita o Payday Engine já carregado acima, em vez de
 # instanciar e recarregar o modelo por conta própria.
 _pix_retry = PixAutomaticoRetryPolicy(payday_inference=_payday)
+
+# De onde vem tenure/histórico/LTV. Sintético enquanto não houver fonte real —
+# ver `crai/agent/perfil_provider.py` e `crai/agent/README_treino.md`. É
+# módulo-level para que um teste (ou a fase de treino) troque o provedor sem
+# tocar em `_features_pix`.
+_perfil_provider = provedor_padrao()
 
 
 def _agora() -> datetime:
@@ -523,24 +528,19 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
 
 
 def _perfil_simulado(chave_cliente: str, invoice_amount: float) -> dict:
-    """Tenure, histórico e LTV do cliente (em produção viriam do banco/CRM)."""
-    now = datetime.now()
-    rng = np.random.default_rng(seed=seed_por_cliente(chave_cliente))
+    """Tenure, histórico e LTV do cliente, pelo provedor configurado.
 
-    tenure = int(rng.exponential(scale=12))
-    payment_history = round(float(np.clip(rng.beta(5, 2), 0, 1)), 3)
-    failure_count = int(rng.poisson(1.5))
-    avg_ticket = round(invoice_amount * rng.uniform(0.9, 1.1), 2)
-    ltv = round(max(invoice_amount, tenure * avg_ticket * 0.9 / 12), 2)
+    O NOME CONTINUA `_perfil_simulado` porque é o que ele descreve hoje: sem
+    fonte real configurada, o provedor devolve o perfil sintético, com os mesmos
+    valores para a mesma semente que antes do Sprint 7. O que mudou é que a
+    fonte virou configuração — `_perfil_provider` (topo deste módulo) pode ser
+    trocado por um provedor de banco sem que esta função, `_features_pix` ou o
+    nó de diagnóstico mudem de forma.
 
-    return {
-        "tenure_months": tenure,
-        "day_of_month": now.day,
-        "invoice_amount": invoice_amount,
-        "avg_ticket": avg_ticket,
-        "payment_history_score": payment_history,
-        "failure_count_90d": failure_count,
-        "hour_of_day": now.hour,
-        "day_of_week": now.weekday(),
-        "ltv_estimated": ltv,
-    }
+    Quatro das doze entradas do classificador não vêm do evento do PSP: tenure,
+    histórico de pagamento, falhas em 90 dias e ticket médio. Elas vêm do
+    negócio, e enquanto o negócio não estiver conectado, são fabricadas. Isso
+    está documentado em `crai/agent/README_treino.md` como a limitação que é,
+    não escondido atrás de um número plausível.
+    """
+    return _perfil_provider.get_perfil(chave_cliente, invoice_amount)
