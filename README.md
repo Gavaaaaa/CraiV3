@@ -331,6 +331,7 @@ cp .env.example .env
 | `CRAI_SUCCESS_FEE_PCT` | Não | Percentual do valor recuperado que a CRAI cobra (default `0.15`). Faixa [0, 1]; valor torto cai no default com aviso no log — um `.env` errado não pode parar a cobrança de todos os clientes |
 | `CRAI_CUSTO_INTERVENCAO_WHATSAPP` | Não | Custo de uma mensagem pelo bot (default `0.05`). Entra no e-Profit, que é o que decide se a CRAI age |
 | `CRAI_CUSTO_TENTATIVA_PIX` | Não | Custo por instrução reenviada ao PSP (default `0.0`). Com zero, o e-Profit é idêntico ao de antes do Sprint 5 |
+| `CRAI_RECOVERY_DB` | Não | Redireciona o log de ciclos de recuperação (default `crai/data/recovery_cycles.db`). É o dataset de treino do involuntário; a suíte usa isto para não escrever no banco real |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -579,6 +580,14 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] O custo do WhatsApp deixou de estar duplicado (nó de anomalia + `INTERVENTION_COSTS`); a tabela de canais mudou de casa para `config.py`, e `INTERVENTION_COSTS` segue como o valor default
   - [x] `CRAI_CUSTO_TENTATIVA_PIX` refina o e-Profit com o custo das tentativas que ainda cabem na janela (Gap 6). Default zero: o valor real é contratual e não é conhecido aqui
   - [x] Env torta cai no default com aviso, e a faixa impede fee negativo ou acima de 100% — um `.env` errado não derruba a cobrança de todos os clientes
+- [x] **Log de ciclo + métricas de negócio** — o loop de dados e o de dinheiro (Sprint 6)
+  - [x] `dunning/recovery_log.py` — uma linha por ciclo com features (as 11 + LTV), diagnóstico, decisão, custo realizado e desfecho. É a paridade do `retention_log` do voluntário
+  - [x] `AgentState.features` preserva o X do classificador: ele era calculado, usado e descartado, e sem ele não há par (features, recovered) para treinar com dados reais (Gaps 4 e 5)
+  - [x] Custo **realizado** por ciclo — tentativas que de fato saíram × custo por tentativa + mensagem (Gap 6). Diferente do previsto, que o e-Profit usa para decidir se vale agir
+  - [x] `GET /metrics/recovery?tenant_id=&desde=` — MRR recuperado, taxa de recuperação, custo total, custo médio por recuperação e margem (Gap 7)
+  - [x] Idempotente por `UNIQUE (tenant_id, e2e_id)`: vale mesmo quando um restart apagou a janela de idempotência da API, e um desfecho registrado nunca volta atrás
+  - [x] A demo imprime o resumo de negócio ao final, e reexecutá-la não infla os números
+  - ⚠️ O endpoint de métricas **não tem autenticação** nesta fase — declarado, não escondido. O projeto não tem camada de auth além da assinatura dos webhooks; em produção ele fica atrás do mesmo controle de acesso do dashboard, e `tenant_id` ali é filtro, não permissão
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

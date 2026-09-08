@@ -53,6 +53,11 @@ def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     # passagem do agendador — na demo, na mão de quem apresenta — reenviaria
     # cobrança de cliente de teste ao PSP.
     monkeypatch.setenv("CRAI_RETRY_STATE", str(tmp_path / "pix_retry_de_teste.json"))
+    # O dataset de treino do involuntário (Sprint 6). Linha de teste aqui vira
+    # linha de treino depois, e envenena a métrica de negócio que a banca vê —
+    # exatamente o que aconteceu com o `retention_log` do voluntário, que
+    # acumulou 169 ciclos de teste no banco real antes desta defesa existir.
+    monkeypatch.setenv("CRAI_RECOVERY_DB", str(tmp_path / "recuperacoes_de_teste.db"))
 
 
 @pytest.fixture(autouse=True)

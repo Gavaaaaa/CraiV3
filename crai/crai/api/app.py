@@ -30,7 +30,12 @@ from pydantic import BaseModel
 
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
-from ..agent.workflow import success_fee, update_roi_dashboard
+from ..agent.workflow import (
+    success_fee,
+    tentativas_ja_disparadas,
+    update_roi_dashboard,
+)
+from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
@@ -792,6 +797,33 @@ async def simulate_churn_risk(request: Request,
     return JSONResponse({"status": "pipeline_executado", "user_id": payload.user_id})
 
 
+@app.get("/metrics/recovery")
+async def metricas_de_recuperacao(tenant_id: Optional[str] = None,
+                                  desde: Optional[str] = None) -> JSONResponse:
+    """O agregado de negócio do churn involuntário (Gap 7).
+
+    MRR recuperado, taxa de recuperação, custo total, custo médio POR
+    RECUPERAÇÃO e margem (fee − custo). É o número que sustenta o modelo
+    Outcome-as-a-Service: sem ele, "recuperamos R$ X" é afirmação sem
+    denominador e sem custo.
+
+    NÃO é o dashboard do cliente — é o dado consultável de onde um dashboard
+    (ou a apresentação da banca) tira os números. A fonte é o log append-only
+    de ciclos (`dunning/recovery_log.py`), e não o checkpoint do grafo: o
+    checkpoint é memória de processo e some no restart.
+
+    ⚠️ SEM AUTENTICAÇÃO nesta fase, e declarado em vez de escondido: o projeto
+    não tem camada de auth além da assinatura dos webhooks, e este endpoint
+    expõe números de negócio agregados. Em produção ele fica atrás do mesmo
+    controle de acesso do dashboard; `tenant_id` aqui é FILTRO, não permissão.
+
+    Args:
+        tenant_id: restringe a uma empresa cliente. Ausente = todas.
+        desde: ISO-8601 (`2026-09-01` ou `2026-09-01T00:00:00+00:00`).
+    """
+    return JSONResponse(recovery_log.metricas(tenant_id=tenant_id, desde=desde))
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "crai-agent-v2"}
@@ -1201,7 +1233,26 @@ async def _fechar_ciclo_recuperado(
 
         print(f"[PIX] Cobrança confirmada — ciclo de recuperação de "
               f"{customer_id} fechado com sucesso (e2e {e2e_id[:16]})")
-        # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot.
+        # ORDEM IMPORTA, e custou um teste para aparecer. `registrar_recuperacao`
+        # fecha a linha ABERTA do ciclo — procura por `recovered = 0`. O
+        # `update_roi_dashboard` grava a linha do dataset e, com o state já
+        # marcado como recuperado, levaria `recovered` a 1 sem gravar fee nem
+        # desfecho (esses três campos são preservados na regravação de
+        # propósito, para que uma reentrega do webhook não desfaça um
+        # desfecho). Rodando o dashboard primeiro, o UPDATE seguinte não
+        # encontrava mais nenhuma linha aberta e a recuperação ficava
+        # registrada com `success_fee = 0`.
+        recovery_log.registrar_recuperacao(
+            customer_id=customer_id,
+            e2e_id=e2e_id,
+            amount=estado["amount"],
+            tenant_id=estado["tenant_id"],
+            tentativas_usadas=tentativas_ja_disparadas(estado),
+            dunning_enviado=bool(estado.get("dunning_sent")),
+        )
+
+        # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot + a
+        # regravação da linha com o diagnóstico atual.
         await update_roi_dashboard(estado)
 
     return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True),
@@ -1258,6 +1309,7 @@ async def _run_involuntary_pipeline(
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
+        "features": None,
         "is_anomalous": None, "reconstruction_error": None, "anomaly_explanation": None,
         "optimal_retry_at": None,
         "estrategia": None, "raciocinio": None,

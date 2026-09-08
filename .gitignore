@@ -29,6 +29,12 @@ crai/models_demo.tar.gz
 # regenera sozinho a cada ciclo.
 crai/data/retention_cycles.db
 crai/data/retention_cycles.db-journal
+# Churn involuntario: dataset de ciclos de recuperacao e planos de retentativa
+# pendentes. Sao estado de EXECUCAO, nao fonte do repositorio — versiona-los
+# faria o dataset de treino de uma maquina virar o de outra no merge.
+crai/data/recovery_cycles.db
+crai/data/recovery_cycles.db-journal
+crai/data/pix_retry_state.json
 
 # Logs de auditoria SHAP (regeneraveis)
 crai/logs/

@@ -17,7 +17,7 @@ from ..dunning.pix_automatico_retry import (
     inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
-from ..dunning import retry_state
+from ..dunning import recovery_log, retry_state
 from ..dunning.retry_scheduler import disparar_tentativa
 from ..integrations.hubspot_crm import HubSpotCRM
 
@@ -108,6 +108,8 @@ async def diagnose_failure(state: AgentState) -> AgentState:
 
     return {
         **state,
+        # Preservado para o log de ciclo (Sprint 6): é o X do dataset de treino.
+        "features": features,
         "failure_cause": features["gateway_error_code"],
         "recovery_score": result["recovery_score"],
         "p_recovery": result["p_recovery"],
@@ -415,6 +417,21 @@ def success_fee(amount: float, recovered: bool) -> float:
     return round(amount * success_fee_pct(), 2) if recovered else 0.0
 
 
+def tentativas_ja_disparadas(state: AgentState) -> int:
+    """Quantas instruções de pagamento deste ciclo já saíram para o PSP.
+
+    Vem do `retry_state`, que é quem sabe o que foi DISPARADO — o
+    `retry_count` do checkpoint conta o que foi COMPROMETIDO pela política, que
+    é outra coisa. A diferença é exatamente o custo que o Gap 6 pedia: um
+    plano de 3 tentativas em que só a primeira saiu custou uma, não três.
+    """
+    registro = retry_state.get_retry_state(
+        state.get("customer_id", ""), tenant_id=state.get("tenant_id"))
+    if not registro:
+        return 0
+    return sum(1 for t in registro.get("tentativas") or [] if t.get("disparada_em"))
+
+
 async def update_roi_dashboard(state: AgentState) -> AgentState:
     fee = success_fee(state["amount"], bool(state.get("recovered")))
     eprofit = state.get("eprofit", 0)
@@ -422,6 +439,13 @@ async def update_roi_dashboard(state: AgentState) -> AgentState:
     print(f"[ROI] {recovered_icon} R$ {state['amount']:.2f} | taxa R$ {fee:.2f} | e-Profit R$ {eprofit:.2f}")
     crm_result = await _hubspot.register_recovery_cycle(state)
     print(f"[HUBSPOT] Contact {crm_result['hubspot_contact_id']} | Deal {crm_result['hubspot_deal_id']} | {crm_result['stage']}\n")
+
+    # A linha do dataset (Sprint 6). Gravada aqui porque este é o último nó nos
+    # DOIS caminhos do grafo — o que retentou e o que mandou mensagem —, e é o
+    # ponto em que features, decisão e custo até agora já existem. O desfecho
+    # entra depois, quando a confirmação do PSP chega; até lá `recovered` é 0,
+    # que é a verdade: em produção ninguém sabe ainda.
+    recovery_log.registrar_ciclo(state, tentativas_ja_disparadas(state))
     return state
 
 

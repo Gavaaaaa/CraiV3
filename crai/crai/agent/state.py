@@ -45,6 +45,14 @@ class AgentState(TypedDict):
     invoice_id:     str
 
     # Diagnóstico (XGBoost + RF + e-Profit + SHAP)
+    #
+    # `features` é o X que o classificador consumiu — as 11 features + LTV.
+    # Ele vive no state desde o Sprint 6 por um motivo só: sem isso, o par
+    # (features, recovered) que o `dunning/recovery_log.py` grava não existe.
+    # As features eram calculadas dentro de `diagnose_failure`, usadas na
+    # predição e descartadas; rodar três meses em produção daria zero linha de
+    # treino com dados reais. Não é dado novo — é o mesmo dado, preservado.
+    features:             Optional[dict]
     failure_cause:        Optional[str]
     recovery_score:       Optional[int]           # 0-100
     p_recovery:           Optional[float]          # 0.0-1.0

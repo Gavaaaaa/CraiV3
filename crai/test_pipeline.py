@@ -37,7 +37,7 @@ os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
 from crai.api.app import _fechar_ciclo_recuperado, _registrar_cartao_desativado
-from crai.dunning import retry_state
+from crai.dunning import recovery_log, retry_state
 from crai.dunning.retry_scheduler import processar_tentativas_devidas
 from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
@@ -107,6 +107,7 @@ async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0,
         # os dois pipelines de UM tenant, que é como a CRAI é operada hoje.
         "tenant_id": "demo_tenant",
         "customer_id": id_recorrencia, "invoice_id": evento["e2e_id"], "amount": valor,
+        "features": None,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
@@ -343,6 +344,31 @@ async def main():
     st = estatisticas()
     print(f"   Ciclos no dataset de treino  : {st['total']} "
           f"({st['com_desfecho']} com desfecho, {st['aguardando']} aguardando)")
+
+    # ── O ângulo financeiro (Sprint 6) ──────────────────────────────────
+    #
+    # É o número que sustenta o Outcome-as-a-Service: sem denominador e sem
+    # custo, "recuperamos R$ X" é afirmação solta. Vem do log append-only de
+    # ciclos (`dunning/recovery_log.py`), que é o MESMO arquivo de onde a fase
+    # de treino tira o par (features, recovered).
+    m = recovery_log.metricas(tenant_id="demo_tenant")
+    print(f"\n💰 Resultado de negócio (churn involuntário, tenant demo_tenant):")
+    print(f"   Ciclos no período            : {m['ciclos']} "
+          f"({m['recuperados']} recuperados)")
+    print(f"   Taxa de recuperação          : {m['taxa_recuperacao']:.0%}")
+    print(f"   MRR recuperado               : R$ {m['mrr_recuperado']:.2f} "
+          f"de R$ {m['volume_total']:.2f} em risco")
+    print(f"   Custo de operação            : R$ {m['custo_total']:.2f} "
+          f"(R$ {m['custo_medio_por_recuperacao']:.2f} por recuperação)")
+    print(f"   Receita CRAI (success fee)   : R$ {m['fee_total']:.2f}")
+    print(f"   Margem                       : R$ {m['margem']:.2f}")
+    print(f"   Linhas no dataset de treino  : {m['ciclos']} "
+          f"(par features → recovered, pronto para o retreino)")
+    assert m["ciclos"] > 0, (
+        "INVARIANTE VIOLADO: nenhum ciclo chegou ao log — sem o par "
+        "(features, recovered) não há dataset de treino com dados reais")
+    assert m["recuperados"] > 0 and m["fee_total"] > 0, (
+        "INVARIANTE VIOLADO: nenhuma recuperação foi contabilizada")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 
