@@ -7,6 +7,20 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 python-dotenv==1.0.1
 
+# ── Auth (self-service: valida o JWT que o Supabase Auth emite) ──────────
+# Só validação de assinatura contra o JWKS do projeto (ES256/RS256); a parte
+# criptográfica vem do `cryptography`, que o shap/sklearn já puxam.
+PyJWT[crypto]==2.9.0
+
+# ── Self-service: upload da base de clientes (onboarding, Sprint 2) ───────
+# A base importada mora no Postgres do Supabase (SUPABASE_DB_URL); psycopg2
+# direto, sem ORM, no mesmo espírito do sqlite3 puro do resto do pacote.
+psycopg2-binary==2.9.10
+# XLSX no `pandas.read_excel`; python-multipart é o que o FastAPI exige para
+# receber `UploadFile` (multipart/form-data).
+openpyxl==3.1.5
+python-multipart==0.0.12
+
 # ── Agente / LLM ──────────────────────────────────────────
 langgraph==0.2.28
 langchain-core==0.3.6
@@ -34,6 +48,8 @@ stripe==10.12.0
 hubspot-api-client==9.0.0
 
 # ── Dev / Testes ──────────────────────────────────────────
+# httpx tambem e o cliente HTTP do modo real do pagarme_gateway (importado sob
+# demanda: o modo simulado, que e o default e o que a suite roda, nao o toca).
 httpx==0.27.2
 pytest==8.3.3
 pytest-asyncio==0.24.0

@@ -1,13 +1,14 @@
 """crai/agent/workflow.py — Nós do pipeline de churn involuntário."""
 
-import numpy as np
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
+from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
+from .pix_codes import CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
-from ..ml.synthetic_data import seed_por_cliente
+from .perfil_provider import provedor_padrao
 from ..dunning.pix_automatico_retry import (
     MAX_TENTATIVAS as MAX_TENTATIVAS_PIX,
     PixAutomaticoRetryPolicy,
@@ -15,6 +16,8 @@ from ..dunning.pix_automatico_retry import (
     inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
+from ..dunning import recovery_log, retry_state
+from ..dunning.retry_scheduler import disparar_tentativa
 from ..integrations.hubspot_crm import HubSpotCRM
 
 # Não há import de smart_backoff aqui: a retentativa de cartão saiu do pipeline
@@ -34,6 +37,12 @@ _payday.load()
 # A política de Pix reaproveita o Payday Engine já carregado acima, em vez de
 # instanciar e recarregar o modelo por conta própria.
 _pix_retry = PixAutomaticoRetryPolicy(payday_inference=_payday)
+
+# De onde vem tenure/histórico/LTV. Sintético enquanto não houver fonte real —
+# ver `crai/agent/perfil_provider.py` e `crai/agent/README_treino.md`. É
+# módulo-level para que um teste (ou a fase de treino) troque o provedor sem
+# tocar em `_features_pix`.
+_perfil_provider = provedor_padrao()
 
 
 def _agora() -> datetime:
@@ -104,6 +113,8 @@ async def diagnose_failure(state: AgentState) -> AgentState:
 
     return {
         **state,
+        # Preservado para o log de ciclo (Sprint 6): é o X do dataset de treino.
+        "features": features,
         "failure_cause": features["gateway_error_code"],
         "recovery_score": result["recovery_score"],
         "p_recovery": result["p_recovery"],
@@ -116,6 +127,33 @@ async def diagnose_failure(state: AgentState) -> AgentState:
             for f in result["shap_explanation"].get("features", [])[:5]
         },
     }
+
+
+def _custo_previsto_do_ciclo(state: AgentState) -> float:
+    """Quanto a CRAI espera gastar para tentar recuperar este ciclo.
+
+    A mensagem personalizada é o custo certo (o canal ativo é o bot de
+    WhatsApp). O custo por instrução reenviada ao PSP entra só para Pix
+    Automático, multiplicado pelas tentativas que a janela do BACEN ainda
+    permite — recuperar na 3ª tentativa custa 3× o PSP de recuperar na 1ª, e
+    até o Sprint 5 o e-Profit ignorava isso inteiramente (Gap 6).
+
+    É uma PREVISÃO, e o nome diz: este nó roda antes de `decide_recovery`, então
+    ainda não se sabe se haverá retentativa nem quantas. Usa o teto da janela,
+    que é o pior caso — subestimar o custo faria o agente agir onde não vale.
+    O custo REALIZADO por ciclo (tentativas efetivamente disparadas) é outro
+    número, e é o que o Sprint 6 grava no log.
+
+    Com `CRAI_CUSTO_TENTATIVA_PIX` não configurada o segundo termo é zero e o
+    resultado é idêntico ao de antes deste sprint — requisito, não coincidência:
+    as métricas de e-Profit publicadas no README não podem mudar em silêncio.
+    """
+    custo = custo_intervencao()
+    if state.get("payment_method") == "pix_automatico":
+        usadas = state.get("retry_count") or 0
+        restantes = max(0, MAX_TENTATIVAS_PIX - usadas)
+        custo += custo_tentativa_pix() * restantes
+    return round(custo, 4)
 
 
 async def check_anomaly(state: AgentState) -> AgentState:
@@ -131,7 +169,7 @@ async def check_anomaly(state: AgentState) -> AgentState:
 
     # Recalcular e-Profit com score ajustado
     ltv = state.get("ltv_estimated", state["amount"] * 6)
-    cost = 0.05  # bot_whatsapp padrão
+    cost = _custo_previsto_do_ciclo(state)
     new_eprofit = round(float(adjusted_p * ltv - cost), 2)
 
     print(f"[AGENT] Anomalia ({result['method']}): {result['is_anomaly']} | "
@@ -170,9 +208,25 @@ async def infer_payday(state: AgentState) -> AgentState:
 
 
 # Causas em que retentar a cobrança pode, mecanicamente, resolver.
-# Cartão expirado / recusado / do_not_honor não passam por insistência —
-# o cliente precisa agir, então vão direto à mensagem personalizada.
-CAUSAS_RETENTAVEIS = {"insufficient_funds", "processing_error"}
+#
+# O conjunto é o mesmo de antes do Sprint 3 — `insufficient_funds` e
+# `processing_error` —, mas agora ele é ALCANÇÁVEL pelas outras duas pontas: até
+# aqui toda falha de Pix chegava como `insufficient_funds`, então a linha de
+# baixo nunca reprovava nada num evento de Pix. Com o PIX_CODE_MAP, os dois
+# casos não retentáveis passam a existir de verdade:
+#
+#   limit_exceeded         o valor excede o teto que o pagador configurou.
+#                          Nenhuma das 3 tentativas do BACEN passa enquanto o
+#                          teto não subir, e só o cliente pode subi-lo.
+#   authorization_revoked  não há mais mandato. Não existe cobrança a reenviar.
+#
+# Gastar tentativa regulada em qualquer um dos dois é queimar um direito do
+# recebedor em algo que não pode dar certo.
+#
+# Cartão expirado / recusado / do_not_honor seguem fora por outro motivo (o
+# cliente precisa agir), e continuam válidos enquanto o vocabulário do Stripe
+# existir no caminho legado.
+CAUSAS_RETENTAVEIS = set(CAUSAS_RETENTAVEIS_PIX)
 
 
 async def decide_recovery(state: AgentState) -> AgentState:
@@ -234,8 +288,13 @@ async def decide_recovery(state: AgentState) -> AgentState:
         estrategia = "retry_automatico"
     else:
         if causa not in CAUSAS_RETENTAVEIS:
-            motivo = (f"'{causa}' não se resolve por retentativa — o cliente "
-                      f"precisa agir (atualizar cartão ou pagar por outro meio)")
+            # A explicação por causa vem do vocabulário (pix_codes), e não de um
+            # texto genérico: "o cliente precisa agir" não diz ao operador — nem
+            # à banca — se o que falta é aumentar o limite do Pix ou reautorizar
+            # a recorrência, que são ações diferentes.
+            detalhe = EXPLICACAO_DA_CAUSA.get(
+                causa, "o cliente precisa agir (atualizar cartão ou pagar por outro meio)")
+            motivo = f"'{causa}' não se resolve por retentativa — {detalhe}"
         elif metodo == "pix_automatico":
             motivo = (f"as {MAX_TENTATIVAS_PIX} tentativas da janela regulada do "
                       f"BACEN já foram usadas")
@@ -305,6 +364,32 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     print(f"[AGENT] Pix Automático: {len(plano)} tentativa(s) na janela BACEN | "
           f"próxima: {tentativas[0].quando.strftime('%d/%m %H:%M')} ({tentativas[0].origem})")
 
+    # O plano sai do grafo e vai para a camada de estado (Sprint 2). Sem isto,
+    # as tentativas 2 e 3 morrem aqui: o `ainvoke` termina, o checkpoint guarda
+    # o plano num formato privado do LangGraph, e nada volta na data certa para
+    # reenviar a instrução de pagamento. Ver `crai/dunning/retry_scheduler.py`.
+    retry_state.save_retry_state(
+        customer_id=state["customer_id"],
+        valor_original=state["amount"],
+        tentativas=plano,
+        pix_janela_ate=prazo_final,
+        e2e_id=state.get("invoice_id"),
+        tenant_id=state.get("tenant_id"),
+    )
+
+    # A primeira tentativa sai AGORA quando já é devida. "Devida" é a data que a
+    # política calculou, não o momento em que o webhook chegou: a janela do
+    # recebedor abre no dia seguinte ao vencimento (as duas janelas automáticas
+    # do dia são do PSP do pagador). Numa cobrança que falhou há mais de um dia
+    # a primeira tentativa está vencida e sai daqui; numa que acabou de falhar
+    # ela é de amanhã, e quem a dispara é o agendador — o mesmo caminho das
+    # tentativas 2 e 3, sem código paralelo.
+    registro = retry_state.get_retry_state(state["customer_id"],
+                                          tenant_id=state.get("tenant_id"))
+    if registro:
+        for devida in retry_state.tentativas_devidas(registro, momento):
+            await disparar_tentativa(registro, devida, momento)
+
     return {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
             "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
             "pix_retry_schedule": plano}
@@ -324,20 +409,61 @@ async def trigger_dunning(state: AgentState) -> AgentState:
     }
 
 
+def success_fee(amount: float, recovered: bool) -> float:
+    """O que a CRAI cobra por este ciclo. Zero quando não houve recuperação.
+
+    O percentual vem de `crai/config.py` desde o Sprint 5 — é parâmetro de
+    contrato, não constante de código. Esta função continua sendo o ÚNICO ponto
+    que aplica o fee, porque o ciclo fecha em dois lugares (este nó, para o
+    caso perdido/enviado, e `_fechar_ciclo_recuperado` na API, quando a
+    confirmação do PSP chega) e duas contas separadas divergiriam como
+    diferença de faturamento.
+    """
+    return round(amount * success_fee_pct(), 2) if recovered else 0.0
+
+
+def tentativas_ja_disparadas(state: AgentState) -> int:
+    """Quantas instruções de pagamento deste ciclo já saíram para o PSP.
+
+    Vem do `retry_state`, que é quem sabe o que foi DISPARADO — o
+    `retry_count` do checkpoint conta o que foi COMPROMETIDO pela política, que
+    é outra coisa. A diferença é exatamente o custo que o Gap 6 pedia: um
+    plano de 3 tentativas em que só a primeira saiu custou uma, não três.
+    """
+    registro = retry_state.get_retry_state(
+        state.get("customer_id", ""), tenant_id=state.get("tenant_id"))
+    if not registro:
+        return 0
+    return sum(1 for t in registro.get("tentativas") or [] if t.get("disparada_em"))
+
+
 async def update_roi_dashboard(state: AgentState) -> AgentState:
-    fee = state["amount"] * 0.15 if state.get("recovered") else 0
+    fee = success_fee(state["amount"], bool(state.get("recovered")))
     eprofit = state.get("eprofit", 0)
     recovered_icon = "[OK]" if state.get("recovered") else "[X]"
     print(f"[ROI] {recovered_icon} R$ {state['amount']:.2f} | taxa R$ {fee:.2f} | e-Profit R$ {eprofit:.2f}")
     crm_result = await _hubspot.register_recovery_cycle(state)
     print(f"[HUBSPOT] Contact {crm_result['hubspot_contact_id']} | Deal {crm_result['hubspot_deal_id']} | {crm_result['stage']}\n")
+
+    # A linha do dataset (Sprint 6). Gravada aqui porque este é o último nó nos
+    # DOIS caminhos do grafo — o que retentou e o que mandou mensagem —, e é o
+    # ponto em que features, decisão e custo até agora já existem. O desfecho
+    # entra depois, quando a confirmação do PSP chega; até lá `recovered` é 0,
+    # que é a verdade: em produção ninguém sabe ainda.
+    recovery_log.registrar_ciclo(state, tentativas_ja_disparadas(state))
     return state
 
 
-# Causa atribuída a uma cobrança recorrente de Pix Automático que falhou.
-# No fluxo do BACEN, as duas janelas automáticas do dia do vencimento já
-# tentaram debitar a conta do pagador; se ambas falharam, a causa dominante é
-# ausência de saldo — que é exatamente o caso em que o Payday Engine agrega.
+# Causa DOMINANTE de uma cobrança recorrente de Pix Automático que falha: no
+# fluxo do BACEN, as duas janelas automáticas do dia do vencimento já tentaram
+# debitar a conta do pagador, e se ambas falharam a ausência de saldo é a
+# hipótese mais provável — é também o caso em que o Payday Engine agrega.
+#
+# Até o Sprint 3 esta constante era atribuída a TODA falha de Pix, e aí ela
+# deixava de ser hipótese para virar afirmação sobre um pagador de quem não se
+# sabia nada. Hoje quem decide é o `PIX_CODE_MAP` sobre o motivo que o PSP
+# enviou (ver `crai/agent/pix_codes.py`); a constante segue aqui porque é a
+# causa mais frequente e continua sendo o rótulo do caminho simulado.
 CAUSA_PIX_FALHA = "insufficient_funds"
 
 
@@ -388,7 +514,11 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
 
     return {
         **perfil,
-        "gateway_error_code": CAUSA_PIX_FALHA,
+        # Sprint 3: a causa vem do motivo que o PSP enviou, traduzido pelo
+        # PIX_CODE_MAP. Um evento sem motivo (ou com motivo não reconhecido)
+        # cai no default seguro do mapa, que é `processing_error` — e não mais
+        # `insufficient_funds`, que afirmava falta de saldo sem saber.
+        "gateway_error_code": causa_do_codigo(event.get("codigo_falha")),
         # Não existe bandeira em Pix; o encoder trata valor desconhecido.
         "card_brand": "n/a",
         # As duas janelas automáticas do dia são do PSP do pagador e não contam
@@ -398,24 +528,19 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
 
 
 def _perfil_simulado(chave_cliente: str, invoice_amount: float) -> dict:
-    """Tenure, histórico e LTV do cliente (em produção viriam do banco/CRM)."""
-    now = datetime.now()
-    rng = np.random.default_rng(seed=seed_por_cliente(chave_cliente))
+    """Tenure, histórico e LTV do cliente, pelo provedor configurado.
 
-    tenure = int(rng.exponential(scale=12))
-    payment_history = round(float(np.clip(rng.beta(5, 2), 0, 1)), 3)
-    failure_count = int(rng.poisson(1.5))
-    avg_ticket = round(invoice_amount * rng.uniform(0.9, 1.1), 2)
-    ltv = round(max(invoice_amount, tenure * avg_ticket * 0.9 / 12), 2)
+    O NOME CONTINUA `_perfil_simulado` porque é o que ele descreve hoje: sem
+    fonte real configurada, o provedor devolve o perfil sintético, com os mesmos
+    valores para a mesma semente que antes do Sprint 7. O que mudou é que a
+    fonte virou configuração — `_perfil_provider` (topo deste módulo) pode ser
+    trocado por um provedor de banco sem que esta função, `_features_pix` ou o
+    nó de diagnóstico mudem de forma.
 
-    return {
-        "tenure_months": tenure,
-        "day_of_month": now.day,
-        "invoice_amount": invoice_amount,
-        "avg_ticket": avg_ticket,
-        "payment_history_score": payment_history,
-        "failure_count_90d": failure_count,
-        "hour_of_day": now.hour,
-        "day_of_week": now.weekday(),
-        "ltv_estimated": ltv,
-    }
+    Quatro das doze entradas do classificador não vêm do evento do PSP: tenure,
+    histórico de pagamento, falhas em 90 dias e ticket médio. Elas vêm do
+    negócio, e enquanto o negócio não estiver conectado, são fabricadas. Isso
+    está documentado em `crai/agent/README_treino.md` como a limitação que é,
+    não escondido atrás de um número plausível.
+    """
+    return _perfil_provider.get_perfil(chave_cliente, invoice_amount)

@@ -70,6 +70,14 @@ crai/
 │   │                                #   treinado via try/load/fallback, senão regras fixas
 │   ├── README_treino.md             # guia da fase de treino: formato do dataset,
 │   │                                #   limitações declaradas e como plugar o modelo
+│   ├── clientes_importados.py       # Self-service (caminho 2): base que a empresa anexou —
+│   │                                #   Postgres do Supabase em produção, SQLite só em teste
+│   ├── importacao.py                # CSV/XLSX -> clientes_importados: mapeamento de colunas,
+│   │                                #   validação por linha, números pt-BR
+│   ├── batch_scoring.py             # Pontua a base importada pelo MESMO motor; sem dado de
+│   │                                #   atividade = "dado_insuficiente", nunca risco 0.0
+│   ├── insights_unificados.py       # Upload ∪ SDK numa lista só, por customer_id; vence o
+│   │                                #   mais recente, `origem` diz qual
 │   └── state.py
 ├── ml/
 │   ├── failure_classifier.py        # XGBoost + Random Forest — train() + predict() + SHAP
@@ -85,14 +93,21 @@ crai/
 ├── integrations/
 │   ├── payment_gateway.py           # Adapter de Pix Automático: normaliza e recusa payload torto
 │   ├── hubspot_crm.py               # CRM — 2 pipelines: recovery + retention
-│   └── whatsapp_sender.py           # Canal WhatsApp do voluntário — SIMULADO; o ponto de
-│                                    #   integração real (BSP / Cloud API) está no módulo
+│   ├── whatsapp_sender.py           # Canal WhatsApp do voluntário — SIMULADO; o ponto de
+│   │                                #   integração real (BSP / Cloud API) está no módulo
+│   └── email_sender.py              # Resumo de insights por e-mail — SMTP se configurado,
+│                                    #   simulado (log) se não
+├── accounts/                        # Self-service: identidade da empresa cliente
+│   ├── supabase_auth.py             # Valida o JWT do Supabase Auth (JWKS, ES256/RS256, cache 10 min)
+│   ├── auth.py                      # Depends: get_tenant_id / get_conta (401 token, 500 sem env)
+│   └── README.md                    # Contrato da claim `tenant_id`, DDL da base, rotas
 ├── security/
 │   ├── webhook_verification.py      # HMAC dos 3 webhooks + janela anti-replay
 │   └── tokenization.py              # Tokenização de dados sensíveis
 ├── api/
 │   └── app.py                       # FastAPI: webhooks Pix + Stripe + Segment +
 │                                    #   retention-outcome (desfecho real do voluntário),
+│                                    #   self-service (/clientes/importar, /insights) via JWT,
 │                                    #   blindagem de forma da borda, trava por cliente,
 │                                    #   endpoints /simulate/*
 ├── scripts/

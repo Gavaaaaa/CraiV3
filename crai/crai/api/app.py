@@ -20,9 +20,10 @@ import asyncio
 import hashlib
 import logging
 import weakref
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -30,9 +31,18 @@ from pydantic import BaseModel
 
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
+from ..agent.workflow import (
+    success_fee,
+    tentativas_ja_disparadas,
+    update_roi_dashboard,
+)
+from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
+from ..churn_voluntary import clientes_importados, importacao, insights_unificados
+from ..integrations import email_sender
+from ..accounts import get_conta, get_tenant_id
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
     MOTIVO_SEM_IDENTIFICACAO,
@@ -44,6 +54,11 @@ from ..integrations.payment_gateway import (
     PayloadPixInvalido,
     PixAutomaticoAdapter,
     _para_float,
+)
+from .idempotencia import (
+    CICLOS_FECHADOS,
+    EVENTOS_DE_FALHA,
+    chave_do_evento,
 )
 from ..security.webhook_verification import (
     verify_stripe_signature,
@@ -322,6 +337,13 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     # divergiram no dia em que uma delas foi corrigida; agora há uma só.
     corpo = _objeto_json_do_corpo(raw, "PIX")
 
+    # Qual empresa cliente da CRAI mandou este evento. Mesmo portão do
+    # voluntário (`x-tenant-id` no header, senão `tenant_id` no corpo, senão
+    # `default_tenant`): um tenant declarado e torto é 422, ausência é o balde
+    # do MVP. Lido ANTES do parse porque vale para todo status, inclusive a
+    # confirmação de pagamento, que não passa pelo pipeline.
+    tenant_id = _tenant_da_requisicao(request, corpo, "PIX")
+
     try:
         evento = await _pix_adapter.parse_pix_event(corpo)
     except PayloadPixInvalido as e:
@@ -330,6 +352,12 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
                             detail={"motivo": e.motivo, "detalhe": e.detalhe})
 
     status = evento["status"]
+
+    # A cobrança PAGA é o outro fim do ciclo, e é o evento que faltava.
+    # Ela não roda o pipeline de diagnóstico — não há falha a diagnosticar —,
+    # mas é a única origem que sabe que uma recuperação deu certo.
+    if status == STATUS_COBRANCA_CONFIRMADA:
+        return await _confirmar_cobranca_paga(evento, tenant_id)
 
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
@@ -364,12 +392,29 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
                         "clientes distintos dividiriam o mesmo checkpoint"),
         })
 
+    # Reenvio da MESMA falha não roda o pipeline de novo (Gap 3). A trava por
+    # `thread_id` e o contador do checkpoint já impediam o 3+3 de tentativas;
+    # o que continuava acontecendo era o custo: diagnóstico, LLM e — a partir
+    # do Sprint 2 — chamada ao PSP repetidos por um evento já tratado.
+    if not EVENTOS_DE_FALHA.registrar_se_novo(
+        chave_do_evento(evento["id_recorrencia"], evento["e2e_id"])
+    ):
+        logger.info("[PIX] Cobrança falhada reenviada (recorrencia=%s, e2e=%s) — "
+                    "pipeline não reexecutado.",
+                    evento["id_recorrencia"] or "desconhecida", evento["e2e_id"][:16])
+        # 200 e não 4xx: reenvio é comportamento correto do PSP, e um erro o
+        # faria retentar para sempre o que já foi processado. Mesma escolha do
+        # `/webhooks/retention-outcome`.
+        return JSONResponse({"status": "ok", "evento": status, "pipeline": False,
+                             "motivo": "evento_ja_processado"})
+
     await _run_involuntary_pipeline(
         event=evento,
         payment_method="pix_automatico",
         customer_id=customer_id,
         amount=evento["valor"],
         invoice_id=evento["e2e_id"] or "e2e_desconhecido",
+        tenant_id=tenant_id,
     )
     return JSONResponse({"status": "ok", "evento": status, "pipeline": True})
 
@@ -397,6 +442,13 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
     event = _objeto_json_do_corpo(payload, "STRIPE")
 
+    # Lido mesmo com a recobrança de cartão fora do pipeline ativo: o registro
+    # `[CARTAO-DESATIVADO]` é evento de negócio de ALGUÉM, e quando o cartão
+    # voltar (ver `dunning/legacy_card/`) o caminho já estará atribuído. Um
+    # tenant torto é recusado aqui como nos outros webhooks — a validação não
+    # depende do que o pipeline faz depois.
+    tenant_id = _tenant_da_requisicao(request, event, "STRIPE")
+
     # `data` e `data.object` são percorridos com `.get()` encadeado em
     # `_dados_stripe`, e `amount_due` entra numa divisão. Um `data` que não é
     # objeto, ou um `amount_due` que não é número, estourava ali.
@@ -423,7 +475,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     _recusar_inteiro_grande_demais(dados, "STRIPE", "data")
 
     if event.get("type") == "invoice.payment_failed":
-        _registrar_cartao_desativado(event)
+        _registrar_cartao_desativado(event, tenant_id)
         return JSONResponse({
             "status": "ok", "pipeline": False,
             "motivo": "recobranca_automatica_de_cartao_fora_do_pipeline_ativo",
@@ -435,16 +487,21 @@ class SimulatePayment(BaseModel):
     customer_id:  str   = "cus_demo_001"
     amount:       float = 299.90
     failure_code: str   = "insufficient_funds"
+    tenant_id: Optional[str] = None
 
 
 @app.post("/simulate/payment-failed")
-async def simulate_payment_failed(payload: SimulatePayment) -> JSONResponse:
+async def simulate_payment_failed(request: Request,
+                                  payload: SimulatePayment) -> JSONResponse:
     """Falha de cartão simulada — mesmo tratamento do webhook real: só registra."""
     _require_simulation_env()
     # `_build_fake_stripe_event` faz `int(amount * 100)`: com `nan` ou `inf`
     # isso levanta ValueError e o FastAPI devolve 500.
     payload.amount = _valor_de_simulacao(payload.amount, "amount")
-    _registrar_cartao_desativado(_build_fake_stripe_event(payload))
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+    _registrar_cartao_desativado(_build_fake_stripe_event(payload), tenant_id)
     return JSONResponse({
         "status": "registrado", "pipeline": False,
         "customer_id": payload.customer_id,
@@ -456,10 +513,13 @@ class SimulatePixFalha(BaseModel):
     id_recorrencia: str   = "RN_demo_001"
     valor:          float = 299.90
     ispb_pagador:   str   = "60701190"
+    codigo_falha:   str   = "AM04"      # ver crai/agent/pix_codes.py
+    tenant_id: Optional[str] = None
 
 
 @app.post("/simulate/pix-falhado")
-async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
+async def simulate_pix_falhado(request: Request,
+                               payload: SimulatePixFalha) -> JSONResponse:
     """Cobrança recorrente de Pix Automático que falhou, sem PSP real."""
     _require_simulation_env()
 
@@ -478,6 +538,10 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
         "status": STATUS_COBRANCA_FALHADA,
         "ispb_pagador": payload.ispb_pagador,
         "id_recorrencia": payload.id_recorrencia,
+        # O motivo cru da recusa, que o PIX_CODE_MAP traduz (Sprint 3). Sem
+        # ele o endpoint da demo exercitaria só o default do mapa, e deixaria
+        # de exercitar o código que a demo mostra — é o N-7 outra vez.
+        "codigo_falha": payload.codigo_falha,
         # Sintetizado após a validação acima: chega aqui sem degradação porque
         # o que degradaria já foi recusado, não porque ninguém olhou.
         "degradacoes": [],
@@ -490,12 +554,59 @@ async def simulate_pix_falhado(payload: SimulatePixFalha) -> JSONResponse:
     if customer_id is None:
         raise HTTPException(status_code=422, detail={"motivo": MOTIVO_SEM_IDENTIFICACAO})
 
+    # Mesmo portão de tenant do webhook assinado, pelo mesmo motivo (N-7): o
+    # endpoint da demo tem que exercitar o código que a demo mostra.
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+
     await _run_involuntary_pipeline(
         event=evento, payment_method="pix_automatico",
         customer_id=customer_id, amount=valor,
-        invoice_id=evento["e2e_id"],
+        invoice_id=evento["e2e_id"], tenant_id=tenant_id,
     )
     return JSONResponse({"status": "pipeline_executado", "id_recorrencia": payload.id_recorrencia})
+
+
+class SimulatePixPago(BaseModel):
+    id_recorrencia: str = "RN_demo_001"
+    tenant_id: Optional[str] = None
+    # O e2e da cobrança PAGA é outro que não o da falhada — é outra transação.
+    # Default derivado do id da recorrência para a demo não precisar inventá-lo.
+    e2e_id: Optional[str] = None
+    valor:  Optional[float] = None
+
+
+@app.post("/simulate/pix-pago")
+async def simulate_pix_pago(request: Request,
+                            payload: SimulatePixPago) -> JSONResponse:
+    """Confirmação de pagamento sem PSP real — fecha o ciclo de recuperação.
+
+    É a outra metade de `/simulate/pix-falhado`, e existe pelo mesmo motivo que
+    `/webhooks/retention-outcome` existe no voluntário: sem uma origem de
+    desfecho, `recovered` nunca vira `True` e a demo mostra três clientes em
+    retentativa e nenhuma recuperação. Com este endpoint a banca vê o ciclo
+    inteiro — falha → agendamento → confirmação → fee.
+
+    Só fecha ciclo que a CRAI abriu: se não houver checkpoint com diagnóstico
+    para aquele `id_recorrencia`, responde `sem_ciclo_aberto` e não conta fee
+    (a mesma regra do webhook real — ver `_fechar_ciclo_recuperado`).
+    """
+    _require_simulation_env()
+
+    valor = _valor_de_simulacao(payload.valor) if payload.valor is not None else None
+    e2e_id = payload.e2e_id or f"E{payload.id_recorrencia}_pago"
+
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+
+    resultado = await _fechar_ciclo_recuperado(
+        customer_id=payload.id_recorrencia, e2e_id=e2e_id, valor=valor,
+        tenant_id=tenant_id,
+    )
+    return JSONResponse({"status": "confirmacao_processada",
+                         "id_recorrencia": payload.id_recorrencia, **resultado})
 
 
 # ── Churn Voluntário ─────────────────────────────────────────────────────
@@ -690,9 +801,156 @@ async def simulate_churn_risk(request: Request,
     return JSONResponse({"status": "pipeline_executado", "user_id": payload.user_id})
 
 
+@app.get("/metrics/recovery")
+async def metricas_de_recuperacao(tenant_id: Optional[str] = None,
+                                  desde: Optional[str] = None) -> JSONResponse:
+    """O agregado de negócio do churn involuntário (Gap 7).
+
+    MRR recuperado, taxa de recuperação, custo total, custo médio POR
+    RECUPERAÇÃO e margem (fee − custo). É o número que sustenta o modelo
+    Outcome-as-a-Service: sem ele, "recuperamos R$ X" é afirmação sem
+    denominador e sem custo.
+
+    NÃO é o dashboard do cliente — é o dado consultável de onde um dashboard
+    (ou a apresentação da banca) tira os números. A fonte é o log append-only
+    de ciclos (`dunning/recovery_log.py`), e não o checkpoint do grafo: o
+    checkpoint é memória de processo e some no restart.
+
+    ⚠️ SEM AUTENTICAÇÃO nesta fase, e declarado em vez de escondido: o projeto
+    não tem camada de auth além da assinatura dos webhooks, e este endpoint
+    expõe números de negócio agregados. Em produção ele fica atrás do mesmo
+    controle de acesso do dashboard; `tenant_id` aqui é FILTRO, não permissão.
+
+    Args:
+        tenant_id: restringe a uma empresa cliente. Ausente = todas.
+        desde: ISO-8601 (`2026-09-01` ou `2026-09-01T00:00:00+00:00`).
+    """
+    return JSONResponse(recovery_log.metricas(tenant_id=tenant_id, desde=desde))
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "crai-agent-v2"}
+
+
+# ── Self-service (empresa autenticada via Supabase) ───────────────────────
+# Estas rotas são o caminho (2) do onboarding: a empresa anexa a base que já
+# tem. Autenticação é o JWT do Supabase (`accounts.get_tenant_id`), NÃO a
+# assinatura HMAC dos webhooks — são contratos diferentes para chamadores
+# diferentes (um frontend logado vs. um PSP/Segment assinando payload).
+
+@app.post("/clientes/importar")
+async def importar_clientes(
+    arquivo: UploadFile = File(..., description="CSV ou XLSX com a base de clientes"),
+    mapeamento: Optional[str] = Form(
+        default=None,
+        description='JSON {"coluna no arquivo": "campo esperado"}, ex. '
+                    '{"Última atividade": "days_since_last", "MRR (R$)": "mrr"}'),
+    tenant_id: str = Depends(get_tenant_id),
+) -> JSONResponse:
+    """Upload em lote da base de clientes da empresa autenticada.
+
+    Campos esperados no arquivo (nome exato, case-insensitive, ou via
+    `mapeamento`): `customer_id_externo`, `mrr`, `billing_profile`
+    (obrigatórios); `days_since_last`, `features_used_30d`, `email`
+    (opcionais). Reimportar o mesmo `customer_id_externo` ATUALIZA a linha.
+
+    Resposta: `{importados, rejeitados: [{linha, motivo}],
+    colunas_nao_encontradas, linhas_sem_dado_comportamental}`. Uma linha
+    inválida não derruba o lote. Ver `churn_voluntary/importacao.py`.
+    """
+    conteudo = await arquivo.read()
+    try:
+        relatorio = importacao.importar(
+            tenant_id, arquivo.filename or "", conteudo, mapeamento=mapeamento)
+    except importacao.ArquivoInvalido as e:
+        logger.warning("[IMPORTACAO] tenant=%s recusado: %s", tenant_id, e.motivo)
+        raise HTTPException(status_code=e.status,
+                            detail={"motivo": e.motivo, "detalhe": e.mensagem})
+    except clientes_importados.ConfiguracaoAusente as e:
+        logger.error("[IMPORTACAO] %s", e)
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    return JSONResponse(relatorio)
+
+
+CRITICIDADES_FILTRAVEIS = ("alto", "critico")
+
+
+def _filtros_de_insights(limite: Optional[int], criticidade_minima: Optional[str]) -> tuple:
+    """Valida os query params do /insights: 422 com motivo, nunca filtro silencioso."""
+    if limite is not None and limite < 1:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "limite_invalido", "campo": "limite",
+            "detalhe": "esperado inteiro >= 1"})
+    crit = criticidade_minima.strip().lower() if criticidade_minima else None
+    if crit is not None and crit not in CRITICIDADES_FILTRAVEIS:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "criticidade_invalida", "campo": "criticidade_minima",
+            "detalhe": f"esperado um de {', '.join(CRITICIDADES_FILTRAVEIS)}"})
+    return limite, crit
+
+
+def _insights_do_tenant(tenant_id: str, limite, criticidade_minima) -> dict:
+    try:
+        ranking = insights_unificados.clientes_em_risco(tenant_id)
+    except clientes_importados.ConfiguracaoAusente as e:
+        logger.error("[INSIGHTS] %s", e)
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    filtrado = insights_unificados.filtrar(ranking, limite, criticidade_minima)
+    return {
+        "total_clientes": len(ranking),
+        "clientes_em_risco": filtrado,
+        "gerado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "filtros": {"limite": limite, "criticidade_minima": criticidade_minima},
+    }
+
+
+@app.get("/insights")
+async def insights(
+    limite: Optional[int] = None,
+    criticidade_minima: Optional[str] = None,
+    tenant_id: str = Depends(get_tenant_id),
+) -> JSONResponse:
+    """O ranking de clientes em risco da empresa autenticada — upload ∪ SDK.
+
+    Cada linha traz `origem: "upload" | "sdk"` e `atualizado_em`; quando o
+    mesmo cliente está nas duas origens, aparece UMA vez, com o dado mais
+    recente. `?limite=N` corta a lista; `?criticidade_minima=alto|critico`
+    filtra (`dado_insuficiente` nunca passa por esse filtro).
+    `total_clientes` é o total ANTES dos filtros.
+    """
+    limite, crit = _filtros_de_insights(limite, criticidade_minima)
+    return JSONResponse(_insights_do_tenant(tenant_id, limite, crit))
+
+
+@app.post("/insights/enviar")
+async def enviar_insights(
+    limite: Optional[int] = None,
+    criticidade_minima: Optional[str] = None,
+    conta: dict = Depends(get_conta),
+) -> JSONResponse:
+    """Manda o resumo do ranking para o e-mail DA CONTA AUTENTICADA.
+
+    O destinatário é o `email` do token do Supabase, e só ele: uma empresa
+    logada não escolhe para quem a CRAI escreve. Sem SMTP configurado, o
+    envio é simulado (logado) e a resposta diz `simulado: true` — mesmo
+    padrão do WhatsApp e do HubSpot.
+    """
+    if not conta.get("email"):
+        raise HTTPException(status_code=422, detail={
+            "motivo": "conta_sem_email",
+            "detalhe": "o token não traz `email`; o destinatário é sempre o "
+                       "e-mail da conta autenticada"})
+    limite, crit = _filtros_de_insights(limite, criticidade_minima)
+    dados = _insights_do_tenant(conta["tenant_id"], limite, crit)
+    resultado = email_sender.send_insights_email(
+        conta["tenant_id"], dados["clientes_em_risco"], conta["email"],
+        total_clientes=dados["total_clientes"])
+    status = 200 if resultado["enviado"] else 502
+    return JSONResponse({**resultado, "total_clientes": dados["total_clientes"],
+                         "gerado_em": dados["gerado_em"]}, status_code=status)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -905,18 +1163,24 @@ def _campo_com_forma(corpo: dict, campo: str, tipos: tuple, origem: str,
     return valor
 
 
-def _registrar_cartao_desativado(event: dict) -> dict:
+def _registrar_cartao_desativado(event: dict, tenant_id: str = TENANT_PADRAO) -> dict:
     """Registra uma falha de cartão sem acionar recobrança automática.
 
     O prefixo [CARTAO-DESATIVADO] existe para deixar explícito, no log e na
     demo, que o evento chegou e foi reconhecido — o que não aconteceu foi a
     retentativa, que aguarda a reimplementação descrita no roadmap da Fase 3.
+
+    `tenant_id` entra no registro mesmo com o cartão fora do pipeline (Sprint
+    4): a falha é evento de negócio de ALGUÉM, e um log sem dono é um log que
+    não serve de evidência quando dois clientes dividem a instalação.
     """
     dados = _dados_stripe(event)
+    dados["tenant_id"] = tenant_id
     aviso = (f"[CARTAO-DESATIVADO] {dados['customer_id']} | fatura "
-             f"{dados['invoice_id']} | R$ {dados['amount']:.2f} — evento registrado, "
-             f"recobrança automática de cartão fora do pipeline ativo "
-             f"(aguardando reimplementação; ver crai/dunning/legacy_card/)")
+             f"{dados['invoice_id']} | R$ {dados['amount']:.2f} | tenant "
+             f"{tenant_id} — evento registrado, recobrança automática de cartão "
+             f"fora do pipeline ativo (aguardando reimplementação; ver "
+             f"crai/dunning/legacy_card/)")
     print(aviso)
     logger.warning(aviso)
     return dados
@@ -984,6 +1248,141 @@ def _trava_do_cliente(customer_id: str) -> asyncio.Lock:
     return trava
 
 
+async def _confirmar_cobranca_paga(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSONResponse:
+    """Trata o evento de cobrança PAGA vindo do PSP (Pagar.me).
+
+    Nem toda cobrança paga é uma recuperação, e essa distinção é o coração
+    deste handler. O Pix Automático cobra todo mês; a esmagadora maioria das
+    confirmações é a mensalidade que deu certo de primeira, e contar success
+    fee sobre elas transformaria a receita da CRAI em percentual do faturamento
+    do cliente. Só é recuperação a confirmação que fecha um ciclo que a CRAI
+    abriu — e quem sabe se há ciclo aberto é o checkpoint do `thread_id`.
+    """
+    customer_id = _thread_id(evento)
+    if customer_id is None:
+        # 200, não 422: uma confirmação é informativa. Recusá-la faria o PSP
+        # retentar indefinidamente um evento sobre o qual não há nada a fazer.
+        logger.info("[PIX] Cobrança confirmada sem identificação — registrada "
+                    "sem fechar ciclo.")
+        return JSONResponse({"status": "ok", "evento": evento["status"],
+                             "pipeline": False, "ciclo": "sem_identificacao"})
+
+    resultado = await _fechar_ciclo_recuperado(
+        customer_id=customer_id,
+        e2e_id=evento["e2e_id"] or "e2e_desconhecido",
+        valor=evento.get("valor") or None,
+        tenant_id=tenant_id,
+    )
+    return JSONResponse({"status": "ok", "evento": evento["status"],
+                         "pipeline": False, **resultado})
+
+
+async def _fechar_ciclo_recuperado(
+    customer_id: str,
+    e2e_id: str,
+    valor: Optional[float] = None,
+    tenant_id: str = TENANT_PADRAO,
+) -> dict:
+    """Marca `recovered=True` e fecha o ciclo: ROI com fee + estágio no CRM.
+
+    POR QUE UMA FUNÇÃO DEDICADA, E NÃO UM `ainvoke` A MAIS. Reprocessar o grafo
+    na confirmação seria ativamente errado, não apenas caro:
+
+      - `diagnose_failure` rodaria o ensemble sobre um evento que não é falha;
+      - `schedule_retry_pix` agendaria MAIS tentativas na janela do BACEN para
+        uma cobrança que **acabou de ser paga** — gastando tentativas
+        regulatórias contra o próprio cliente;
+      - `trigger_dunning` mandaria mensagem de cobrança a quem já pagou.
+
+    O caminho certo é o inverso: **ler** o checkpoint (que guarda o diagnóstico
+    do ciclo aberto), gravar nele o desfecho e reaproveitar o nó de fechamento
+    (`update_roi_dashboard`) fora do grafo. É o mesmo nó, o mesmo log `[ROI]` e
+    o mesmo `register_recovery_cycle` que o caminho perdido usa — sem
+    reexecutar nenhuma decisão.
+
+    Returns:
+        dict com `ciclo` ∈ {recuperado, reenvio, sem_ciclo_aberto,
+        ja_recuperado} e o `fee` efetivamente contado (0.0 quando não houve).
+    """
+    # (a) Idempotência da confirmação: o mesmo e2e_id não conta fee duas vezes.
+    if not CICLOS_FECHADOS.registrar_se_novo(chave_do_evento(customer_id, e2e_id)):
+        logger.info("[PIX] Confirmação reenviada (%s / %s) — fee não recontado.",
+                    customer_id, e2e_id[:16])
+        return {"ciclo": "reenvio", "fee": 0.0}
+
+    config = {"configurable": {"thread_id": customer_id}}
+
+    # A trava do cliente cobre a leitura e a escrita do checkpoint pelo mesmo
+    # motivo que cobre o `ainvoke`: uma confirmação chegando junto com uma
+    # falha do mesmo `thread_id` intercalaria leitura e gravação.
+    async with _trava_do_cliente(customer_id):
+        snapshot = await crai_agent.aget_state(config)
+        estado = dict(getattr(snapshot, "values", None) or {})
+
+        # (b) Pagamento que nunca falhou: mensalidade normal, não recuperação.
+        if not estado or estado.get("failure_cause") is None:
+            logger.info("[PIX] Cobrança confirmada para %s sem ciclo de "
+                        "recuperação aberto — mensalidade normal, sem fee.",
+                        customer_id)
+            return {"ciclo": "sem_ciclo_aberto", "fee": 0.0}
+
+        # (c) Ciclo já fechado por outra entrega (e2e diferente, mesmo ciclo).
+        if estado.get("recovered"):
+            logger.info("[PIX] Ciclo de %s já constava como recuperado — "
+                        "confirmação registrada sem novo fee.", customer_id)
+            return {"ciclo": "ja_recuperado", "fee": 0.0}
+
+        # O valor autoritativo é o da cobrança que FALHOU e abriu o ciclo: é
+        # sobre ele que o fee é calculado. O valor do evento de confirmação
+        # entra só como fallback, para o caso de um checkpoint sem `amount`.
+        estado["amount"] = estado.get("amount") or valor or 0.0
+        estado["recovered"] = True
+
+        # O tenant AUTORITATIVO é o do ciclo, não o do evento de confirmação:
+        # quem rodou a recuperação foi aquele, e é a ele que o resultado é
+        # atribuído. Um evento que declare outro tenant não pode reatribuir uma
+        # recuperação alheia — mas a divergência fica registrada, porque ou é
+        # erro de integração do cliente ou é tentativa de atribuição indevida,
+        # e as duas precisam ser vistas.
+        tenant_do_ciclo = estado.get("tenant_id") or tenant_id
+        if tenant_id != TENANT_PADRAO and tenant_id != tenant_do_ciclo:
+            logger.warning(
+                "[PIX] Confirmação de %s declarou tenant %r, mas o ciclo foi "
+                "aberto por %r — atribuindo ao tenant do ciclo.",
+                customer_id, tenant_id, tenant_do_ciclo,
+            )
+        estado["tenant_id"] = tenant_do_ciclo
+
+        await crai_agent.aupdate_state(config, {"recovered": True})
+
+        print(f"[PIX] Cobrança confirmada — ciclo de recuperação de "
+              f"{customer_id} fechado com sucesso (e2e {e2e_id[:16]})")
+        # ORDEM IMPORTA, e custou um teste para aparecer. `registrar_recuperacao`
+        # fecha a linha ABERTA do ciclo — procura por `recovered = 0`. O
+        # `update_roi_dashboard` grava a linha do dataset e, com o state já
+        # marcado como recuperado, levaria `recovered` a 1 sem gravar fee nem
+        # desfecho (esses três campos são preservados na regravação de
+        # propósito, para que uma reentrega do webhook não desfaça um
+        # desfecho). Rodando o dashboard primeiro, o UPDATE seguinte não
+        # encontrava mais nenhuma linha aberta e a recuperação ficava
+        # registrada com `success_fee = 0`.
+        recovery_log.registrar_recuperacao(
+            customer_id=customer_id,
+            e2e_id=e2e_id,
+            amount=estado["amount"],
+            tenant_id=estado["tenant_id"],
+            tentativas_usadas=tentativas_ja_disparadas(estado),
+            dunning_enviado=bool(estado.get("dunning_sent")),
+        )
+
+        # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot + a
+        # regravação da linha com o diagnóstico atual.
+        await update_roi_dashboard(estado)
+
+    return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True),
+            "tenant_id": estado["tenant_id"]}
+
+
 async def _run_involuntary_pipeline(
     event: dict,
     payment_method: PaymentMethod,
@@ -991,6 +1390,7 @@ async def _run_involuntary_pipeline(
     amount: float,
     invoice_id: str,
     retries_done: Optional[int] = None,
+    tenant_id: str = TENANT_PADRAO,
 ) -> None:
     """Monta o state inicial e roda o grafo de churn involuntário.
 
@@ -1028,10 +1428,12 @@ async def _run_involuntary_pipeline(
     """
     initial: AgentState = {
         "payment_event": event, "payment_method": payment_method,
+        "tenant_id": tenant_id,
         "customer_id": customer_id, "invoice_id": invoice_id, "amount": amount,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
+        "features": None,
         "is_anomalous": None, "reconstruction_error": None, "anomaly_explanation": None,
         "optimal_retry_at": None,
         "estrategia": None, "raciocinio": None,

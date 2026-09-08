@@ -23,11 +23,36 @@ class AgentState(TypedDict):
     # Input
     payment_event:  dict            # evento de origem (Pix normalizado ou Stripe cru)
     payment_method: PaymentMethod   # preenchido na entrada, nunca inferido depois
+
+    # Qual empresa cliente da CRAI gerou este ciclo. O churn voluntário já era
+    # isolado por tenant; o involuntário não era, e a assimetria tinha efeito
+    # prático: dois clientes da CRAI num mesmo HubSpot misturavam negócios no
+    # mesmo pipeline sem nada que os separasse no relatório, e as tentativas
+    # reenviadas ao PSP não eram atribuíveis a quem as pagou.
+    #
+    # Nesta fase o campo é PROPAGAÇÃO E ATRIBUIÇÃO, não regra: o comportamento
+    # de recuperação é idêntico para todos os tenants. Decisão que dependa de
+    # tenant é RBAC/produto, e entra por outra porta.
+    #
+    # Ausente vira `default_tenant` — MVP declarado, mesma escolha do
+    # `_tenant_da_requisicao` do voluntário: a CRAI ainda é operada para um
+    # cliente por instalação, e exigir o campo quebraria os webhooks já
+    # integrados.
+    tenant_id:      str
+
     customer_id:    str
     amount:         float
     invoice_id:     str
 
     # Diagnóstico (XGBoost + RF + e-Profit + SHAP)
+    #
+    # `features` é o X que o classificador consumiu — as 11 features + LTV.
+    # Ele vive no state desde o Sprint 6 por um motivo só: sem isso, o par
+    # (features, recovered) que o `dunning/recovery_log.py` grava não existe.
+    # As features eram calculadas dentro de `diagnose_failure`, usadas na
+    # predição e descartadas; rodar três meses em produção daria zero linha de
+    # treino com dados reais. Não é dado novo — é o mesmo dado, preservado.
+    features:             Optional[dict]
     failure_cause:        Optional[str]
     recovery_score:       Optional[int]           # 0-100
     p_recovery:           Optional[float]          # 0.0-1.0

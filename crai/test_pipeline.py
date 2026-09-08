@@ -17,6 +17,7 @@ Uso:
 
 import asyncio
 import os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,9 +36,29 @@ os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
 
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
-from crai.api.app import _registrar_cartao_desativado
+from crai.api.app import _fechar_ciclo_recuperado, _registrar_cartao_desativado
+from crai.dunning import recovery_log, retry_state
+from crai.dunning.retry_scheduler import processar_tentativas_devidas
 from crai.churn_voluntary.voluntary_agent import agente_do_modo
 from crai.churn_voluntary.state import ChurnVoluntaryState
+
+
+# ── Cabeçalho dos cenários ───────────────────────────────────────────────
+#
+# UM lugar com a régua, e não um literal por cenário. A régua usa U+2550, que o
+# console cp1252 do Windows não codifica (linha N-12 do README, catraca em
+# `tests/test_encoding_saida.py`): cada cópia do literal era uma ocorrência a
+# mais do mesmo defeito, e a quinta cópia — o cabeçalho da confirmação de
+# pagamento do Sprint 1 — foi a que estourou a catraca. Consolidar aqui reduz o
+# inventário em vez de aumentá-lo, e deixa um ponto único para trocar a régua
+# por ASCII no dia em que a dívida for paga de vez.
+
+REGUA = "═" * 64
+
+
+def cabecalho(titulo: str, detalhe: str = "") -> None:
+    linha_detalhe = f"\n  {detalhe}" if detalhe else ""
+    print(f"\n{REGUA}\n  {titulo}{linha_detalhe}\n{REGUA}")
 
 
 # ── Churn Involuntário ───────────────────────────────────────────────────
@@ -56,29 +77,37 @@ def make_stripe_event(customer_id, amount, failure_code):
 
 def run_card_scenario(name, customer_id, amount, failure_code):
     """Cartão: o evento é recebido e registrado, sem recobrança automática."""
-    print(f"\n{'═'*64}\n  CARTÃO (RECOBRANÇA DESATIVADA) — {name}\n"
-          f"  {customer_id} | R$ {amount:.2f} | {failure_code}\n{'═'*64}")
+    cabecalho(f"CARTÃO (RECOBRANÇA DESATIVADA) — {name}",
+              f"{customer_id} | R$ {amount:.2f} | {failure_code}")
     return _registrar_cartao_desativado(make_stripe_event(customer_id, amount, failure_code))
 
 
 # ── Churn Involuntário via Pix Automático ────────────────────────────────
 
-async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
-    print(f"\n{'═'*64}\n  CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}\n"
-          f"  {id_recorrencia} | R$ {valor:.2f} | cobrança recorrente falhada\n{'═'*64}")
+async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0,
+                           codigo_falha="AM04"):
+    cabecalho(f"CHURN INVOLUNTÁRIO (PIX AUTOMÁTICO) — {name}",
+              f"{id_recorrencia} | R$ {valor:.2f} | recusa do PSP: {codigo_falha}")
 
-    # Evento já normalizado pelo PixAutomaticoAdapter: 5 campos, sem chave Pix.
+    # Evento já normalizado pelo PixAutomaticoAdapter: campos de dado, sem
+    # chave Pix. `codigo_falha` é o motivo CRU da recusa; quem o traduz para o
+    # vocabulário interno é o PIX_CODE_MAP (crai/agent/pix_codes.py).
     evento = {
         "e2e_id": f"E60701190{id_recorrencia}",
         "valor": valor,
         "status": "cobranca_falhada",
         "ispb_pagador": "60701190",
         "id_recorrencia": id_recorrencia,
+        "codigo_falha": codigo_falha,
     }
 
     initial: AgentState = {
         "payment_event": evento, "payment_method": "pix_automatico",
+        # Mesma empresa cliente dos cenários de churn voluntário: a demo mostra
+        # os dois pipelines de UM tenant, que é como a CRAI é operada hoje.
+        "tenant_id": "demo_tenant",
         "customer_id": id_recorrencia, "invoice_id": evento["e2e_id"], "amount": valor,
+        "features": None,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
         "shap_explanation": None, "feature_importance": None,
@@ -95,10 +124,60 @@ async def run_pix_scenario(name, id_recorrencia, valor, tentativas_usadas=0):
     return await crai_agent.ainvoke(initial, config)
 
 
+async def run_pix_confirmacao(id_recorrencia, valor):
+    """A confirmação de pagamento que fecha o ciclo — o outro fim do loop.
+
+    Em produção este evento chega por `POST /webhooks/pix-automatico` com
+    status de cobrança confirmada, enviado pelo Pagar.me quando uma das
+    tentativas reenviadas é paga. A demo chama a mesma função que o webhook
+    chama (`_fechar_ciclo_recuperado`), e não uma versão paralela: o que a
+    banca vê é o código de produção, sem PSP real.
+
+    Sem esta metade, `recovered` nunca vira True, o success fee nunca aparece
+    e a demo mostra três clientes em retentativa e nenhuma recuperação — o
+    mesmo buraco que o `/webhooks/retention-outcome` fechou no voluntário.
+    """
+    cabecalho("CONFIRMAÇÃO DE PAGAMENTO (PIX AUTOMÁTICO)",
+              f"{id_recorrencia} | R$ {valor:.2f} | cobrança recorrente paga")
+    return await _fechar_ciclo_recuperado(
+        customer_id=id_recorrencia,
+        e2e_id=f"E60701190{id_recorrencia}_pago",
+        valor=valor,
+        tenant_id="demo_tenant",
+    )
+
+
+async def run_agendador(dias_a_frente):
+    """O cron de produção, com o relógio adiantado — as tentativas 2 e 3.
+
+    A política do BACEN concede 3 tentativas na janela de 7 dias e devolve o
+    plano inteiro; o nó do grafo dispara a que já é devida e termina. As outras
+    caem em dias seguintes, com o `ainvoke` encerrado há muito. Em produção
+    quem volta nessas datas é um cron chamando
+    `processar_tentativas_devidas()` — infraestrutura, não agente.
+
+    Aqui o relógio é adiantado dia a dia para a banca ver as 3 tentativas
+    saindo em sequência sem esperar uma semana. O que roda é o MESMO código de
+    produção; o que muda é só o instante informado.
+    """
+    cabecalho("AGENDADOR DE RETENTATIVAS (as tentativas 2 e 3 do BACEN)",
+              "o cron de produção, com o relógio adiantado dia a dia")
+    disparos = []
+    for dia in range(1, dias_a_frente + 1):
+        momento = datetime.now() + timedelta(days=dia, hours=1)
+        do_dia = await processar_tentativas_devidas(momento)
+        if do_dia:
+            print(f"  D+{dia}: {len(do_dia)} tentativa(s) reenviada(s) ao PSP")
+        disparos.extend(do_dia)
+    if not disparos:
+        print("  nenhuma tentativa devida no período")
+    return disparos
+
+
 # ── Churn Voluntário ─────────────────────────────────────────────────────
 
 async def run_voluntary_scenario(name, user_id, event, props):
-    print(f"\n{'═'*64}\n  CHURN VOLUNTÁRIO — {name}\n  {user_id} | evento: {event}\n{'═'*64}")
+    cabecalho(f"CHURN VOLUNTÁRIO — {name}", f"{user_id} | evento: {event}")
 
     initial: ChurnVoluntaryState = {
         "tenant_id": "demo_tenant", "user_id": user_id, "event": event, "props": props,
@@ -118,16 +197,44 @@ async def main():
     if not os.getenv("HUBSPOT_TOKEN"):
         print("⚠️  HUBSPOT_TOKEN não definida — HubSpot rodará em modo simulação\n")
 
+    # Estado de retentativa zerado a cada execução da demo: sem isto, o plano
+    # da rodada anterior segue pendente em `data/` e o agendador o dispararia
+    # junto com o desta, embaralhando a contagem que a banca vê.
+    retry_state.limpar_tudo()
+
     # ── Cenários de Pix Automático (janela regulada BACEN) ──────────────
+    #
+    # O quinto campo é o motivo CRU da recusa, e é o que o Sprint 3 trouxe: até
+    # então toda falha de Pix era diagnosticada como falta de saldo, e os dois
+    # cenários de baixo — limite estourado e autorização revogada — teriam ido
+    # para retentativa, gastando tentativas do BACEN em algo que não pode
+    # passar. Agora eles vão direto para a mensagem personalizada, com o pedido
+    # certo: aumentar o limite, ou reautorizar a recorrência.
     pix_scenarios = [
-        ("Primeira falha — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0),
-        ("Já usou 2 das 3 tentativas",                "RN_joao_002",  149.00, 2),
-        ("Janela esgotada — 3 de 3 usadas",           "RN_pedro_003", 599.00, 3),
+        ("Saldo insuficiente — 3 tentativas disponíveis", "RN_maria_001", 299.90, 0, "AM04"),
+        ("Saldo insuficiente — já usou 2 das 3",          "RN_joao_002",  149.00, 2, "AM04"),
+        ("Janela esgotada — 3 de 3 usadas",               "RN_pedro_003", 599.00, 3, "AM04"),
+        ("Limite do Pix Automático excedido",             "RN_ana_004",   899.00, 0, "AM02"),
+        ("Autorização de recorrência revogada",           "RN_luis_005",  199.00, 0, "MD01"),
     ]
     pix_results = []
-    for name, rec_id, valor, usadas in pix_scenarios:
-        result = await run_pix_scenario(name, rec_id, valor, usadas)
+    for name, rec_id, valor, usadas, codigo in pix_scenarios:
+        result = await run_pix_scenario(name, rec_id, valor, usadas, codigo)
         pix_results.append(result)
+
+    # ── As tentativas 2 e 3: o agendador percorre a janela do BACEN ─────
+    disparos = await run_agendador(dias_a_frente=8)
+
+    # ── O ciclo se fecha: o pagamento chega e a recuperação é contabilizada ──
+    #
+    # Só o primeiro cenário paga. Os outros dois seguem em aberto de
+    # propósito: uma demo em que 100% recupera não mede nada, e a taxa de
+    # recuperação (Sprint 6) precisa de denominador.
+    rec_pago, valor_pago = pix_scenarios[0][1], pix_scenarios[0][2]  # noqa: E501
+    confirmacao = await run_pix_confirmacao(rec_pago, valor_pago)
+    # O reenvio do mesmo webhook — comportamento normal de PSP at-least-once —
+    # não pode faturar de novo. Provado na própria demo, não só no pytest.
+    reenvio = await run_pix_confirmacao(rec_pago, valor_pago)
 
     # ── Cenários de cartão (recobrança automática desativada na Fase 3) ──
     card_scenarios = [
@@ -155,7 +262,7 @@ async def main():
         voluntary_results.append(result)
 
     # ── Resumo ───────────────────────────────────────────────────────────
-    print(f"\n{'═'*64}\n  RESUMO GERAL\n{'═'*64}")
+    cabecalho("RESUMO GERAL")
 
     pix_amount = sum(r["amount"] for r in pix_results)
     com_plano = [r for r in pix_results if r.get("pix_retry_schedule")]
@@ -163,11 +270,46 @@ async def main():
     print(f"   Volume testado          : R$ {pix_amount:.2f}")
     print(f"   Com plano de retentativa: {len(com_plano)}/{len(pix_results)}")
     print(f"   Janela BACEN esgotada   : {sum(1 for r in pix_results if r.get('retry_exhausted'))}/{len(pix_results)}")
+    causas = {}
+    for r in pix_results:
+        causa = r.get("failure_cause", "?")
+        causas[causa] = causas.get(causa, 0) + 1
+    print(f"   Diagnóstico por causa   : "
+          f"{', '.join(f'{c}: {n}' for c, n in sorted(causas.items()))}")
+    assert len(causas) > 1, (
+        "INVARIANTE VIOLADO: todas as falhas de Pix receberam a mesma causa — o "
+        "PIX_CODE_MAP não está sendo aplicado e o diagnóstico voltou a ser cego")
+    nao_retentaveis = [r for r in pix_results
+                       if r.get("failure_cause") in ("limit_exceeded", "authorization_revoked")]
+    assert all(r.get("estrategia") == "mensagem_pagamento" for r in nao_retentaveis), (
+        "INVARIANTE VIOLADO: causa não retentável foi para retentativa — "
+        "tentativa do BACEN gasta em algo que não pode passar")
+    print(f"   Sem retentativa (por causa): {len(nao_retentaveis)} "
+          f"(limite excedido / autorização revogada → mensagem personalizada)")
     for r in com_plano:
         plano = r["pix_retry_schedule"]
         origem = plano[0]["origem"]
         dias = ", ".join(t["quando"].strftime("%d/%m") for t in plano)
         print(f"     {r['customer_id']}: {len(plano)} tentativa(s) em {dias} ({origem})")
+
+    por_cliente = {}
+    for d in disparos:
+        por_cliente[d["customer_id"]] = por_cliente.get(d["customer_id"], 0) + 1
+    print(f"   Tentativas reenviadas ao PSP : {len(disparos)} "
+          f"({', '.join(f'{c}: {n}' for c, n in sorted(por_cliente.items())) or 'nenhuma'})")
+    assert all(n <= 3 for n in por_cliente.values()), (
+        f"INVARIANTE VIOLADO: mais de 3 tentativas na janela do BACEN: {por_cliente}")
+    print(f"   Ciclos fechados por pagamento: 1/{len(pix_results)} "
+          f"({confirmacao['ciclo']}, fee R$ {confirmacao['fee']:.2f}, "
+          f"tenant {confirmacao.get('tenant_id', '?')})")
+    print(f"   Reenvio da mesma confirmação  : {reenvio['ciclo']} "
+          f"(fee R$ {reenvio['fee']:.2f} — não recontado)")
+    assert confirmacao["fee"] > 0, (
+        "INVARIANTE VIOLADO: o ciclo fechou sem success fee — `recovered` não "
+        "chegou ao update_roi_dashboard")
+    assert reenvio["fee"] == 0, (
+        f"INVARIANTE VIOLADO: o reenvio da confirmação faturou "
+        f"R$ {reenvio['fee']:.2f} pela segunda vez")
 
     card_amount = sum(r["amount"] for r in card_results)
     print(f"\n💳 Cartão (recobrança automática desativada — Fase 3):")
@@ -202,6 +344,31 @@ async def main():
     st = estatisticas()
     print(f"   Ciclos no dataset de treino  : {st['total']} "
           f"({st['com_desfecho']} com desfecho, {st['aguardando']} aguardando)")
+
+    # ── O ângulo financeiro (Sprint 6) ──────────────────────────────────
+    #
+    # É o número que sustenta o Outcome-as-a-Service: sem denominador e sem
+    # custo, "recuperamos R$ X" é afirmação solta. Vem do log append-only de
+    # ciclos (`dunning/recovery_log.py`), que é o MESMO arquivo de onde a fase
+    # de treino tira o par (features, recovered).
+    m = recovery_log.metricas(tenant_id="demo_tenant")
+    print(f"\n💰 Resultado de negócio (churn involuntário, tenant demo_tenant):")
+    print(f"   Ciclos no período            : {m['ciclos']} "
+          f"({m['recuperados']} recuperados)")
+    print(f"   Taxa de recuperação          : {m['taxa_recuperacao']:.0%}")
+    print(f"   MRR recuperado               : R$ {m['mrr_recuperado']:.2f} "
+          f"de R$ {m['volume_total']:.2f} em risco")
+    print(f"   Custo de operação            : R$ {m['custo_total']:.2f} "
+          f"(R$ {m['custo_medio_por_recuperacao']:.2f} por recuperação)")
+    print(f"   Receita CRAI (success fee)   : R$ {m['fee_total']:.2f}")
+    print(f"   Margem                       : R$ {m['margem']:.2f}")
+    print(f"   Linhas no dataset de treino  : {m['ciclos']} "
+          f"(par features → recovered, pronto para o retreino)")
+    assert m["ciclos"] > 0, (
+        "INVARIANTE VIOLADO: nenhum ciclo chegou ao log — sem o par "
+        "(features, recovered) não há dataset de treino com dados reais")
+    assert m["recuperados"] > 0 and m["fee_total"] > 0, (
+        "INVARIANTE VIOLADO: nenhuma recuperação foi contabilizada")
 
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 

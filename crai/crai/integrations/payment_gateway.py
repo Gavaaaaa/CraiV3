@@ -369,9 +369,10 @@ class PaymentGatewayAdapter(ABC):
         """Normaliza um evento de Pix Automático do PSP.
 
         Returns:
-            dict com as chaves de dado e2e_id, valor, status, ispb_pagador e
-            id_recorrencia, mais `degradacoes` — a lista de defaults que
-            precisaram ser aplicados durante o parsing (vazia = evento íntegro).
+            dict com as chaves de dado e2e_id, valor, status, ispb_pagador,
+            id_recorrencia e codigo_falha, mais `degradacoes` — a lista de
+            defaults que precisaram ser aplicados durante o parsing (vazia =
+            evento íntegro).
         """
 
     def parse_card_event(self, raw_payload: dict) -> dict:
@@ -394,10 +395,18 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             raw_payload: corpo do webhook do PSP, já desserializado
 
         Returns:
-            {e2e_id, valor, status, ispb_pagador, id_recorrencia, degradacoes}.
-            Os cinco primeiros são dado; `degradacoes` é a lista (possivelmente
-            vazia) dos defaults que precisaram ser aplicados. A chave Pix do
-            pagador é deliberadamente descartada.
+            {e2e_id, valor, status, ispb_pagador, id_recorrencia, codigo_falha,
+            degradacoes}. Os seis primeiros são dado; `degradacoes` é a lista
+            (possivelmente vazia) dos defaults que precisaram ser aplicados. A
+            chave Pix do pagador é deliberadamente descartada.
+
+            `codigo_falha` entrou no Sprint 3, de forma ADITIVA: os cinco campos
+            anteriores continuam onde estavam e com o mesmo significado. Ele
+            carrega o motivo CRU que o PSP enviou, e existe porque sem ele o
+            diagnóstico de Pix era cego — `_features_pix` atribuía
+            `insufficient_funds` a toda falha. Quem traduz o valor cru para o
+            vocabulário interno é `crai/agent/pix_codes.py`; aqui ele só é
+            transportado, e só quando é escalar.
 
         Raises:
             PayloadPixInvalido: payload que não é objeto JSON, ou lote com mais
@@ -429,17 +438,66 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                 "recurrence_id", "id_recorrencia", "recurrence.id",
                 default="",
             ), "id_recorrencia", degradacoes),
+            "codigo_falha": self._extrair_codigo_de_falha(raw_payload, dados),
             "degradacoes": degradacoes,
         }
 
         logger.info(
             "[PIX] Evento normalizado: status=%s | e2e=%s | recorrencia=%s | "
-            "ISPB=%s | degradacoes=%s",
+            "ISPB=%s | motivo=%s | degradacoes=%s",
             normalizado["status"], normalizado["e2e_id"][:16],
             normalizado["id_recorrencia"], normalizado["ispb_pagador"],
+            normalizado["codigo_falha"] or "nao_informado",
             degradacoes or "nenhuma",
         )
         return normalizado
+
+    @staticmethod
+    def _extrair_codigo_de_falha(raw_payload: dict, dados: dict) -> str:
+        """O motivo CRU da recusa, como o PSP o enviou. `""` se não veio.
+
+        Não traduz e não julga: a tradução para o vocabulário interno é do
+        `pix_codes.causa_do_codigo`, e mantê-las separadas é o que permite ao
+        mapa crescer sem tocar no parser.
+
+        NÃO é campo de identificação, e por isso não passa por
+        `_texto_de_identificacao` nem gera degradação: um motivo ausente é
+        normal (autorização concedida não tem motivo de recusa) e o default
+        seguro do mapa cobre o caso. O que se garante aqui é o TIPO — só
+        escalar vira texto, pelo mesmo motivo do N-11: `str()` sobre um dict
+        devolveria `"{'code': 'AM04'}"` como se fosse um código.
+
+        Nenhum destes caminhos toca a chave Pix do pagador. O campo carrega
+        código de recusa, não dado do pagador — e o valor ainda passa pelo
+        PIX_CODE_MAP antes de virar feature, o que fecha o vocabulário mesmo se
+        um PSP resolver mandar texto livre aqui.
+        """
+        bruto = _primeiro_preenchido(
+            dados,
+            "automatic_pix.failure_reason", "automatic_pix.rejection_reason",
+            "automatic_pix.status_reason", "last_transaction.acquirer_return_code",
+            "last_transaction.status_reason", "charge.status_reason",
+            "error.code", "error.reason", "failure_code", "failure_reason",
+            "rejection_reason", "status_reason", "codigo_falha", "motivo_falha",
+            default=None,
+        )
+        if bruto is None:
+            bruto = _primeiro_preenchido(
+                raw_payload, "error.code", "failure_code", "reason",
+                default=None,
+            )
+        if bruto is None:
+            return ""
+        if isinstance(bruto, (str, int, float)) and not isinstance(bruto, bool):
+            # Teto de tamanho: o valor vai para log e para o dataset de treino,
+            # e um "código" de 10 KB é payload de terceiro, não código.
+            return str(bruto)[:64]
+        logger.warning(
+            "[PIX] Motivo de falha veio como %s, não como escalar — descartado; "
+            "o diagnóstico cai no default seguro do PIX_CODE_MAP.",
+            type(bruto).__name__,
+        )
+        return ""
 
     @staticmethod
     def _resolver_envelope(raw_payload: dict, degradacoes: list[str]) -> dict:

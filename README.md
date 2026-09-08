@@ -324,6 +324,15 @@ cp .env.example .env
 | `STRIPE_WEBHOOK_SECRET` | Para `/webhooks/stripe` | Valida o header `stripe-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
 | `PIX_WEBHOOK_SECRET` | Para `/webhooks/pix-automatico` | Valida o header `x-pix-signature` (HMAC-SHA256). Sem ele o endpoint rejeita tudo com 401 |
 | `CRAI_ENCRYPTION_KEY` | Para arquivar chave Pix | Chave Fernet para cifrar a chave Pix do pagador. Sem ela o arquivamento falha em vez de gravar em texto puro |
+| `CRAI_PAGARME_LIVE` | Não | `1` liga o envio REAL de instrução de cobrança ao Pagar.me. Sem ela, `reenviar_cobranca_pix` roda em modo simulado — nenhuma rede, nenhuma credencial |
+| `CRAI_PAGARME_API_KEY` | Com `CRAI_PAGARME_LIVE=1` | Secret key do Pagar.me (Basic auth, senha vazia). Ligar o modo real sem ela **falha alto**, em vez de cair para simulado em silêncio |
+| `CRAI_PAGARME_ENDPOINT` | Não | Caminho da cobrança avulsa sobre a recorrência de Pix Automático. O default é um placeholder marcado `TODO(integração)` — o valor real depende da conta |
+| `CRAI_RETRY_STATE` | Não | Redireciona o arquivo de planos de retentativa pendentes (default `crai/data/pix_retry_state.json`). A suíte usa isto para não escrever no estado real |
+| `CRAI_SUCCESS_FEE_PCT` | Não | Percentual do valor recuperado que a CRAI cobra (default `0.15`). Faixa [0, 1]; valor torto cai no default com aviso no log — um `.env` errado não pode parar a cobrança de todos os clientes |
+| `CRAI_CUSTO_INTERVENCAO_WHATSAPP` | Não | Custo de uma mensagem pelo bot (default `0.05`). Entra no e-Profit, que é o que decide se a CRAI age |
+| `CRAI_CUSTO_TENTATIVA_PIX` | Não | Custo por instrução reenviada ao PSP (default `0.0`). Com zero, o e-Profit é idêntico ao de antes do Sprint 5 |
+| `CRAI_RECOVERY_DB` | Não | Redireciona o log de ciclos de recuperação (default `crai/data/recovery_cycles.db`). É o dataset de treino do involuntário; a suíte usa isto para não escrever no banco real |
+| `CRAI_PERFIL_DB` | Não | Fonte real do perfil do cliente (tenure, histórico, ticket). Sem ela o perfil é **sintético** — ver `crai/crai/agent/README_treino.md` |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -425,6 +434,11 @@ curl -X POST http://localhost:8000/simulate/payment-failed \
 curl -X POST http://localhost:8000/simulate/pix-falhado \
   -H "Content-Type: application/json" \
   -d '{"id_recorrencia":"RN_teste","valor":299.90,"ispb_pagador":"60701190"}'
+
+# Churn involuntário — confirmação de pagamento (fecha o ciclo e conta o fee)
+curl -X POST http://localhost:8000/simulate/pix-pago \
+  -H "Content-Type: application/json" \
+  -d '{"id_recorrencia":"RN_teste"}'
 
 # Churn voluntário
 curl -X POST http://localhost:8000/simulate/churn-risk \
@@ -530,6 +544,57 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] `/webhooks/stripe` mantido, registrando as falhas com `[CARTAO-DESATIVADO]`
   - [x] `parse_card_event` reservado para o roadmap — cartão não implementado nesta fase
   - [x] Demo reprodutível: `hashlib.md5` no lugar do `hash()` randomizado por processo
+- [x] **Ciclo de recuperação fechado** — confirmação real de pagamento (Sprint 1)
+  - [x] Status de cobrança confirmada do PSP fecha o ciclo: `recovered=True`, success fee no `[ROI]`, estágio `recovered` no CRM
+  - [x] Fechamento **fora do grafo** (`_fechar_ciclo_recuperado`) — reprocessar o pipeline agendaria tentativas do BACEN contra quem acabou de pagar
+  - [x] Fee só onde houve recuperação: confirmação sem ciclo aberto é mensalidade normal, não recuperação
+  - [x] Idempotência dos **dois** lados (janela de 7 dias, `api/idempotencia.py`): reenvio da confirmação não fatura duas vezes; reenvio da falha não reexecuta o pipeline
+  - [x] `/simulate/pix-pago` — a banca vê o loop inteiro (falha → agendamento → confirmação → fee) sem PSP real
+  - ⚠️ A janela de idempotência é memória de processo: reinício a esquece e dois processos têm janelas separadas — mesma dependência de DB do `MemorySaver` (P1-14)
+- [x] **Execução da retentativa** — o agente deixa de só agendar (Sprint 2)
+  - [x] `integrations/pagarme_gateway.py` — a SAÍDA para o PSP (`reenviar_cobranca_pix`), espelhando o adapter de entrada
+  - [x] Modo simulado por default (sem rede, sem credencial); modo real com `CRAI_PAGARME_LIVE=1` + chave, que **falha alto** se a chave faltar
+  - [x] Invariante de valor na última linha antes do dinheiro: valor != original levanta `PixRetryPolicyViolation`
+  - [x] `dunning/retry_scheduler.py` — as tentativas 2 e 3 do BACEN (Gap 1). Em produção um cron chama `processar_tentativas_devidas()`; o relógio é injetado, e é o que torna a regra testável
+  - [x] `dunning/retry_state.py` — o plano pendente atrás de `get_retry_state`/`save_retry_state` (Gap 2): ponto de troca pronto para o PostgreSQL
+  - [x] Falha do PSP não consome tentativa: a marca de disparo só é gravada depois do aceite
+  - ⚠️ **Limitação assumida (Gap 2):** o contador do BACEN segue no `MemorySaver` e o plano num JSON reescrito inteiro. Um processo, sem transação — reinício e segundo worker continuam sendo a dependência de banco já descrita em P1-14. O que muda com o DB é a implementação por trás dessas duas funções, não o nó do grafo nem o agendador
+  - ⚠️ **Fora do escopo declarado:** o scheduler temporal de produção (cron/worker) é infraestrutura. O que existe aqui é a LÓGICA de disparo, completa e testável, mais o ponto onde o cron chama
+- [x] **Diagnóstico real de falha de Pix** — o PIX_CODE_MAP (Sprint 3)
+  - [x] `agent/pix_codes.py` — quatro causas internas (`insufficient_funds`, `limit_exceeded`, `authorization_revoked`, `processing_error`) com aliases textuais dos PSPs e códigos ISO 20022 do arranjo Pix
+  - [x] Schema normalizado ganhou `codigo_falha` de forma **aditiva** — os cinco campos anteriores intactos, e a chave Pix continua fora
+  - [x] `_features_pix` deixou de atribuir `insufficient_funds` a toda falha: a feature do classificador era constante, e o dataset de treino nasceria sem sinal
+  - [x] `limit_exceeded` e `authorization_revoked` **não** consomem tentativa do BACEN — retentar não pode dar certo nos dois, e a tentativa é um direito do recebedor
+  - [x] Templates de dunning próprios para as duas causas (aumentar o limite / reautorizar), e autorização revogada não oferece Pix Automático — é o canal que o cliente acabou de fechar
+  - [x] Default seguro `processing_error` para código não reconhecido: não afirma falta de saldo sobre um pagador de quem não se sabe nada
+  - ⚠️ **TODO(integração):** a lista de códigos ISO 20022 precisa ser conferida contra a documentação da conta Pagar.me antes de `CRAI_PAGARME_LIVE=1`. Código fora do mapa cai no default e sai no log — é assim que se descobre o que falta
+- [x] **Isolamento por tenant no involuntário** — paridade com o voluntário (Sprint 4)
+  - [x] `AgentState.tenant_id`, preenchido na borda pelo mesmo portão do voluntário (`x-tenant-id` no header, senão `tenant_id` no corpo, senão `default_tenant`)
+  - [x] Tenant declarado e torto é **422**; ausente é o balde do MVP — a diferença entre não saber e saber errado
+  - [x] Propagado ao deal de recuperação no HubSpot, ao reenvio no Pagar.me e à chave do plano de retentativa (dois clientes podem ter o mesmo `id_recorrencia`)
+  - [x] O fechamento de ciclo atribui ao tenant que ABRIU o ciclo — uma confirmação de outro tenant não reatribui a recuperação, e a divergência é logada
+  - [x] Comportamento **idêntico** entre tenants nesta fase: propagação e atribuição, não regra. Decisão por tenant é RBAC/produto e entra por outra porta
+  - [x] `/webhooks/stripe` e o registro `[CARTAO-DESATIVADO]` também atribuídos, para o caminho já estar pronto quando o cartão voltar
+- [x] **Custo e fee configuráveis** — os parâmetros de negócio saem do código (Sprint 5)
+  - [x] `crai/config.py` — success fee, custo por canal e custo por tentativa de Pix num lugar só, lidos de env a cada chamada
+  - [x] Defaults **idênticos** aos literais anteriores: sem env configurada, demo, testes e métricas do README dão exatamente os mesmos números
+  - [x] O custo do WhatsApp deixou de estar duplicado (nó de anomalia + `INTERVENTION_COSTS`); a tabela de canais mudou de casa para `config.py`, e `INTERVENTION_COSTS` segue como o valor default
+  - [x] `CRAI_CUSTO_TENTATIVA_PIX` refina o e-Profit com o custo das tentativas que ainda cabem na janela (Gap 6). Default zero: o valor real é contratual e não é conhecido aqui
+  - [x] Env torta cai no default com aviso, e a faixa impede fee negativo ou acima de 100% — um `.env` errado não derruba a cobrança de todos os clientes
+- [x] **Log de ciclo + métricas de negócio** — o loop de dados e o de dinheiro (Sprint 6)
+  - [x] `dunning/recovery_log.py` — uma linha por ciclo com features (as 11 + LTV), diagnóstico, decisão, custo realizado e desfecho. É a paridade do `retention_log` do voluntário
+  - [x] `AgentState.features` preserva o X do classificador: ele era calculado, usado e descartado, e sem ele não há par (features, recovered) para treinar com dados reais (Gaps 4 e 5)
+  - [x] Custo **realizado** por ciclo — tentativas que de fato saíram × custo por tentativa + mensagem (Gap 6). Diferente do previsto, que o e-Profit usa para decidir se vale agir
+  - [x] `GET /metrics/recovery?tenant_id=&desde=` — MRR recuperado, taxa de recuperação, custo total, custo médio por recuperação e margem (Gap 7)
+  - [x] Idempotente por `UNIQUE (tenant_id, e2e_id)`: vale mesmo quando um restart apagou a janela de idempotência da API, e um desfecho registrado nunca volta atrás
+  - [x] A demo imprime o resumo de negócio ao final, e reexecutá-la não infla os números
+  - ⚠️ O endpoint de métricas **não tem autenticação** nesta fase — declarado, não escondido. O projeto não tem camada de auth além da assinatura dos webhooks; em produção ele fica atrás do mesmo controle de acesso do dashboard, e `tenant_id` ali é filtro, não permissão
+- [x] **Prontidão para treino com dados reais** (Sprint 7)
+  - [x] `agent/perfil_provider.py` — o perfil passa por um provedor plugável. `SyntheticPerfilProvider` é o default e reproduz **exatamente** os valores anteriores; `DBPerfilProvider` é o stub com o ponto de conexão marcado
+  - [x] `ml/ltv.py` — a fórmula de LTV numa única casa. Estava escrita duas vezes, com fatores de retenção diferentes, e divergiria em silêncio: o LTV é o multiplicador do e-Profit, não uma feature que o treino veria
+  - [x] Nenhum valor mudou: 5.000 perfis e 5.000 LTVs vetorizados conferidos contra a implementação anterior, zero divergências
+  - [x] `crai/crai/agent/README_treino.md` — as 12 entradas e a origem de cada uma, como plugar a fonte real, o mapeamento código Pagar.me → `failure_cause`, e o passo a passo para ler `recovery_cycles.db` e alimentar o `train()`
+  - [x] As 10 limitações conhecidas tabeladas para a banca, cada uma com o ponto de troca no código
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
   - [x] `train()` em `anomaly_detector.py` e `payday_inference.py` (antes só tinham `load()`)

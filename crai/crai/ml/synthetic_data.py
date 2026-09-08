@@ -20,6 +20,8 @@ from datetime import date
 from typing import Optional, Union
 
 import numpy as np
+
+from .ltv import ltv_estimado
 import pandas as pd
 
 # Seed global para reprodutibilidade
@@ -155,11 +157,15 @@ def generate_dataset(n_samples: int = 3000, seed: Optional[int] = SEED) -> pd.Da
     attempt_count = rng.choice([1, 2, 3, 4], size=n_samples, p=[0.45, 0.30, 0.15, 0.10])
 
     # ── LTV estimado ─────────────────────────────────────────────────
-    # LTV = tenure * avg_ticket_mensal * fator_retenção
+    # A fórmula mora em `ml/ltv.py` desde o Sprint 7 do churn involuntário. Ela
+    # estava escrita aqui e, de novo, no perfil sintético do pipeline — com
+    # outro fator de retenção. Duas cópias da mesma regra divergem no dia em que
+    # uma for corrigida, e esta divergiria em silêncio: o LTV não é feature de
+    # treino, é o multiplicador do e-Profit. O fator continua sendo parâmetro,
+    # e aqui ele é modulado pelo tenure, como sempre foi.
     retention_factor = np.clip(0.85 + tenure_factor * 0.10, 0.80, 0.98)
-    ltv_estimated = (tenure_months * avg_ticket * retention_factor / 12).round(2)
-    # Mínimo de LTV = valor da fatura (pelo menos 1 mês)
-    ltv_estimated = np.maximum(ltv_estimated, invoice_amount).round(2)
+    ltv_estimated = ltv_estimado(tenure_months, avg_ticket, invoice_amount,
+                                 retention_factor)
 
     # ══ TARGET: recovered (0/1) ══════════════════════════════════════
     # Probabilidade de recuperação baseada em fatores realistas

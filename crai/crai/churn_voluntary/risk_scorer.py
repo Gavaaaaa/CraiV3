@@ -186,10 +186,59 @@ def _risco_por_regras(event: str, props: dict) -> float:
     return 0.0   # evento desconhecido — não dispara nada
 
 
-def calculate_risk(event: str, props: dict) -> float:
-    """O risk_score do evento: modelo treinado se houver, regras fixas se não."""
+def _risco(event: str, props: dict) -> float:
+    """O núcleo: modelo treinado se houver, regras fixas se não.
+
+    É UMA função para os dois caminhos de dado do self-service — o evento do
+    SDK (`calculate_risk`) e a linha da base importada (`risco_por_features`).
+    Regra ou modelo, os dois batem aqui; só muda de onde vêm os números.
+    """
     risco = _risco_do_modelo(event, props)
     return risco if risco is not None else _risco_por_regras(event, props)
+
+
+def calculate_risk(event: str, props: dict) -> float:
+    """O risk_score do evento: modelo treinado se houver, regras fixas se não.
+
+    `props` entra CRU, como sempre entrou — inclusive chave presente com valor
+    `None`, que as regras tratam do jeito que sempre trataram. É por isso que
+    esta função chama `_risco` direto em vez de passar por
+    `risco_por_features`: lá, `None` significa "a planilha não tinha", e virar
+    default aqui seria mudar o comportamento observável de um caminho que o
+    Sprint 6 travou com teste de regressão.
+    """
+    return _risco(event, props)
+
+
+# O evento que representa "dado estático de cadastro": é o único que hoje usa
+# `days_since_last`/`features_used_30d` nas regras fixas, e o que o modelo
+# treinado verá marcado em `evento_sessao`.
+EVENTO_DADO_ESTATICO = "Session Started"
+
+
+def risco_por_features(days_since_last=None, features_used_30d=None, mrr=None,
+                       event: str | None = None) -> float:
+    """O MESMO risco de `calculate_risk`, sem exigir um evento pontual.
+
+    Para a base importada (Sprint 3): a linha da planilha não é um evento de
+    comportamento, é uma foto. Trata-se como "Session Started" — o caso das
+    regras que lê inatividade e uso — a não ser que `event` diga outra coisa.
+
+    `None` aqui é AUSÊNCIA ("a planilha não tinha esta coluna"), e vira o
+    mesmo default que as regras aplicam a chave ausente no payload do SDK
+    (`days=0`, `features=10`). ATENÇÃO — os dois defaults juntos dão risco
+    0.0, que é "sem risco nenhum", não "não sei avaliar". Quem chama com os
+    dois ausentes tem que decidir ANTES se quer um número: `batch_scoring`
+    não chama, e marca a linha como `dado_insuficiente`.
+    """
+    props = {}
+    if days_since_last is not None:
+        props["days_since_last"] = days_since_last
+    if features_used_30d is not None:
+        props["features_used_30d"] = features_used_30d
+    if mrr is not None:
+        props["mrr"] = mrr
+    return _risco(EVENTO_DADO_ESTATICO if event is None else event, props)
 
 
 def classify_profile(props: dict) -> str:
