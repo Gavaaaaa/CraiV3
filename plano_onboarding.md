@@ -193,7 +193,7 @@ ESTRUTURA REAL (confirmada):
   caminho SDK e este plano não mexe nele
 - API: crai/crai/api/app.py (FastAPI) — hoje só webhooks orientados a evento
   e endpoints /simulate/*
-- Testes: crai/crai/tests/
+- Testes: crai/tests/
 
 INVARIANTE: nada que já existe pode mudar de comportamento. Este plano
 ADICIONA módulos novos (validação de JWT, ingestão em lote, insights) e só
