@@ -1,0 +1,135 @@
+# `crai/accounts` — quem é a empresa que está chamando a API
+
+A CRAI **não** cadastra empresa, não guarda senha e não emite API key. Tudo
+isso mora no **Supabase** (Auth + Postgres): o frontend faz login direto no
+Supabase, recebe um JWT, e manda esse JWT em toda chamada à CRAI:
+
+```
+Authorization: Bearer <access_token do Supabase>
+```
+
+Este pacote só **valida** o token e extrai o `tenant_id` de dentro dele. É
+esse `tenant_id` que o resto do pipeline (bandit, `retention_log`, e daqui
+em diante a base importada e os insights) já usa para particionar dado.
+
+## O contrato: a claim `tenant_id`
+
+O token padrão do Supabase identifica o **usuário** (`sub`), não a
+**empresa**. Uma empresa pode ter vários usuários, e o que a CRAI particiona
+é a empresa. Por isso o token precisa carregar uma claim a mais:
+
+| claim       | origem                   | uso na CRAI                                   |
+|-------------|--------------------------|-----------------------------------------------|
+| `sub`       | Supabase Auth            | id do usuário (não usado para particionar)     |
+| `role`      | Supabase Auth            | `authenticated` para usuário logado            |
+| `aud`       | Supabase Auth            | precisa ser `authenticated` (verificado)       |
+| `exp`       | Supabase Auth            | expiração (verificada; obrigatória)            |
+| `tenant_id` | **Custom Access Token Hook** | **a empresa** — obrigatória, 401 se faltar |
+
+Formato aceito para `tenant_id`: 1 a 64 caracteres em `[A-Za-z0-9._-]`,
+o mesmo que os webhooks já aceitam em `x-tenant-id`. O literal
+`default_tenant` é recusado (é o balde de "não declarou tenant").
+
+### Exemplo de payload decodificado
+
+```json
+{
+  "iss": "https://abcdefgh.supabase.co/auth/v1",
+  "sub": "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b",
+  "aud": "authenticated",
+  "role": "authenticated",
+  "email": "financeiro@empresa-exemplo.com.br",
+  "exp": 1757347200,
+  "iat": 1757343600,
+  "tenant_id": "empresa-exemplo"
+}
+```
+
+Header esperado: `{"alg": "ES256", "kid": "<id da chave>", "typ": "JWT"}`.
+Projetos antigos emitem `RS256`; os dois são aceitos. `HS256` é recusado
+(ver "Segurança" abaixo).
+
+## Como o `tenant_id` entra no token (configuração no Supabase, fora deste repo)
+
+1. Tabela `empresas` no Postgres do Supabase, com pelo menos:
+   `id text primary key` (o `tenant_id`), `nome text`, `criada_em timestamptz`.
+   E um vínculo usuário → empresa, por exemplo `usuarios_empresas(user_id uuid
+   references auth.users, empresa_id text references empresas)`.
+2. Uma função Postgres registrada como **Custom Access Token Hook**
+   (Dashboard → Authentication → Hooks). Ela roda a cada login e devolve as
+   claims com `tenant_id` adicionado. Esboço:
+
+   ```sql
+   create or replace function public.custom_access_token_hook(event jsonb)
+   returns jsonb language plpgsql stable as $$
+   declare
+     claims jsonb := event->'claims';
+     empresa text;
+   begin
+     select empresa_id into empresa
+       from public.usuarios_empresas
+      where user_id = (event->>'user_id')::uuid
+      limit 1;
+     if empresa is not null then
+       claims := jsonb_set(claims, '{tenant_id}', to_jsonb(empresa));
+     end if;
+     return jsonb_set(event, '{claims}', claims);
+   end;
+   $$;
+   grant execute on function public.custom_access_token_hook to supabase_auth_admin;
+   ```
+
+   Referência: docs.supabase.com/guides/auth/auth-hooks/custom-access-token-hook.
+3. Nada muda no código Python quando a empresa é criada ou o plano do
+   Supabase muda (Free → Pro): a validação é a mesma.
+
+Usuário logado **sem** vínculo em `empresas` recebe um token válido sem
+`tenant_id`, e a CRAI responde `401 {"motivo": "sem_tenant", ...}` com a
+mensagem apontando para este README. É o erro esperado no primeiro dia de
+integração, e por isso ele é verboso.
+
+## Variável de ambiente
+
+| env                    | obrigatória | exemplo                              |
+|------------------------|-------------|--------------------------------------|
+| `SUPABASE_PROJECT_URL` | sim         | `https://abcdefgh.supabase.co`       |
+
+As chaves públicas são lidas de
+`<SUPABASE_PROJECT_URL>/auth/v1/.well-known/jwks.json` e ficam em cache por
+**até 10 minutos**. Um token com `kid` desconhecido força uma renovação do
+cache antes de ser recusado (cobre rotação de chave entre leituras).
+
+**Sem a env configurada, os endpoints autenticados respondem 500 com motivo
+`supabase_nao_configurado`** — nunca deixam passar. Os webhooks (Segment,
+Pix, Stripe) não dependem dela e continuam funcionando como antes.
+
+## Segurança
+
+- Só `ES256` e `RS256`. `HS256` é recusado no header antes de qualquer
+  verificação: com JWKS a chave é pública, e aceitar HMAC permitiria assinar
+  um token com a própria chave pública como segredo.
+- `exp` é obrigatória e verificada. `aud` precisa ser `authenticated`.
+- O `kid` do header escolhe a chave; token sem `kid` é recusado.
+
+## Uso nos endpoints
+
+```python
+from fastapi import Depends
+from ..accounts import get_tenant_id
+
+@app.get("/insights")
+async def insights(tenant_id: str = Depends(get_tenant_id)):
+    ...
+```
+
+## Testando sem frontend
+
+Gere um JWT no painel do Supabase (ou faça login via `supabase-js` no
+console do navegador e copie `session.access_token`) e chame:
+
+```
+curl -H "Authorization: Bearer <token>" http://localhost:8000/insights
+```
+
+A suíte (`tests/test_supabase_auth.py`) não toca no Supabase: ela gera um par
+de chaves ES256 na hora e substitui a busca do JWKS por um dicionário local.
