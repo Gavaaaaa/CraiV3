@@ -88,11 +88,48 @@ Usuário logado **sem** vínculo em `empresas` recebe um token válido sem
 mensagem apontando para este README. É o erro esperado no primeiro dia de
 integração, e por isso ele é verboso.
 
-## Variável de ambiente
+## A base de clientes importada (Sprint 2) — tabela `clientes_importados`
 
-| env                    | obrigatória | exemplo                              |
-|------------------------|-------------|--------------------------------------|
-| `SUPABASE_PROJECT_URL` | sim         | `https://abcdefgh.supabase.co`       |
+Mora no **mesmo Postgres do Supabase**, ao lado de `empresas`. A CRAI
+conecta com a connection string de serviço (`SUPABASE_DB_URL`) e faz upsert
+por `(tenant_id, customer_id_externo)`: reimportar atualiza, não duplica.
+
+O DDL é `clientes_importados.SCHEMA_SQL` (em
+`crai/churn_voluntary/clientes_importados.py`) e é executado com
+`IF NOT EXISTS` na primeira conexão — mas pode ser criado antes pelo painel
+(SQL Editor), que é o caminho recomendado para deixar RLS e permissões
+explícitas:
+
+```sql
+create table if not exists public.clientes_importados (
+  tenant_id           text not null,
+  customer_id_externo text not null,
+  mrr                 double precision not null,
+  billing_profile     text not null,           -- CLT | PJ | freelancer
+  days_since_last     double precision,        -- NULL = a planilha não tinha
+  features_used_30d   double precision,        -- NULL = a planilha não tinha
+  email               text,
+  importado_em        text not null,           -- ISO-8601 UTC
+  primary key (tenant_id, customer_id_externo)
+);
+-- A CRAI acessa com a role de serviço; o frontend NÃO lê esta tabela direto.
+alter table public.clientes_importados enable row level security;
+```
+
+`importado_em` é texto ISO-8601 de propósito: é comparado com o
+`registrado_em` do log de ciclos do SDK (SQLite) no Sprint 4, e ISO ordena
+como texto.
+
+## Variáveis de ambiente
+
+| env                    | obrigatória          | exemplo                                                        |
+|------------------------|----------------------|----------------------------------------------------------------|
+| `SUPABASE_PROJECT_URL` | sim                  | `https://abcdefgh.supabase.co`                                 |
+| `SUPABASE_DB_URL`      | sim (produção)       | `postgresql://postgres.abcdefgh:SENHA@...pooler.supabase.com:6543/postgres?sslmode=require` |
+| `CRAI_CLIENTES_DB`     | só teste/dev         | caminho de um SQLite; a suíte usa `tmp_path`                   |
+
+Sem `SUPABASE_DB_URL` nem `CRAI_CLIENTES_DB`, `POST /clientes/importar`
+responde 500 `base_nao_configurada`. Se as duas existirem, o Postgres vence.
 
 As chaves públicas são lidas de
 `<SUPABASE_PROJECT_URL>/auth/v1/.well-known/jwks.json` e ficam em cache por

@@ -12,6 +12,15 @@ python-dotenv==1.0.1
 # criptográfica vem do `cryptography`, que o shap/sklearn já puxam.
 PyJWT[crypto]==2.9.0
 
+# ── Self-service: upload da base de clientes (onboarding, Sprint 2) ───────
+# A base importada mora no Postgres do Supabase (SUPABASE_DB_URL); psycopg2
+# direto, sem ORM, no mesmo espírito do sqlite3 puro do resto do pacote.
+psycopg2-binary==2.9.10
+# XLSX no `pandas.read_excel`; python-multipart é o que o FastAPI exige para
+# receber `UploadFile` (multipart/form-data).
+openpyxl==3.1.5
+python-multipart==0.0.12
+
 # ── Agente / LLM ──────────────────────────────────────────
 langgraph==0.2.28
 langchain-core==0.3.6

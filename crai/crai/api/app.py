@@ -22,7 +22,7 @@ import logging
 import weakref
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -39,6 +39,8 @@ from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
+from ..churn_voluntary import clientes_importados, importacao
+from ..accounts import get_tenant_id
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
     MOTIVO_SEM_IDENTIFICACAO,
@@ -827,6 +829,47 @@ async def metricas_de_recuperacao(tenant_id: Optional[str] = None,
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "crai-agent-v2"}
+
+
+# ── Self-service (empresa autenticada via Supabase) ───────────────────────
+# Estas rotas são o caminho (2) do onboarding: a empresa anexa a base que já
+# tem. Autenticação é o JWT do Supabase (`accounts.get_tenant_id`), NÃO a
+# assinatura HMAC dos webhooks — são contratos diferentes para chamadores
+# diferentes (um frontend logado vs. um PSP/Segment assinando payload).
+
+@app.post("/clientes/importar")
+async def importar_clientes(
+    arquivo: UploadFile = File(..., description="CSV ou XLSX com a base de clientes"),
+    mapeamento: Optional[str] = Form(
+        default=None,
+        description='JSON {"coluna no arquivo": "campo esperado"}, ex. '
+                    '{"Última atividade": "days_since_last", "MRR (R$)": "mrr"}'),
+    tenant_id: str = Depends(get_tenant_id),
+) -> JSONResponse:
+    """Upload em lote da base de clientes da empresa autenticada.
+
+    Campos esperados no arquivo (nome exato, case-insensitive, ou via
+    `mapeamento`): `customer_id_externo`, `mrr`, `billing_profile`
+    (obrigatórios); `days_since_last`, `features_used_30d`, `email`
+    (opcionais). Reimportar o mesmo `customer_id_externo` ATUALIZA a linha.
+
+    Resposta: `{importados, rejeitados: [{linha, motivo}],
+    colunas_nao_encontradas, linhas_sem_dado_comportamental}`. Uma linha
+    inválida não derruba o lote. Ver `churn_voluntary/importacao.py`.
+    """
+    conteudo = await arquivo.read()
+    try:
+        relatorio = importacao.importar(
+            tenant_id, arquivo.filename or "", conteudo, mapeamento=mapeamento)
+    except importacao.ArquivoInvalido as e:
+        logger.warning("[IMPORTACAO] tenant=%s recusado: %s", tenant_id, e.motivo)
+        raise HTTPException(status_code=e.status,
+                            detail={"motivo": e.motivo, "detalhe": e.mensagem})
+    except clientes_importados.ConfiguracaoAusente as e:
+        logger.error("[IMPORTACAO] %s", e)
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    return JSONResponse(relatorio)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

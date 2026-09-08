@@ -58,6 +58,33 @@ def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     # exatamente o que aconteceu com o `retention_log` do voluntário, que
     # acumulou 169 ciclos de teste no banco real antes desta defesa existir.
     monkeypatch.setenv("CRAI_RECOVERY_DB", str(tmp_path / "recuperacoes_de_teste.db"))
+    # A base de clientes importada (self-service, Sprint 2). Em produção mora
+    # no Postgres do Supabase; aqui vai para um SQLite em `tmp_path` com o
+    # MESMO SQL. `SUPABASE_DB_URL` é apagada: se um `.env` local a tiver, o
+    # Postgres venceria e a suíte escreveria na base real de uma empresa.
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    monkeypatch.setenv("CRAI_CLIENTES_DB", str(tmp_path / "clientes_de_teste.db"))
+    from crai.churn_voluntary import clientes_importados
+    clientes_importados.esquecer_schema_garantido()
+
+
+@pytest.fixture
+def supabase_falso(monkeypatch):
+    """Um projeto Supabase local: env configurada, JWKS servido sem rede.
+
+    Não é autouse: só as rotas do self-service autenticam por JWT, e os testes
+    dos webhooks não devem depender de um Supabase, nem falso. Devolve o
+    `ProjetoFalso` — `.bearer("empresa-x")` dá o header pronto.
+    """
+    from crai.accounts import supabase_auth
+    from tests.supabase_falso import PROJECT_URL, ProjetoFalso
+
+    projeto = ProjetoFalso()
+    monkeypatch.setenv("SUPABASE_PROJECT_URL", PROJECT_URL)
+    monkeypatch.setattr(supabase_auth, "_baixar_jwks", projeto.baixar_jwks)
+    supabase_auth.limpar_cache()
+    yield projeto
+    supabase_auth.limpar_cache()
 
 
 @pytest.fixture(autouse=True)

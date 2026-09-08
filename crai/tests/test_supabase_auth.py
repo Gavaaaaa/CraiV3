@@ -18,12 +18,10 @@ Uso:
     pytest tests/test_supabase_auth.py -v
 """
 
-import base64
 import time
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
@@ -36,48 +34,7 @@ from crai.accounts.supabase_auth import (
     validar_token,
 )
 
-PROJECT_URL = "https://projeto-de-teste.supabase.co"
-
-
-# ── Chaves e tokens de teste ─────────────────────────────────────────────
-
-def _b64url_32_bytes(n: int) -> str:
-    """Coordenada EC P-256 como o JWKS real serve: 32 bytes, largura fixa.
-
-    NÃO usar `ECAlgorithm.to_jwk` aqui. Ele codifica com `to_base64url_uint`,
-    que descarta bytes zero à esquerda — e `from_jwk` recusa a chave se a
-    coordenada não tiver exatamente 32 bytes. Cerca de 1 em 128 chaves
-    geradas cai nesse caso, o que fazia esta suíte falhar de vez em quando
-    com `chave_desconhecida` em vez do motivo esperado. O Supabase (e todo
-    JWKS conforme a RFC 7518 §6.2.1.2) serve largura fixa; o helper imita isso.
-    """
-    return base64.urlsafe_b64encode(n.to_bytes(32, "big")).rstrip(b"=").decode()
-
-
-def _par_de_chaves(kid: str):
-    privada = ec.generate_private_key(ec.SECP256R1())
-    pub = privada.public_key().public_numbers()
-    jwk = {
-        "kty": "EC", "crv": "P-256",
-        "x": _b64url_32_bytes(pub.x), "y": _b64url_32_bytes(pub.y),
-        "kid": kid, "alg": "ES256", "use": "sig",
-    }
-    return privada, jwk
-
-
-def _token(privada, kid: str, claims: dict, **sobrescreve) -> str:
-    agora = int(time.time())
-    corpo = {
-        "iss": f"{PROJECT_URL}/auth/v1",
-        "sub": "0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b",
-        "aud": "authenticated",
-        "role": "authenticated",
-        "iat": agora,
-        "exp": agora + 3600,
-        **claims,
-    }
-    corpo.update(sobrescreve)
-    return jwt.encode(corpo, privada, algorithm="ES256", headers={"kid": kid})
+from tests.supabase_falso import PROJECT_URL, par_de_chaves as _par_de_chaves, token as _token
 
 
 @pytest.fixture
@@ -352,12 +309,19 @@ class TestCacheDoJwks:
 # ── Invariante: os webhooks não passam por aqui ──────────────────────────
 
 class TestWebhooksIntocados:
-    def test_nenhum_endpoint_existente_depende_de_get_tenant_id(self):
-        """Neste sprint a dependency só existe; nenhuma rota de webhook ou de
-        simulação a usa. O Sprint 2 é quem começa a plugar (em rotas NOVAS)."""
+    def test_so_as_rotas_do_self_service_dependem_de_get_tenant_id(self):
+        """Os webhooks (Segment, Pix, Stripe, retention-outcome) e os
+        `/simulate/*` continuam com `_tenant_da_requisicao`; a dependency só
+        entra nas rotas NOVAS do self-service. Uma rota antiga passando a
+        exigir JWT quebraria toda integração já feita — e é isso que esta
+        catraca impede."""
         from crai.api import app as app_module
 
+        SELF_SERVICE = ("/clientes/", "/insights")
         for rota in app_module.app.routes:
             deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
             nomes = {getattr(d.call, "__name__", "") for d in deps}
-            assert "get_tenant_id" not in nomes, rota.path
+            usa = "get_tenant_id" in nomes
+            e_self_service = rota.path.startswith(SELF_SERVICE)
+            assert usa == e_self_service, (
+                f"{rota.path}: usa get_tenant_id={usa}, self-service={e_self_service}")
