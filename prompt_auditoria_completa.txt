@@ -1,0 +1,141 @@
+AUDITORIA COMPLETA DO PROJETO CRAI — SÓ DIAGNÓSTICO, NÃO CORRIGIR NADA
+
+Você é um engenheiro de software sênior + analista de IA fazendo uma
+revisão completa (code review + auditoria de arquitetura) do repositório
+CRAI (github.com/Gavaaaaa/crai). Seu objetivo NESTA sessão é APENAS
+ENCONTRAR E RELATAR problemas — NÃO corrija, NÃO refatore, NÃO altere
+nenhum arquivo, NÃO faça commit. Só produza um relatório estruturado.
+Se você sentir vontade de consertar algo, apenas anote no relatório e
+siga em frente. Nenhuma mudança de código nesta sessão.
+
+CONTEXTO DO PROJETO:
+CRAI é um Retention OS para PMEs SaaS brasileiras, com dois pipelines:
+- Churn involuntário (crai/crai/agent/, crai/crai/dunning/): falha de
+  pagamento via Pix Automático (Pagar.me), retentativa BACEN, confirmação
+  de pagamento, e-Profit como métrica de decisão.
+- Churn voluntário (crai/crai/churn_voluntary/): desengajamento
+  comportamental via Segment, Thompson Sampling para ofertas, tom
+  adaptativo, WhatsApp/email/popup.
+Invariantes de produto (não-negociáveis): a CRAI é 100% autônoma (NUNCA
+escala para humano); Pix e cartão NUNCA compartilham política de
+retentativa; retentativa de Pix sempre dentro do BACEN (3 tentativas/7
+dias/valor fixo); a chave Pix do pagador NUNCA entra no pipeline de ML
+nem em log; cartão está desativado e isolado em legacy_card/.
+
+FAÇA A VARREDURA NESTAS 10 DIMENSÕES, uma por uma:
+
+1. INVARIANTES DE PRODUTO — procure QUALQUER violação, mesmo latente:
+   - "consulta_cs", "escalated_to_human", "escalate", "human", "humano"
+     em qualquer lugar do código ativo (fora de comentários que os
+     proíbem). A CRAI não pode escalar para humano em nenhum caminho.
+   - Qualquer ponto onde cartão e Pix possam compartilhar política de
+     retentativa (smart_backoff sendo alcançável por evento de Pix, ou
+     PixAutomaticoRetryPolicy alcançável por cartão).
+   - Qualquer caminho em que a retentativa de Pix possa exceder 3
+     tentativas, ultrapassar 7 dias, ou usar valor diferente do original.
+   - Qualquer log, print, exceção ou payload de ML que possa conter a
+     chave Pix do pagador (CPF/telefone/email) em texto puro.
+
+2. COERÊNCIA ENTRE OS DOIS CHURNS — incongruências entre os pipelines:
+   - Divergências de padrão (um usa tenant_id, o outro não; um tem log de
+     ciclo, o outro não; nomenclatura ou estrutura de state inconsistente).
+   - Funções duplicadas que deveriam ser compartilhadas (ex: envio de
+     WhatsApp, cálculo de LTV, classificação de perfil) e podem divergir.
+   - Métrica de decisão: confirmar que AMBOS usam e-Profit de forma
+     consistente, nunca acurácia pura para decidir ação.
+
+3. FLUXO DE DADOS E ESTADO — rastreie o state de ponta a ponta:
+   - Campos do state que são inicializados mas nunca usados, ou usados mas
+     nunca inicializados.
+   - Outputs de nós do grafo que nenhum outro nó lê (trabalho morto —
+     ex: já sabemos do infer_payday rodando 2x; procure outros casos).
+   - Pontos onde um valor é recalculado de formas diferentes em lugares
+     diferentes e pode divergir.
+
+4. INTEGRIDADE DO GRAFO (LangGraph) — nos dois agentes:
+   - Nós inalcançáveis, arestas condicionais que nunca disparam, ou
+     caminhos que não chegam a END.
+   - Roteamento condicional que pode levar ao nó errado para um dado
+     payment_method / risk_score.
+
+5. TRATAMENTO DE ERRO E BORDAS:
+   - Chamadas externas (Claude API, Pagar.me, HubSpot, WhatsApp) sem
+     try/except ou sem fallback — o que acontece se elas falharem?
+   - Divisão por zero, acesso a chave de dict ausente, None onde se espera
+     valor, listas vazias.
+   - Idempotência: webhooks (falha, confirmação, retention-outcome) que
+     possam processar o mesmo evento duas vezes e contar fee/outcome em
+     dobro.
+
+6. SEGURANÇA E LGPD:
+   - Endpoints sem verificação de assinatura que deveriam ter.
+   - Endpoints que expõem dado sensível ou individual (ex:
+     /metrics/recovery deve retornar só agregados, nunca dado de cliente).
+   - Segredos hardcoded no código (chaves, tokens) em vez de env.
+   - Dados pessoais em log sem anonimização.
+
+7. CONSISTÊNCIA DE CONFIGURAÇÃO:
+   - Valores de negócio ainda hardcoded (custos, fees, limiares) que
+     deveriam ser configuráveis.
+   - Variáveis de ambiente referenciadas no código mas não documentadas no
+     .env.example, ou o contrário.
+   - Modo simulação vs produção: confirmar que TODA integração externa tem
+     modo simulado por default e que test_pipeline não exige credencial real.
+
+8. PRONTIDÃO PARA TREINO (ângulo de IA):
+   - Confirmar que os dados necessários para treinar (features + label +
+     resultado) estão realmente sendo GRAVADOS em disco, nos dois churns.
+   - Confirmar que o label de cada modelo é o correto (ex: no voluntário,
+     "aceitação de oferta" vs "churn real"; no involuntário, "recuperado"
+     vindo de confirmação real e não inferido).
+   - Modelos que caem em heurística/fallback silenciosamente por falta de
+     artefato treinado — listar quais e onde.
+   - Reprodutibilidade: qualquer uso de hash()/random() sem seed fixa que
+     quebre a reprodutibilidade da demo.
+
+9. TESTES:
+   - Testes que dependem de ordem de execução, de estado global não
+     resetado, ou de random sem seed (flaky).
+   - Cobertura: funcionalidades críticas (confirmação de pagamento,
+     retentativa BACEN, isolamento cartão/Pix, autonomia sem humano) que
+     NÃO tenham teste protegendo o invariante.
+   - Testes que sobrescrevem artefatos de produção (crai/models/) em vez de
+     usar tmp_path.
+
+10. HIGIENE DE REPOSITÓRIO E DÍVIDA TÉCNICA:
+    - TODOs/FIXMEs/HACKs espalhados — listar todos com localização.
+    - Código morto: funções/módulos/imports não usados, pastas órfãs.
+    - Arquivos que não deveriam estar versionados (dados, .env, modelos,
+      relatórios) e o inverso (algo ignorado que deveria estar no repo).
+    - Inconsistência entre o que o README afirma e o que o código faz.
+    - Restos das pastas de protótipo (modulo_02/03/04, legacy_card) —
+      confirmar que estão isolados e não são referenciados pelo código ativo.
+
+COMO PROCEDER:
+- Percorra o repositório sistematicamente (leia os arquivos, rode grep,
+  execute a suíte de testes em modo leitura para ver o que passa/falha, mas
+  NÃO altere nada).
+- Rode `cd crai && pytest tests/ -q` e `python crai/test_pipeline.py` só
+  para observar o estado atual (não para consertar).
+
+FORMATO DO RELATÓRIO FINAL (entregue exatamente assim):
+Para cada problema encontrado, uma entrada com:
+  - ID curto (ex: A1, A2, ...)
+  - Dimensão (uma das 10 acima)
+  - Severidade: CRÍTICO (viola invariante / quebra em produção / risco
+    LGPD) | ALTO (bug real ou incongruência séria) | MÉDIO (qualidade,
+    dívida técnica com impacto) | BAIXO (cosmético, sugestão)
+  - Arquivo(s) e linha(s)
+  - Descrição objetiva do problema
+  - Impacto (o que acontece se não for corrigido)
+  - Correção sugerida (em UMA frase — não implemente, só descreva)
+Ao final, um QUADRO-RESUMO com a contagem por severidade e a lista
+priorizada dos 5 problemas mais importantes para resolver primeiro.
+
+Se você NÃO encontrar problemas em alguma das 10 dimensões, diga
+explicitamente "Dimensão X: nenhum problema encontrado" — não invente
+problemas para preencher. Um relatório honesto de "está tudo certo aqui" é
+mais valioso que um problema fabricado.
+
+Comece a varredura agora e me entregue o relatório. Lembre-se: NENHUMA
+alteração de código nesta sessão.
