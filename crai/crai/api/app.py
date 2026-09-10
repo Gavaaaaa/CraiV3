@@ -21,6 +21,7 @@ import hashlib
 import logging
 import weakref
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -28,6 +29,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# Carrega o .env ANTES de qualquer módulo ler os.getenv. Sem isto, `uvicorn
+# crai.api.app:app` ignora o arquivo .env por completo: só test_pipeline.py
+# chamava load_dotenv(), então ENV=development ficava invisível e os endpoints
+# /simulate/* respondiam 403 mesmo com o .env preenchido do lado.
+from dotenv import load_dotenv                      # noqa: E402
+load_dotenv()
 
 from ..agent.main_agent import crai_agent
 from ..agent.state import AgentState, PaymentMethod
@@ -1529,3 +1537,239 @@ def _build_fake_stripe_event(p: SimulatePayment) -> dict:
             "attempt_count": 1, "payment_method_details": {"brand": "visa", "last4": "4242"},
         }},
     }
+
+
+# ---------------------------------------------------------------------------
+# PAINEL DE AVALIACAO (`GET /painel`)
+#
+# Console que exercita esta mesma API a partir do navegador: cada botao chama
+# uma das rotas abaixo, que rodam os grafos e os modulos REAIS e devolvem o
+# estado final. Existe porque `/docs` responde JSON cru, e quem precisa avaliar
+# o sistema -- uma banca, uma integracao sendo considerada -- nao deveria ter
+# de ler JSON para ver o raciocinio do agente.
+#
+# Tudo aqui passa por `_require_simulation_env()`: so responde com
+# ENV=development ou ENV=demo, igual ao resto de `/simulate/*`. Nenhuma destas
+# rotas usa `get_tenant_id` -- o self-service autenticado continua sendo
+# `/clientes/importar` e `/insights`, e a catraca em
+# tests/test_supabase_auth.py garante que so aquelas duas exigem o JWT.
+# ---------------------------------------------------------------------------
+
+from .painel import PAGINA_PAINEL                                # noqa: E402
+from fastapi.responses import HTMLResponse                       # noqa: E402
+
+# CONVENIENCIA DE DESENVOLVIMENTO, e so dela: em ENV=development|demo, se
+# NENHUM destino de base foi declarado, aponta para um SQLite local. Sem isto,
+# quem clona o repositorio e sobe a API sem configurar nada recebe 500
+# "base_nao_configurada" no painel -- e quem copia o `.env.example` sem editar
+# recebe pior: o placeholder de `SUPABASE_DB_URL` aponta para um host que nao
+# existe, o Postgres vence o SQLite e a importacao fica pendurada ate o
+# timeout de conexao. Em producao nada disso acontece: `_destino()` continua
+# falhando alto, que e o comportamento correto la.
+def _destino_de_desenvolvimento() -> None:
+    env = os.getenv("ENV", "production").strip().lower()
+    if env not in SIMULATION_ENVS:
+        return
+    url = (os.getenv("SUPABASE_DB_URL") or "").strip()
+    if url and "abcdefgh" not in url:          # placeholder do .env.example
+        return
+    if url:
+        logger.warning("[PAINEL] SUPABASE_DB_URL ainda e o placeholder do "
+                       ".env.example; ignorando e usando SQLite local.")
+        os.environ.pop("SUPABASE_DB_URL", None)
+    if not (os.getenv("CRAI_CLIENTES_DB") or "").strip():
+        caminho = str(Path(__file__).resolve().parent.parent.parent / "clientes_dev.db")
+        os.environ["CRAI_CLIENTES_DB"] = caminho
+        logger.info("[PAINEL] base de clientes em SQLite local: %s", caminho)
+
+
+_destino_de_desenvolvimento()
+
+TENANT_PAINEL = "painel_avaliacao"
+
+BASE_EXEMPLO_PAINEL = (
+    "customer_id_externo,mrr,billing_profile,days_since_last,features_used_30d,email\n"
+    "ACME-2291,890,PJ,47,1,financeiro@acme-exemplo.com.br\n"
+    "Vertice-0834,1450,CLT,38,2,contato@vertice-exemplo.com.br\n"
+    "NovaLog-7712,2680,PJ,12,6,ops@novalog-exemplo.com.br\n"
+    "Ipe-4408,640,freelancer,29,2,ana@ipe-exemplo.com.br\n"
+    "Solaris-1190,3200,CLT,4,11,admin@solaris-exemplo.com.br\n"
+    "Kaeta-6621,410,freelancer,26,3,kaeta@exemplo.com.br\n"
+    "Ribalta-3345,1180,PJ,18,4,ti@ribalta-exemplo.com.br\n"
+    "Orbita-9080,750,CLT,9,8,suporte@orbita-exemplo.com.br\n"
+    "Palma-5517,1620,PJ,2,14,diretoria@palma-exemplo.com.br\n"
+    "Trilha-2204,520,freelancer,0,19,oi@trilha-exemplo.com.br\n"
+    "Corvo-8863,980,CLT,6,9,financeiro@corvo-exemplo.com.br\n"
+    "Marena-7351,1340,PJ,1,16,contato@marena-exemplo.com.br\n"
+    "Aurora-1128,1750,CLT,,,fin@aurora-exemplo.com.br\n"
+    "Bandeira-4490,860,PJ,,,contato@bandeira-exemplo.com.br\n"
+)
+
+OFERTA_LEGIVEL = {"desconto_10": "Oferta: desconto de 10%",
+                  "desconto_20": "Oferta: desconto de 20%",
+                  "pausa_1_mes": "Oferta: pausa de 1 mes",
+                  "pix_boleto_flash": "Oferta: Pix / Boleto Flash"}
+
+
+@app.get("/painel", response_class=HTMLResponse)
+async def painel_de_avaliacao():
+    """A pagina do painel. Restrita a ENV=development|demo, como /simulate/*."""
+    _require_simulation_env()
+    return HTMLResponse(PAGINA_PAINEL)
+
+
+@app.get("/simulate/painel/ambiente")
+async def painel_ambiente():
+    """O que esta ligado nesta execucao -- o painel mostra no cabecalho para
+    nunca dar a entender que rodou com mais do que realmente tinha."""
+    _require_simulation_env()
+    from ..ml.failure_classifier import FailureClassifier
+    return JSONResponse({
+        "env": os.getenv("ENV", "production"),
+        "modelos": bool(FailureClassifier().load()),
+        "llm": bool(os.getenv("ANTHROPIC_API_KEY")),
+    })
+
+
+class PainelCobranca(BaseModel):
+    valor: float = 299.90
+    codigo_falha: str = "AM04"
+    tentativas_usadas: int = 0
+
+
+@app.post("/simulate/painel/cobranca-falhada")
+async def painel_cobranca_falhada(payload: PainelCobranca):
+    """Roda o grafo do churn involuntario e devolve o estado final legivel.
+
+    Difere de `/simulate/pix-falhado` num ponto so: aquele devolve o status do
+    disparo (e o detalhe fica no log), este devolve a DECISAO -- causa, score,
+    e-Profit, SHAP, raciocinio e plano de retentativa -- porque a pagina
+    precisa exibir isso sem ninguem abrir o terminal.
+    """
+    _require_simulation_env()
+    valor = _valor_de_simulacao(payload.valor, "valor")
+    id_rec = f"RN_painel_{int(datetime.now(timezone.utc).timestamp())}"
+    evento = {"e2e_id": f"E60701190{id_rec}", "valor": valor,
+              "status": "cobranca_falhada", "ispb_pagador": "60701190",
+              "id_recorrencia": id_rec, "codigo_falha": payload.codigo_falha}
+    inicial: AgentState = {
+        "payment_event": evento, "payment_method": "pix_automatico",
+        "tenant_id": TENANT_PAINEL, "customer_id": id_rec,
+        "invoice_id": evento["e2e_id"], "amount": valor, "features": None,
+        "failure_cause": None, "recovery_score": None, "p_recovery": None,
+        "eprofit": None, "recommend_action": None, "ltv_estimated": None,
+        "shap_explanation": None, "feature_importance": None,
+        "is_anomalous": None, "reconstruction_error": None,
+        "anomaly_explanation": None, "optimal_retry_at": None,
+        "estrategia": None, "raciocinio": None, "confidence": None,
+        "profile_type": None, "retry_count": max(0, min(3, payload.tentativas_usadas)),
+        "next_retry_at": None, "retry_exhausted": False, "recovered": False,
+        "pix_retry_schedule": None, "dunning_sent": False, "channel": None,
+        "metodo_pagamento": None, "message_sent": None,
+    }
+    final = await crai_agent.ainvoke(inicial, {"configurable": {"thread_id": id_rec}})
+
+    shap_bruto = final.get("shap_explanation") or {}
+    feats = shap_bruto.get("features") or []
+    rotulos = [p.strip() for p in str(shap_bruto.get("readable", "")).split("|") if p.strip()]
+    shap = [{**f, "rotulo": (rotulos[i].rsplit("(", 1)[0].strip() if i < len(rotulos)
+                             else f"{f.get('feature')} {f.get('value')}")}
+            for i, f in enumerate(feats)]
+
+    plano = []
+    for t in (final.get("pix_retry_schedule") or []):
+        if isinstance(t, dict):
+            quando = t.get("quando")
+            quando = quando.strftime("%d/%m/%Y as %H:%M") if hasattr(quando, "strftime") else quando
+            plano.append(f"tentativa {t.get('numero')} - {quando} - R$ {t.get('valor')}")
+        else:
+            plano.append(str(t))
+
+    racio = final.get("raciocinio")
+    return JSONResponse({
+        "failure_cause": final.get("failure_cause"),
+        "recovery_score": final.get("recovery_score"),
+        "eprofit": final.get("eprofit"),
+        "estrategia": final.get("estrategia"),
+        "shap": shap, "plano": plano,
+        "raciocinio": racio if isinstance(racio, list) else ([racio] if racio else []),
+        "mensagem": final.get("message_sent"),
+    })
+
+
+class PainelEvento(BaseModel):
+    event: str = "Cancellation Page Viewed"
+    days_since_last: float = 21
+    features_used_30d: float = 2
+    mrr: float = 1200
+    billing_profile: str = "CLT"
+
+
+@app.post("/simulate/painel/evento-risco")
+async def painel_evento_risco(payload: PainelEvento):
+    """Roda o grafo do churn voluntario e devolve a decisao final.
+
+    Mesma diferenca de `/simulate/churn-risk`: aquele confirma o disparo, este
+    devolve risco, criticidade, oferta escolhida, canal e mensagem.
+    """
+    _require_simulation_env()
+    user_id = f"painel_{int(datetime.now(timezone.utc).timestamp())}"
+    props = {"days_since_last": _contador_de_simulacao(payload.days_since_last,
+                                                      "days_since_last"),
+             "features_used_30d": _contador_de_simulacao(payload.features_used_30d,
+                                                         "features_used_30d"),
+             "mrr": payload.mrr, "billing_profile": payload.billing_profile,
+             "on_site_now": True}
+    inicial: ChurnVoluntaryState = {
+        "tenant_id": TENANT_PAINEL, "user_id": f"user:{user_id}",
+        "event": payload.event, "props": props, "risk_score": 0.0,
+        "profile": "CLT", "criticality": "padrao", "offer_type": None,
+        "channel": None, "on_site_now": True, "prior_channel_success": None,
+        "message": None, "offer_sent": False, "accepted": None,
+        "retained": False, "is_critical": False,
+    }
+    final = await agente_do_modo().ainvoke(
+        inicial, {"configurable": {"thread_id": f"{TENANT_PAINEL}:{user_id}"}})
+    oferta = final.get("offer_type")
+    return JSONResponse({
+        "risk_score": final.get("risk_score"),
+        "criticality": final.get("criticality"),
+        "profile": final.get("profile"),
+        "offer_type": oferta,
+        "offer_label": OFERTA_LEGIVEL.get(oferta or "", "--"),
+        "channel": final.get("channel"),
+        "message": final.get("message"),
+        "abordado": oferta is not None,
+    })
+
+
+@app.post("/simulate/painel/importar")
+async def painel_importar(arquivo: UploadFile = File(None)):
+    """Importa a base pelo caminho real (`importacao.importar`), sem o JWT.
+
+    A rota autenticada continua sendo `/clientes/importar`; esta existe para o
+    painel exercitar o mesmo codigo quando o projeto Supabase ainda nao foi
+    criado. Sem arquivo, usa a base de exemplo.
+    """
+    _require_simulation_env()
+    if arquivo is not None and arquivo.filename:
+        nome, conteudo = arquivo.filename, await arquivo.read()
+    else:
+        nome, conteudo = "base_exemplo.csv", BASE_EXEMPLO_PAINEL.encode("utf-8")
+    try:
+        relatorio = importacao.importar(TENANT_PAINEL, nome, conteudo)
+    except importacao.ArquivoInvalido as e:
+        raise HTTPException(status_code=e.status,
+                            detail={"motivo": e.motivo, "detalhe": e.mensagem})
+    except clientes_importados.ConfiguracaoAusente as e:
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    return JSONResponse({"arquivo": nome, **relatorio})
+
+
+@app.get("/simulate/painel/insights")
+async def painel_insights():
+    """O ranking do tenant do painel -- mesmo `_insights_do_tenant` da rota
+    autenticada `/insights`, so que sem o JWT."""
+    _require_simulation_env()
+    return JSONResponse(_insights_do_tenant(TENANT_PAINEL, None, None))

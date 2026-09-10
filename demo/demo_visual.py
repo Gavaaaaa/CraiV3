@@ -33,13 +33,13 @@ TENANT = "demo_banca"
 # estas envs a cada chamada, e sem nenhuma das duas ele falha alto de propósito.
 os.environ["CRAI_CLIENTES_DB"] = str(DB)
 os.environ.pop("SUPABASE_DB_URL", None)      # Postgres venceria se estivesse setada
-sys.path.insert(0, str(BASE.parent))   # raiz do repo, onde fica o pacote crai/
+sys.path.insert(0, str(BASE.parent / "crai"))   # pasta que CONTÉM o pacote crai/
 
 from crai.churn_voluntary import (          # noqa: E402
     batch_scoring, importacao, insights_unificados,
 )
 
-# ── Base de exemplo ──────────────────────────────────────────────────────────
+# -- Base de exemplo ----------------------------------------------------------
 # Empresa fictícia. Os números foram escolhidos para exercitar os quatro
 # desfechos que o motor produz: crítico por risco, crítico por valor da conta,
 # alto, padrão, e "dado_insuficiente" (as duas últimas linhas, sem sinal de
@@ -264,7 +264,7 @@ def main() -> None:
     print(f"[3/3] Análise: {len(ranking)} clientes pontuados, {criticos} críticos")
 
     SAIDA.write_text(montar_html(ranking, relatorio), encoding="utf-8")
-    print(f"\nPronto → {SAIDA}")
+    print(f"\nPronto -> {SAIDA}")
     print("Abra esse arquivo no navegador.")
 
 

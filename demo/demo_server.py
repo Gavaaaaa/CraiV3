@@ -5,11 +5,11 @@ verdade e mostra o resultado na hora. Nada é maquete: cada clique chama os
 mesmos módulos que a API de produção chama.
 
     Painel 1 — Base de clientes (caminho self-service / upload)
-        `churn_voluntary.importacao.importar()`          → Sprint 2
-        `churn_voluntary.insights_unificados`            → Sprints 3 e 4
+        `churn_voluntary.importacao.importar()`          -> Sprint 2
+        `churn_voluntary.insights_unificados`            -> Sprints 3 e 4
 
     Painel 2 — Evento comportamental (caminho SDK, tempo real)
-        `churn_voluntary.voluntary_agent` (grafo LangGraph) → risco, oferta
+        `churn_voluntary.voluntary_agent` (grafo LangGraph) -> risco, oferta
         escolhida pelo Thompson Sampling, canal e mensagem gerada.
 
 POR QUE UM SERVIDOR SEPARADO DA API. As rotas reais (`/clientes/importar`,
@@ -36,7 +36,7 @@ TENANT = "demo_banca"
 # lê estas envs a cada chamada e falha alto se nenhuma existir — de propósito.
 os.environ["CRAI_CLIENTES_DB"] = str(BASE / "demo_clientes.db")
 os.environ.pop("SUPABASE_DB_URL", None)
-sys.path.insert(0, str(BASE.parent))   # raiz do repo, onde fica o pacote crai/
+sys.path.insert(0, str(BASE.parent / "crai"))   # pasta que CONTÉM o pacote crai/
 
 from fastapi import FastAPI, UploadFile, File                      # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse           # noqa: E402
@@ -73,7 +73,7 @@ OFFER_LABEL = {
 }
 
 
-# ── Painel 1: base de clientes ───────────────────────────────────────────────
+# -- Painel 1: base de clientes -----------------------------------------------
 @app.post("/demo/importar")
 async def demo_importar(arquivo: UploadFile = File(None)):
     """Importa a planilha (a enviada, ou a de exemplo). Código real do Sprint 2."""
@@ -95,7 +95,7 @@ async def demo_insights():
     return JSONResponse({"clientes": ranking, "total": len(ranking)})
 
 
-# ── Painel 2: evento comportamental ao vivo ──────────────────────────────────
+# -- Painel 2: evento comportamental ao vivo ----------------------------------
 class Evento(BaseModel):
     user_id: str = "cliente_demo"
     event: str = "Cancellation Page Viewed"
@@ -257,7 +257,7 @@ PAGINA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
   <button class="tab" onclick="aba(1)">2 · Evento comportamental (SDK)</button>
 </div>
 
-<!-- ───────────── Painel 1 ───────────── -->
+<!-- ------------- Painel 1 ------------- -->
 <div class="painel on" id="p0">
   <h2>A empresa sobe a base que já tem, e a IA analisa</h2>
   <div class="h2sub">Para quem não tem tracking comportamental instrumentado.
@@ -278,7 +278,7 @@ PAGINA = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
   <div id="res"></div>
 </div>
 
-<!-- ───────────── Painel 2 ───────────── -->
+<!-- ------------- Painel 2 ------------- -->
 <div class="painel" id="p1">
   <h2>Um cliente age agora, e o agente decide sozinho</h2>
   <div class="h2sub">O caminho do SDK: o evento chega, o agente LangGraph

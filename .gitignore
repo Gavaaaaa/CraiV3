@@ -64,6 +64,14 @@ Thumbs.db
 # Relatorios locais de acompanhamento (nao fazem parte do codigo)
 relatorio_*.txt
 
+# Artefatos gerados ao rodar o relatorio.py / painel (scripts/painel.py, api/painel.py):
+# banco SQLite local e HTML de saida sao estado de execucao, regenerados a
+# cada rodada — nunca versionar.
+crai/relatorio_execucao.html
+crai/relatorio_clientes.db
+crai/painel_teste.db
+crai/clientes_local.db
+
 # Cobertura
 .coverage
 htmlcov/
