@@ -414,6 +414,27 @@ python test_pipeline.py
 
 Roda 4 cenários de churn involuntário + 4 de churn voluntário com output visual no terminal.
 
+### Relatório de execução (HTML estático)
+
+```bash
+cd crai
+python -m crai.scripts.train_all      # opcional, sem isto cai na heurística
+python -m crai.scripts.relatorio
+```
+
+Roda os agentes reais (involuntário e voluntário) e o caminho self-service uma única vez, e escreve o estado final de cada execução em `relatorio_execucao.html` — decomposição SHAP, raciocínio do agente e plano de retentativa incluídos. Nenhum número da página é escrito à mão: tudo vem do retorno real dos módulos. Não depende de nenhuma API key; sem `ANTHROPIC_API_KEY` as mensagens saem do template de fallback, e isso fica declarado no rodapé do relatório.
+
+### Painel de avaliação (dashboard interativo)
+
+```bash
+cd crai
+uvicorn crai.api.app:app --reload
+```
+
+Com a API no ar, abra **http://localhost:8000/painel** no navegador. É um console que chama os mesmos módulos reais da API a partir de três abas — cobrança falhada, evento de risco, base de clientes anexada — e mostra o estado completo devolvido por cada execução (score, e-Profit, SHAP, raciocínio, plano de retentativa, oferta e mensagem escolhidas). Cada clique é uma chamada real ao pipeline, não uma maquete.
+
+Só responde com `ENV=development` ou `ENV=demo` no `.env` (o padrão do `.env.example` já vem como `development`) — em produção essas rotas continuam bloqueadas, por design.
+
 ### API (FastAPI)
 
 ```bash
