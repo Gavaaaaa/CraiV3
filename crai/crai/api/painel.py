@@ -130,6 +130,12 @@ white-space:nowrap}
 code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--accent2)}
 .rota{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--ink3);
 margin-top:10px}
+.spinnerwrap{display:flex;align-items:center;gap:13px;padding:22px 20px;
+color:var(--ink2);font-size:14px}
+.spinner{width:20px;height:20px;border-radius:50%;flex:none;
+border:3px solid var(--line);border-top-color:var(--accent);
+animation:girar .7s linear infinite}
+@keyframes girar{to{transform:rotate(360deg)}}
 </style></head><body><div class="wrap">
 
 <header><span class="logo">CRAI</span>
@@ -142,17 +148,21 @@ margin-top:10px}
   cada resultado, e podem ser conferidas em <code>/docs</code>.</div>
 
 <div class="tabs">
-  <button class="tab on" onclick="aba(0)">1 &middot; Cobranca falhou (Pix)</button>
+  <button class="tab on" onclick="aba(0)">1 &middot; Gateway de pagamento (Pix)</button>
   <button class="tab" onclick="aba(1)">2 &middot; Cliente em risco (SDK)</button>
   <button class="tab" onclick="aba(2)">3 &middot; Base anexada</button>
 </div>
 
 <!-- 1 -->
 <div class="painel on" id="p0">
-  <h2>Churn involuntario: a cobranca recorrente falhou</h2>
-  <div class="h2s">O agente diagnostica a causa, calcula o e-Profit da
-    intervencao e decide se vale insistir -- respeitando o limite do BACEN de
-    3 tentativas em 7 dias.</div>
+  <h2>Gateway de pagamento: o PSP recusa uma cobranca recorrente</h2>
+  <div class="h2s">Este bloco simula o gateway de pagamento (PSP) do Pix
+    Automatico notificando uma cobranca recusada -- o mesmo evento que chegaria
+    por webhook em producao. A partir dele, o agente diagnostica a causa,
+    calcula o e-Profit da intervencao e decide se vale insistir, respeitando o
+    limite do BACEN de 3 tentativas em 7 dias. (Falhas de cartao de credito
+    seguem a recobranca automatica do proprio processador -- Stripe, por
+    exemplo -- fora deste pipeline; ver o roadmap de reimplementacao.)</div>
   <div class="card">
     <div class="grid">
       <div><label>Valor da cobranca (R$)</label>
@@ -225,6 +235,9 @@ const brl=v=>v==null?'--':'R$ '+Number(v).toLocaleString('pt-BR',
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rota=t=>`<div class="rota">rota: ${esc(t)}</div>`;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const spinnerHtml=msg=>`<div class="card"><div class="spinnerwrap">
+  <div class="spinner"></div><span>${esc(msg)}</span></div></div>`;
 
 function aba(i){document.querySelectorAll('.tab').forEach((t,j)=>t.classList.toggle('on',i===j));
   document.querySelectorAll('.painel').forEach((p,j)=>p.classList.toggle('on',i===j));}
@@ -250,10 +263,14 @@ function shapHtml(l){
 
 async function rodarInvoluntario(){
   const b=document.getElementById('b_inv'); b.disabled=true; b.textContent='Processando...';
-  const r=await(await fetch('/simulate/painel/cobranca-falhada',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({valor:+i_valor.value,codigo_falha:i_codigo.value,
-      tentativas_usadas:+i_tent.value})})).json();
+  document.getElementById('r_inv').innerHTML=spinnerHtml(
+    'Consultando o gateway de pagamento e rodando o agente...');
+  const [r]=await Promise.all([
+    fetch('/simulate/painel/cobranca-falhada',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({valor:+i_valor.value,codigo_falha:i_codigo.value,
+        tentativas_usadas:+i_tent.value})}).then(x=>x.json()),
+    sleep(4000)]);
   b.disabled=false; b.textContent='Processar cobranca';
   const ep=r.eprofit, cor=ep>0?'var(--padrao)':'var(--critico)';
   document.getElementById('r_inv').innerHTML=`<div class="card">
@@ -283,10 +300,14 @@ function cen(i){const v=[['Cancellation Page Viewed',34,1,900,'PJ'],
 
 async function rodarVoluntario(){
   const b=document.getElementById('b_vol'); b.disabled=true; b.textContent='Rodando...';
-  const r=await(await fetch('/simulate/painel/evento-risco',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({event:v_ev.value,days_since_last:+v_dias.value,
-      features_used_30d:+v_feat.value,mrr:+v_mrr.value,billing_profile:v_perf.value})})).json();
+  document.getElementById('r_vol').innerHTML=spinnerHtml(
+    'Calculando risco e escolhendo a oferta...');
+  const [r]=await Promise.all([
+    fetch('/simulate/painel/evento-risco',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({event:v_ev.value,days_since_last:+v_dias.value,
+        features_used_30d:+v_feat.value,mrr:+v_mrr.value,billing_profile:v_perf.value})}).then(x=>x.json()),
+    sleep(4000)]);
   b.disabled=false; b.textContent='Rodar o agente';
   const pct=r.risk_score==null?'--':Math.round(r.risk_score*100)+'%';
   document.getElementById('r_vol').innerHTML=`<div class="card">
@@ -308,6 +329,7 @@ async function rodarVoluntario(){
 
 async function importar(){
   const b=document.getElementById('b_imp'); b.disabled=true; b.textContent='Importando...';
+  document.getElementById('log_imp').innerHTML=spinnerHtml('Importando a base...');
   const f=document.getElementById('arq').files[0];
   // Sem arquivo escolhido: manda POST sem corpo (nao um FormData vazio) --
   // um multipart/form-data com zero partes quebra o parser do servidor e
@@ -315,7 +337,7 @@ async function importar(){
   // de exemplo, que e o comportamento documentado nesta aba.
   let opts={method:'POST'};
   if(f){const fd=new FormData(); fd.append('arquivo',f); opts.body=fd;}
-  const res=await fetch('/simulate/painel/importar',opts);
+  const [res]=await Promise.all([fetch('/simulate/painel/importar',opts),sleep(4000)]);
   const r=await res.json();
   b.disabled=false; b.textContent='Importar base';
   if(!res.ok){document.getElementById('log_imp').innerHTML=
@@ -328,7 +350,10 @@ importados: ${r.importados}   rejeitados: ${r.rejeitados.length}   sem dado comp
 
 async function analisar(){
   const b=document.getElementById('b_ana'); b.disabled=true; b.textContent='Analisando...';
-  const r=await(await fetch('/simulate/painel/insights')).json();
+  document.getElementById('r_base').innerHTML=spinnerHtml('Calculando risco de churn da base...');
+  const [r]=await Promise.all([
+    fetch('/simulate/painel/insights').then(x=>x.json()),
+    sleep(4000)]);
   b.disabled=false; b.textContent='Analisar risco de churn';
   const cs=r.clientes_em_risco||[], crit=cs.filter(c=>c.criticality==='critico'),
     sd=cs.filter(c=>c.criticality==='dado_insuficiente'),

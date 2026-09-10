@@ -8,6 +8,30 @@ Sistema autônomo de recuperação de receita que combina Machine Learning, IA g
 
 ---
 
+## Comece por aqui (avaliação rápida)
+
+Clonou o repositório? Estes são os únicos comandos necessários para ver o sistema rodando de verdade — sem precisar de nenhuma chave de API ou conta Supabase:
+
+```bash
+cd crai
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn crai.api.app:app --reload
+```
+
+Com a API no ar, abra **http://localhost:8000/painel** no navegador: é um dashboard onde cada clique chama a API real e mostra o resultado — score, e-Profit, decomposição SHAP, plano de retentativa, oferta escolhida pelo Thompson Sampling. Nada ali é maquete. O `.env.example` já vem pronto para isso (`ENV=development`).
+
+Duas variações opcionais:
+
+```bash
+python -m crai.scripts.train_all       # treina os 3 modelos de ML (~1 min); sem isto, tudo cai na heurística
+python -m crai.scripts.relatorio       # gera relatorio_execucao.html (saída estática, sem clicar em nada)
+```
+
+O restante deste README detalha a arquitetura, os módulos de IA, as variáveis de ambiente, os testes e o roadmap — role para baixo quando quiser esse nível de detalhe. As seções [Setup](#setup) e [Como Executar](#como-executar) têm a versão completa dos passos acima, com todas as variáveis de ambiente explicadas.
+
+---
+
 ## O Problema
 
 PMEs de SaaS no Brasil perdem entre **5% a 12% do MRR** mensalmente com churn involuntário (falhas de pagamento) e voluntário (cancelamentos). A maioria usa regras fixas de retentativa que ignoram o contexto do cliente, desperdiçando dinheiro em intervenções de baixo retorno e perdendo clientes que poderiam ser recuperados.
