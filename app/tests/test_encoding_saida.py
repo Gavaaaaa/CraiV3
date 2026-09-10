@@ -65,23 +65,30 @@ RAIZ = Path(__file__).resolve().parents[2]
 # ocorrências estão idênticas em `baseline-pre-sprint` — mesmos arquivos,
 # mesmas contagens: são dívida herdada, não introduzida.
 #
+# As auditorias A1-r4/r5/r6 mediram estes caminhos quando a pasta intermediária
+# do repositório ainda se chamava `crai/` (colisão de nome com o pacote
+# `crai/crai/`, que confundia `cd` em filesystem case-insensitive no Windows).
+# Essa pasta foi renomeada para `app/` depois das auditorias; os caminhos
+# abaixo refletem o nome atual (`app/crai/...`, `app/test_pipeline.py`) — as
+# contagens e os arquivos em si não mudaram, só o prefixo do diretório.
+#
 #   archive/.../modulo_04_offer_bandit/src/visualizar.py   protótipo arquivado
-#   crai/crai/agent/workflow.py                  "Decisão: mensagem_pagamento (... -> boleto)"
-#   crai/crai/churn_voluntary/voluntary_agent.py  os emoji de aceite e recusa (2 caracteres)
-#   crai/crai/dunning/dunning_engine.py           "[DUNNING] CANAL -> cliente"
-#   crai/crai/dunning/pix_automatico_retry.py     "(dd/mm hh:mm -> dd/mm hh:mm)"
-#   crai/crai/ml/anomaly_detector.py              "autoencoder (n -> gargalo)" (2 ocorrências)
-#   crai/test_pipeline.py                         cabeçalhos e separadores da saída
+#   app/crai/agent/workflow.py                   "Decisão: mensagem_pagamento (... -> boleto)"
+#   app/crai/churn_voluntary/voluntary_agent.py   os emoji de aceite e recusa (2 caracteres)
+#   app/crai/dunning/dunning_engine.py            "[DUNNING] CANAL -> cliente"
+#   app/crai/dunning/pix_automatico_retry.py      "(dd/mm hh:mm -> dd/mm hh:mm)"
+#   app/crai/ml/anomaly_detector.py               "autoencoder (n -> gargalo)" (2 ocorrências)
+#   app/test_pipeline.py                          cabeçalhos e separadores da saída
 #                                                 da demo (15 ocorrências; a linha
 #                                                 103 é onde o processo morre)
 PENDENCIAS_PRE_EXISTENTES = {
     "archive/protótipos-pré-unificação/modulo_04_offer_bandit/src/visualizar.py": 1,
-    "crai/crai/agent/workflow.py": 1,
-    "crai/crai/churn_voluntary/voluntary_agent.py": 2,
-    "crai/crai/dunning/dunning_engine.py": 1,
-    "crai/crai/dunning/pix_automatico_retry.py": 1,
-    "crai/crai/ml/anomaly_detector.py": 2,
-    "crai/test_pipeline.py": 15,
+    "app/crai/agent/workflow.py": 1,
+    "app/crai/churn_voluntary/voluntary_agent.py": 2,
+    "app/crai/dunning/dunning_engine.py": 1,
+    "app/crai/dunning/pix_automatico_retry.py": 1,
+    "app/crai/ml/anomaly_detector.py": 2,
+    "app/test_pipeline.py": 15,
 }
 
 TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
@@ -89,9 +96,9 @@ TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
 # Módulos que este sprint limpou. Aqui a exigência é zero, sem tolerância:
 # `ml/failure_classifier.py` é o que derrubava o gate do Sprint 4.
 MODULOS_QUE_DEVEM_ESTAR_LIMPOS = (
-    "crai/crai/ml/failure_classifier.py",
-    "crai/crai/integrations/payment_gateway.py",
-    "crai/crai/scripts/preparar_amostra_real.py",
+    "app/crai/ml/failure_classifier.py",
+    "app/crai/integrations/payment_gateway.py",
+    "app/crai/scripts/preparar_amostra_real.py",
 )
 
 # Diretórios que não são código do projeto e não devem entrar na contagem.
@@ -213,15 +220,16 @@ class TestN12Catraca:
         Catraca, nao regressao: e a correcao de uma AFIRMACAO, e afirmacao de
         docstring nenhum teste consegue reprovar retroativamente. A auditoria
         A1-r5 mostrou que este arquivo dizia varrer "qualquer modulo" e varria
-        so `crai/crai/**` — deixando de fora as 15 ocorrencias de
-        `test_pipeline.py`, que e o PRIMEIRO comando do README e morre na
-        linha 103 num console cp1252. Este teste trava o escopo novo: se
-        alguem estreitar a raiz de volta para o pacote, ele reprova.
+        so o pacote (`crai/crai/**` na epoca das auditorias, `app/crai/**`
+        apos o rename da pasta intermediaria) — deixando de fora as 15
+        ocorrencias de `test_pipeline.py`, que e o PRIMEIRO comando do README
+        e morre na linha 103 num console cp1252. Este teste trava o escopo
+        novo: se alguem estreitar a raiz de volta para o pacote, ele reprova.
         """
         inventario = _inventario()
-        fora_do_pacote = [m for m in inventario if not m.startswith("crai/crai/")]
+        fora_do_pacote = [m for m in inventario if not m.startswith("app/crai/")]
 
-        assert "crai/test_pipeline.py" in inventario, (
+        assert "app/test_pipeline.py" in inventario, (
             "a varredura não alcança `test_pipeline.py`. O inventário voltou a "
             "medir só o pacote, e a docstring deste arquivo promete o "
             f"repositório. Arquivos vistos fora do pacote: {fora_do_pacote}"

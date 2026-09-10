@@ -33,7 +33,7 @@ TENANT = "demo_banca"
 # estas envs a cada chamada, e sem nenhuma das duas ele falha alto de propósito.
 os.environ["CRAI_CLIENTES_DB"] = str(DB)
 os.environ.pop("SUPABASE_DB_URL", None)      # Postgres venceria se estivesse setada
-sys.path.insert(0, str(BASE.parent / "crai"))   # pasta que CONTÉM o pacote crai/
+sys.path.insert(0, str(BASE.parent / "app"))   # pasta que CONTÉM o pacote crai/
 
 from crai.churn_voluntary import (          # noqa: E402
     batch_scoring, importacao, insights_unificados,

@@ -36,7 +36,7 @@ TENANT = "demo_banca"
 # lê estas envs a cada chamada e falha alto se nenhuma existir — de propósito.
 os.environ["CRAI_CLIENTES_DB"] = str(BASE / "demo_clientes.db")
 os.environ.pop("SUPABASE_DB_URL", None)
-sys.path.insert(0, str(BASE.parent / "crai"))   # pasta que CONTÉM o pacote crai/
+sys.path.insert(0, str(BASE.parent / "app"))   # pasta que CONTÉM o pacote crai/
 
 from fastapi import FastAPI, UploadFile, File                      # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse           # noqa: E402

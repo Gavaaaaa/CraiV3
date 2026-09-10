@@ -8,27 +8,34 @@ Sistema autônomo de recuperação de receita que combina Machine Learning, IA g
 
 ---
 
-## Comece por aqui (avaliação rápida)
+## Como Rodar o Projeto
 
-Clonou o repositório? Estes são os únicos comandos necessários para ver o sistema rodando de verdade — sem precisar de nenhuma chave de API ou conta Supabase:
+### Pré-requisitos
+
+- Python 3.11 ou superior
+- pip
+
+Nada além disso — não precisa de banco de dados externo, Docker ou conta em nenhum serviço de terceiros para rodar localmente.
+
+### Passo a passo
 
 ```bash
-cd crai
+git clone https://github.com/Gavaaaaa/Crai.git
+cd Crai/app
 pip install -r requirements.txt
 cp .env.example .env
 uvicorn crai.api.app:app --reload
 ```
 
-Com a API no ar, abra **http://localhost:8000/painel** no navegador: é um dashboard onde cada clique chama a API real e mostra o resultado — score, e-Profit, decomposição SHAP, plano de retentativa, oferta escolhida pelo Thompson Sampling. Nada ali é maquete. O `.env.example` já vem pronto para isso (`ENV=development`).
+Com o servidor no ar, abra **http://localhost:8000/painel** no navegador. É o projeto rodando de verdade, não uma maquete: cada clique ali chama a API real e devolve o resultado completo de um dos agentes — score, e-Profit, decomposição SHAP, plano de retentativa, oferta escolhida pelo Thompson Sampling. Não precisa editar o `.env` para este primeiro teste — o `.env.example` já vem configurado para isso (`ENV=development`).
 
-Duas variações opcionais:
+**Opcional** — antes de abrir o painel, dá pra treinar os modelos de ML de verdade (o projeto já funciona sem isso, usando fallbacks heurísticos):
 
 ```bash
-python -m crai.scripts.train_all       # treina os 3 modelos de ML (~1 min); sem isto, tudo cai na heurística
-python -m crai.scripts.relatorio       # gera relatorio_execucao.html (saída estática, sem clicar em nada)
+python -m crai.scripts.train_all   # ~1 min em CPU
 ```
 
-O restante deste README detalha a arquitetura, os módulos de IA, as variáveis de ambiente, os testes e o roadmap — role para baixo quando quiser esse nível de detalhe. As seções [Setup](#setup) e [Como Executar](#como-executar) têm a versão completa dos passos acima, com todas as variáveis de ambiente explicadas.
+O restante deste README detalha a arquitetura, os módulos de IA, as variáveis de ambiente e os testes — role para baixo quando quiser esse nível de detalhe.
 
 ---
 
@@ -166,7 +173,7 @@ Autoencoder denso em **PyTorch** (12→32→16→4→16→32→12) treinado **ap
 - Top features que mais contribuem para o erro (explicabilidade)
 - Anomalia reduz `p_recovery` em 30% e recalcula o e-Profit downstream
 
-Treino via `AnomalyDetector.train()` — gera o dataset comportamental sintético, treina só nos saudáveis, calibra o threshold no percentil 95 dos saudáveis de validação (held-out) e salva os artefatos em `crai/models/`. Métricas do último treino: ROC-AUC **0.995**, recall **98,4%** @ p95, separação saudáveis vs anômalos de **7,7x**.
+Treino via `AnomalyDetector.train()` — gera o dataset comportamental sintético, treina só nos saudáveis, calibra o threshold no percentil 95 dos saudáveis de validação (held-out) e salva os artefatos em `app/models/`. Métricas do último treino: ROC-AUC **0.995**, recall **98,4%** @ p95, separação saudáveis vs anômalos de **7,7x**.
 
 ### 3. Payday Inference (`ml/payday_inference.py`)
 
@@ -178,7 +185,7 @@ Treino via `AnomalyDetector.train()` — gera o dataset comportamental sintétic
 
 **Outputs:** data ótima de retry + confiança + perfil inferido (84% de acurácia via âncoras de payday).
 
-Treino via `PaydayInference.train()` — gera as séries de liquidez sintéticas, faz o split **por cliente** (nunca por janela, para não vazar o padrão individual), treina LSTM + os 3 Prophets e salva tudo em `crai/models/`. Métricas do último treino: MAE de **0,60 dia** vs 5,32 da heurística de dias fixos; acerto da janela com ±1 dia em **90,6%** dos casos (ROC-AUC diário 0.979).
+Treino via `PaydayInference.train()` — gera as séries de liquidez sintéticas, faz o split **por cliente** (nunca por janela, para não vazar o padrão individual), treina LSTM + os 3 Prophets e salva tudo em `app/models/`. Métricas do último treino: MAE de **0,60 dia** vs 5,32 da heurística de dias fixos; acerto da janela com ±1 dia em **90,6%** dos casos (ROC-AUC diário 0.979).
 
 ### 4. Offer Selector (`churn_voluntary/offer_bandit.py`)
 
@@ -189,7 +196,7 @@ Treino via `PaydayInference.train()` — gera as séries de liquidez sintéticas
 - **Otimiza e-Profit, não conversão**: `argmax p_amostrado × LTV_retido − custo(oferta)` — no CLT, a consulta CS converte mais (50%) mas perde para o desconto de 10% por causa do custo humano
 - Aprendizado contínuo: cada aceite/recusa real atualiza o posterior e persiste em disco
 
-Os posteriores nascem do warm start da simulação de 6.000 rodadas e evoluem em produção a cada aceite/recusa, persistidos em `crai/models/bandit_state.json`. Na simulação: **+R$199 mil** vs o epsilon-greedy anterior, regret 40% menor, 87% de escolhas ótimas ao final.
+Os posteriores nascem do warm start da simulação de 6.000 rodadas e evoluem em produção a cada aceite/recusa, persistidos em `app/models/bandit_state.json`. Na simulação: **+R$199 mil** vs o epsilon-greedy anterior, regret 40% menor, 87% de escolhas ótimas ao final.
 
 ### 5. Pix Automático — cobrança e retentativa regulada (`integrations/` + `dunning/`)
 
@@ -235,14 +242,14 @@ decide_recovery ─┬─ payment_method == "pix_automatico" → schedule_retry_
                  └─ qualquer outro caso               → trigger_dunning
 ```
 
-**O que isso não é:** não é remoção de código. `crai/dunning/legacy_card/` preserva `smart_backoff.py` e o nó `schedule_retry_card` íntegros, com o caminho de reativação documentado no `__init__.py` do pacote. O campo `payment_method` continua no `AgentState` e a aresta condicional continua lendo ele — é exatamente onde um nó de cartão volta a ser plugado.
+**O que isso não é:** não é remoção de código. `app/crai/dunning/legacy_card/` preserva `smart_backoff.py` e o nó `schedule_retry_card` íntegros, com o caminho de reativação documentado no `__init__.py` do pacote. O campo `payment_method` continua no `AgentState` e a aresta condicional continua lendo ele — é exatamente onde um nó de cartão volta a ser plugado.
 
 **O que continua funcionando:** `/webhooks/stripe` segue no ar com a validação de assinatura HMAC da Fase 1. Toda falha de cartão é recebida e **registrada** com o prefixo `[CARTAO-DESATIVADO]`, nunca descartada em silêncio:
 
 ```
 [CARTAO-DESATIVADO] cus_joao_002 | fatura inv_cus_joao_002 | R$ 149.00 — evento
 registrado, recobrança automática de cartão fora do pipeline ativo
-(aguardando reimplementação; ver crai/dunning/legacy_card/)
+(aguardando reimplementação; ver app/crai/dunning/legacy_card/)
 ```
 
 `tests/test_payment_isolation.py` trava esse estado: valida que o evento de cartão é registrado e logado sem retentativa, que o grafo não tem mais nó de cartão, que nenhum módulo ativo importa `SmartBackoff`, e que o código isolado continua funcional.
@@ -262,7 +269,7 @@ Orquestração multi-etapa com **raciocínio (ReAct)** sobre o contexto acumulad
 ## Estrutura do Projeto
 
 ```
-crai/
+app/
 ├── crai/
 │   ├── agent/                          # Agente de churn involuntário
 │   │   ├── main_agent.py               # Grafo LangGraph principal
@@ -319,24 +326,13 @@ crai/
 └── .env.example                        # Template de variáveis de ambiente
 ```
 
-> A pasta [`archive/protótipos-pré-unificação/`](archive/prot%C3%B3tipos-pr%C3%A9-unifica%C3%A7%C3%A3o/) guarda os laboratórios originais dos módulos 2, 3 e 4 (relatórios, figuras e métricas usados no TCC). A lógica de treino deles já vive no pacote `crai/` — as pastas ficam só como histórico.
+> A pasta [`archive/protótipos-pré-unificação/`](archive/prot%C3%B3tipos-pr%C3%A9-unifica%C3%A7%C3%A3o/) guarda os laboratórios originais dos módulos 2, 3 e 4 (relatórios, figuras e métricas usados no TCC). A lógica de treino deles já vive no pacote `app/crai/` — as pastas ficam só como histórico.
 
 ---
 
-## Setup
+## Configuração Avançada
 
-### Pré-requisitos
-
-- Python 3.11+
-- pip
-
-### Instalação
-
-```bash
-cd crai
-pip install -r requirements.txt
-cp .env.example .env
-```
+> Esta seção é referência para quem precisa mexer em variáveis de ambiente específicas (chaves de API, webhooks, etc.) ou revisar a segurança do repositório. Para só rodar o projeto, [veja acima](#como-rodar-o-projeto) — nenhuma variável extra é necessária.
 
 ### Variáveis de Ambiente
 
@@ -351,12 +347,12 @@ cp .env.example .env
 | `CRAI_PAGARME_LIVE` | Não | `1` liga o envio REAL de instrução de cobrança ao Pagar.me. Sem ela, `reenviar_cobranca_pix` roda em modo simulado — nenhuma rede, nenhuma credencial |
 | `CRAI_PAGARME_API_KEY` | Com `CRAI_PAGARME_LIVE=1` | Secret key do Pagar.me (Basic auth, senha vazia). Ligar o modo real sem ela **falha alto**, em vez de cair para simulado em silêncio |
 | `CRAI_PAGARME_ENDPOINT` | Não | Caminho da cobrança avulsa sobre a recorrência de Pix Automático. O default é um placeholder marcado `TODO(integração)` — o valor real depende da conta |
-| `CRAI_RETRY_STATE` | Não | Redireciona o arquivo de planos de retentativa pendentes (default `crai/data/pix_retry_state.json`). A suíte usa isto para não escrever no estado real |
+| `CRAI_RETRY_STATE` | Não | Redireciona o arquivo de planos de retentativa pendentes (default `app/data/pix_retry_state.json`). A suíte usa isto para não escrever no estado real |
 | `CRAI_SUCCESS_FEE_PCT` | Não | Percentual do valor recuperado que a CRAI cobra (default `0.15`). Faixa [0, 1]; valor torto cai no default com aviso no log — um `.env` errado não pode parar a cobrança de todos os clientes |
 | `CRAI_CUSTO_INTERVENCAO_WHATSAPP` | Não | Custo de uma mensagem pelo bot (default `0.05`). Entra no e-Profit, que é o que decide se a CRAI age |
 | `CRAI_CUSTO_TENTATIVA_PIX` | Não | Custo por instrução reenviada ao PSP (default `0.0`). Com zero, o e-Profit é idêntico ao de antes do Sprint 5 |
-| `CRAI_RECOVERY_DB` | Não | Redireciona o log de ciclos de recuperação (default `crai/data/recovery_cycles.db`). É o dataset de treino do involuntário; a suíte usa isto para não escrever no banco real |
-| `CRAI_PERFIL_DB` | Não | Fonte real do perfil do cliente (tenure, histórico, ticket). Sem ela o perfil é **sintético** — ver `crai/crai/agent/README_treino.md` |
+| `CRAI_RECOVERY_DB` | Não | Redireciona o log de ciclos de recuperação (default `app/data/recovery_cycles.db`). É o dataset de treino do involuntário; a suíte usa isto para não escrever no banco real |
+| `CRAI_PERFIL_DB` | Não | Fonte real do perfil do cliente (tenure, histórico, ticket). Sem ela o perfil é **sintético** — ver `app/crai/agent/README_treino.md` |
 | `HUBSPOT_TOKEN` | Não | CRM roda em modo simulação sem token |
 | `SEGMENT_WRITE_KEY` | Não | Simulação via `/simulate/churn-risk` |
 | `SEGMENT_WEBHOOK_SECRET` | Para `/webhooks/segment` | Valida o header `x-signature` (HMAC-SHA1). Sem ele o endpoint rejeita tudo com 401 |
@@ -386,18 +382,20 @@ O hook vale para todo o repositório, incluindo `archive/`. Ele não roda automa
 
 ---
 
-## Como Executar
+## Detalhes de Execução (opcional)
+
+> Para rodar o projeto e ver o painel funcionando, [as instruções do topo](#como-rodar-o-projeto) já bastam. Esta seção detalha passos opcionais: treinar os modelos de verdade, rodar a suíte de testes, e chamar a API diretamente.
 
 ### Treinar os três modelos de ML
 
 ```bash
-cd crai
+cd app
 python -m crai.scripts.train_all
 ```
 
 Comando único que treina, em sequência, os três modelos treináveis do pacote:
 
-| # | Modelo | Dataset sintético | Artefatos em `crai/models/` |
+| # | Modelo | Dataset sintético | Artefatos em `app/models/` |
 |---|--------|-------------------|------------------------------|
 | 1 | Failure Classifier (XGBoost + RF) | 3.000 transações | `xgb_*.joblib`, `rf_*.joblib`, `label_encoders.joblib` |
 | 2 | Anomaly Detector (Autoencoder) | 5.500 clientes (91% saudáveis) | `autoencoder.pt`, `autoencoder_scaler.pkl`, `autoencoder_meta.json` |
@@ -423,46 +421,16 @@ Sem os artefatos treinados, **todos os módulos continuam funcionando** com os f
 ### Rodar testes
 
 ```bash
-cd crai
+cd app
 pytest tests/ -v
 ```
 
 Cobrem: os três datasets sintéticos, os fallbacks heurísticos, o treino de cada modelo (em amostras pequenas), a persistência (`train()` → `load()`), SHAP, e-Profit e o roteamento do grafo do agente.
 
-### Pipeline completo (8 cenários)
-
-```bash
-cd crai
-python test_pipeline.py
-```
-
-Roda 4 cenários de churn involuntário + 4 de churn voluntário com output visual no terminal.
-
-### Relatório de execução (HTML estático)
-
-```bash
-cd crai
-python -m crai.scripts.train_all      # opcional, sem isto cai na heurística
-python -m crai.scripts.relatorio
-```
-
-Roda os agentes reais (involuntário e voluntário) e o caminho self-service uma única vez, e escreve o estado final de cada execução em `relatorio_execucao.html` — decomposição SHAP, raciocínio do agente e plano de retentativa incluídos. Nenhum número da página é escrito à mão: tudo vem do retorno real dos módulos. Não depende de nenhuma API key; sem `ANTHROPIC_API_KEY` as mensagens saem do template de fallback, e isso fica declarado no rodapé do relatório.
-
-### Painel de avaliação (dashboard interativo)
-
-```bash
-cd crai
-uvicorn crai.api.app:app --reload
-```
-
-Com a API no ar, abra **http://localhost:8000/painel** no navegador. É um console que chama os mesmos módulos reais da API a partir de três abas — cobrança falhada, evento de risco, base de clientes anexada — e mostra o estado completo devolvido por cada execução (score, e-Profit, SHAP, raciocínio, plano de retentativa, oferta e mensagem escolhidas). Cada clique é uma chamada real ao pipeline, não uma maquete.
-
-Só responde com `ENV=development` ou `ENV=demo` no `.env` (o padrão do `.env.example` já vem como `development`) — em produção essas rotas continuam bloqueadas, por design.
-
 ### API (FastAPI)
 
 ```bash
-cd crai
+cd app
 uvicorn crai.api.app:app --reload
 # Swagger UI: http://localhost:8000/docs
 ```
@@ -621,7 +589,7 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] Comportamento **idêntico** entre tenants nesta fase: propagação e atribuição, não regra. Decisão por tenant é RBAC/produto e entra por outra porta
   - [x] `/webhooks/stripe` e o registro `[CARTAO-DESATIVADO]` também atribuídos, para o caminho já estar pronto quando o cartão voltar
 - [x] **Custo e fee configuráveis** — os parâmetros de negócio saem do código (Sprint 5)
-  - [x] `crai/config.py` — success fee, custo por canal e custo por tentativa de Pix num lugar só, lidos de env a cada chamada
+  - [x] `app/crai/config.py` — success fee, custo por canal e custo por tentativa de Pix num lugar só, lidos de env a cada chamada
   - [x] Defaults **idênticos** aos literais anteriores: sem env configurada, demo, testes e métricas do README dão exatamente os mesmos números
   - [x] O custo do WhatsApp deixou de estar duplicado (nó de anomalia + `INTERVENTION_COSTS`); a tabela de canais mudou de casa para `config.py`, e `INTERVENTION_COSTS` segue como o valor default
   - [x] `CRAI_CUSTO_TENTATIVA_PIX` refina o e-Profit com o custo das tentativas que ainda cabem na janela (Gap 6). Default zero: o valor real é contratual e não é conhecido aqui
@@ -638,7 +606,7 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
   - [x] `agent/perfil_provider.py` — o perfil passa por um provedor plugável. `SyntheticPerfilProvider` é o default e reproduz **exatamente** os valores anteriores; `DBPerfilProvider` é o stub com o ponto de conexão marcado
   - [x] `ml/ltv.py` — a fórmula de LTV numa única casa. Estava escrita duas vezes, com fatores de retenção diferentes, e divergiria em silêncio: o LTV é o multiplicador do e-Profit, não uma feature que o treino veria
   - [x] Nenhum valor mudou: 5.000 perfis e 5.000 LTVs vetorizados conferidos contra a implementação anterior, zero divergências
-  - [x] `crai/crai/agent/README_treino.md` — as 12 entradas e a origem de cada uma, como plugar a fonte real, o mapeamento código Pagar.me → `failure_cause`, e o passo a passo para ler `recovery_cycles.db` e alimentar o `train()`
+  - [x] `app/crai/agent/README_treino.md` — as 12 entradas e a origem de cada uma, como plugar a fonte real, o mapeamento código Pagar.me → `failure_cause`, e o passo a passo para ler `recovery_cycles.db` e alimentar o `train()`
   - [x] As 10 limitações conhecidas tabeladas para a banca, cada uma com o ponto de troca no código
 - [ ] **Cartão** — reimplementar a recobrança automática (ver `dunning/legacy_card/`)
 - [x] **Consolidação** — treino real dentro do pacote principal
@@ -652,7 +620,7 @@ Por perfil (MAE heurística → ensemble): CLT 6,24 → **0,20** | PJ 3,47 → *
 
 ## Contexto do Mercado
 
-O CRAI atende **PMEs brasileiras de SaaS** com MRR entre R$500k e R$5M:
+O CRAI atende **PMEs brasileiras de SaaS** com MRR entre R$10k e R$500k:
 
 - **Churn involuntário** (falhas de pagamento) representa 20-40% do churn total em SaaS
 - **Pix Automático** (disponível desde jun/2025) é usado como primeiro fallback antes do boleto

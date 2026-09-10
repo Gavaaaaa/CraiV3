@@ -9,38 +9,38 @@ build/
 # Modelos treinados (regeneraveis via train())
 # Padrao com /* (e nao com /) porque o git nao reabre um diretorio ignorado:
 # a excecao abaixo so funciona se o diretorio em si nao estiver ignorado.
-crai/models/*
+app/models/*
 # ...exceto a calibracao: e um punhado de numeros medidos sobre a amostra real,
 # nao um binario. Precisa estar no clone limpo, senao a demo cai em
 # [SYNTH] MODO NAO-CALIBRADO na frente da banca.
-!crai/models/calibracao.json
+!app/models/calibracao.json
 
 # Dados
 # Fonte A (Olist) e CC BY-NC-SA: fica fora do git e e regenerada de forma
 # deterministica por `python -m crai.scripts.preparar_amostra_real`.
-crai/data/real/
+app/data/real/
 # Dataset sintetico de treino (regeneravel, ~MBs)
-crai/data/synthetic/
+app/data/synthetic/
 # Pacote de modelos da demo (gerado no Sprint 4)
-crai/models_demo.tar.gz
+app/models_demo.tar.gz
 # Log de ciclos de retencao — e o DATASET de treino do churn voluntario, e
 # carrega dado de cliente real (mrr, uso, desfecho). Nunca versionar: o
 # formato esta documentado em churn_voluntary/README_treino.md e o arquivo se
 # regenera sozinho a cada ciclo.
-crai/data/retention_cycles.db
-crai/data/retention_cycles.db-journal
+app/data/retention_cycles.db
+app/data/retention_cycles.db-journal
 # Churn involuntario: dataset de ciclos de recuperacao e planos de retentativa
 # pendentes. Sao estado de EXECUCAO, nao fonte do repositorio — versiona-los
 # faria o dataset de treino de uma maquina virar o de outra no merge.
-crai/data/recovery_cycles.db
-crai/data/recovery_cycles.db-journal
-crai/data/pix_retry_state.json
+app/data/recovery_cycles.db
+app/data/recovery_cycles.db-journal
+app/data/pix_retry_state.json
 
 # Logs de auditoria SHAP (regeneraveis)
-crai/logs/
+app/logs/
 
 # Chaves Pix cifradas (conciliacao financeira) — nunca versionar
-crai/vault/
+app/vault/
 
 # Ambiente
 .env
@@ -67,10 +67,10 @@ relatorio_*.txt
 # Artefatos gerados ao rodar o relatorio.py / painel (scripts/painel.py, api/painel.py):
 # banco SQLite local e HTML de saida sao estado de execucao, regenerados a
 # cada rodada — nunca versionar.
-crai/relatorio_execucao.html
-crai/relatorio_clientes.db
-crai/painel_teste.db
-crai/clientes_local.db
+app/relatorio_execucao.html
+app/relatorio_clientes.db
+app/painel_teste.db
+app/clientes_local.db
 
 # Cobertura
 .coverage
