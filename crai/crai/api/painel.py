@@ -308,9 +308,14 @@ async function rodarVoluntario(){
 
 async function importar(){
   const b=document.getElementById('b_imp'); b.disabled=true; b.textContent='Importando...';
-  const f=document.getElementById('arq').files[0], fd=new FormData();
-  if(f) fd.append('arquivo',f);
-  const res=await fetch('/simulate/painel/importar',{method:'POST',body:fd});
+  const f=document.getElementById('arq').files[0];
+  // Sem arquivo escolhido: manda POST sem corpo (nao um FormData vazio) --
+  // um multipart/form-data com zero partes quebra o parser do servidor e
+  // devolve "There was an error parsing the body" em vez de cair na base
+  // de exemplo, que e o comportamento documentado nesta aba.
+  let opts={method:'POST'};
+  if(f){const fd=new FormData(); fd.append('arquivo',f); opts.body=fd;}
+  const res=await fetch('/simulate/painel/importar',opts);
   const r=await res.json();
   b.disabled=false; b.textContent='Importar base';
   if(!res.ok){document.getElementById('log_imp').innerHTML=
