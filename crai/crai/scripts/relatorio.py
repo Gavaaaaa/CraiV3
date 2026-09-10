@@ -63,6 +63,7 @@ if not os.getenv("SUPABASE_DB_URL") and not os.getenv("CRAI_CLIENTES_DB"):
     os.environ["CRAI_CLIENTES_DB"] = str(RAIZ / "relatorio_clientes.db")
 
 from crai.agent.main_agent import crai_agent                    # noqa: E402
+from crai.agent.pix_codes import CAUSA_LEGIVEL                  # noqa: E402
 from crai.agent.state import AgentState                         # noqa: E402
 from crai.churn_voluntary import (                              # noqa: E402
     importacao, insights_unificados,
@@ -84,8 +85,13 @@ ROTULO_OFERTA = {"desconto_10": "Desconto de 10%", "desconto_20": "Desconto de 2
 # `shap_explanation["readable"]` so nomeia as features de maior contribuicao.
 # As demais aparecem com o nome cru do dataset; este mapa as traduz para o
 # relatorio nao misturar portugues e ingles na mesma lista.
+ESTRATEGIA_LEGIVEL = {
+    "retry_automatico": "Nova tentativa automatica",
+    "mensagem_pagamento": "Mensagem de pagamento enviada ao cliente",
+}
+
 ROTULO_FEATURE = {
-    "tenure_months": "Tenure (meses)", "payment_history_score": "Historico de pagamento",
+    "tenure_months": "Tempo de casa (meses)", "payment_history_score": "Historico de pagamento",
     "gateway_error_code": "Codigo de erro", "invoice_amount": "Valor da fatura R$",
     "avg_ticket": "Ticket medio R$", "day_of_month": "Dia do mes",
     "hour_of_day": "Hora da cobranca", "day_of_week": "Dia da semana",
@@ -278,13 +284,13 @@ def bloco_involuntario(c):
           recusa do PSP: {esc(c['codigo'])}</span></div>
       <div class="kpis">
         <div class="kpi"><div class="kl">Causa diagnosticada</div>
-          <div class="kv">{esc(c.get('failure_cause'))}</div></div>
+          <div class="kv">{esc(CAUSA_LEGIVEL.get(c.get('failure_cause'), c.get('failure_cause')))}</div></div>
         <div class="kpi"><div class="kl">Score de recuperabilidade</div>
           <div class="kv">{esc(c.get('recovery_score'))}<span class="ku">/100</span></div></div>
         <div class="kpi"><div class="kl">e-Profit</div>
           <div class="kv" style="color:{cor_ep}">{brl(eprofit)}</div></div>
         <div class="kpi"><div class="kl">Decisao</div>
-          <div class="kv">{esc(c.get('estrategia'))}</div></div>
+          <div class="kv">{esc(ESTRATEGIA_LEGIVEL.get(c.get('estrategia'), c.get('estrategia')))}</div></div>
       </div>
       <div class="sub">Decomposicao SHAP -- quanto cada variavel empurrou o score</div>
       <div class="shapwrap">{shap_html}</div>

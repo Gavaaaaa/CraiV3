@@ -276,13 +276,13 @@ async function rodarInvoluntario(){
   document.getElementById('r_inv').innerHTML=`<div class="card">
     <div class="kpis">
       <div class="kpi"><div class="kl">Causa diagnosticada</div>
-        <div class="kv">${esc(r.failure_cause)}</div></div>
+        <div class="kv">${esc(r.failure_cause_legivel||r.failure_cause)}</div></div>
       <div class="kpi"><div class="kl">Score</div>
         <div class="kv">${esc(r.recovery_score)}<span class="ku">/100</span></div></div>
       <div class="kpi"><div class="kl">e-Profit</div>
         <div class="kv" style="color:${cor}">${brl(ep)}</div></div>
       <div class="kpi"><div class="kl">Decisao</div>
-        <div class="kv" style="font-size:15px">${esc(r.estrategia)}</div></div>
+        <div class="kv" style="font-size:15px">${esc(r.estrategia_legivel||r.estrategia)}</div></div>
     </div>
     <div class="sub2">Decomposicao SHAP -- quanto cada variavel empurrou o score</div>
     ${shapHtml(r.shap)}

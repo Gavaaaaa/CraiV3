@@ -479,7 +479,7 @@ class FailureClassifier:
         Gera explicação SHAP para uma predição individual.
 
         Retorna contribuição de cada feature em formato legível:
-        ex: "Tenure 24 meses (+32%), histórico limpo (+28%), dia 28 do mês (-12%)"
+        ex: "Tempo de casa 24 meses (+32%), histórico limpo (+28%), dia 28 do mês (-12%)"
         """
         if self._xgb_explainer is None or self._rf_explainer is None:
             return {"error": "SHAP não inicializado — execute train() primeiro"}
@@ -553,7 +553,7 @@ class FailureClassifier:
     def _format_readable_explanation(self, explanations: list[dict]) -> str:
         """Formata explicação SHAP em texto legível PT-BR."""
         FRIENDLY_NAMES = {
-            "tenure_months": "Tenure",
+            "tenure_months": "Tempo de casa",
             "payment_history_score": "Histórico de pagamento",
             "gateway_error_code": "Código de erro",
             "invoice_amount": "Valor da fatura",

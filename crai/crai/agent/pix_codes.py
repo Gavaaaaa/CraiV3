@@ -78,6 +78,23 @@ EXPLICACAO_DA_CAUSA = {
                     "passar; é o default de código não reconhecido"),
 }
 
+# Rotulo curto em PT-BR para cada causa -- usado onde o texto precisa citar a
+# causa (trilha de raciocinio do agente, painel de avaliacao, relatorio), sem
+# expor o codigo interno em ingles a quem le. O codigo interno (CAUSA_SALDO
+# etc.) continua o mesmo em toda comparacao/decisao -- isto e so rotulo.
+# Inclui tambem os codigos de cartao (fora deste pipeline, mas podem aparecer
+# em texto de auditoria/log que cite a causa).
+CAUSA_LEGIVEL = {
+    CAUSA_SALDO: "Saldo insuficiente",
+    CAUSA_LIMITE: "Limite excedido",
+    CAUSA_REVOGADA: "Autorização revogada",
+    CAUSA_TECNICA: "Erro de processamento",
+    "expired_card": "Cartão expirado",
+    "card_declined": "Cartão recusado",
+    "do_not_honor": "Recusado pelo emissor",
+    "generic_decline": "Recusa genérica",
+}
+
 # ── Razões legíveis enviadas pelos PSPs ──────────────────────────────────
 ALIASES_TEXTUAIS = {
     # saldo

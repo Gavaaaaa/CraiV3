@@ -38,6 +38,7 @@ from dotenv import load_dotenv                      # noqa: E402
 load_dotenv()
 
 from ..agent.main_agent import crai_agent
+from ..agent.pix_codes import CAUSA_LEGIVEL
 from ..agent.state import AgentState, PaymentMethod
 from ..agent.workflow import (
     success_fee,
@@ -1587,6 +1588,27 @@ _destino_de_desenvolvimento()
 
 TENANT_PAINEL = "painel_avaliacao"
 
+# Mesmo dicionario de crai/scripts/relatorio.py (ver o comentario acima de
+# onde e usado): traduz o nome INTERNO da feature para o rotulo que aparece
+# na decomposicao SHAP quando o texto `readable` do classificador nao cobre
+# aquela feature.
+ROTULO_FEATURE_PAINEL = {
+    "tenure_months": "Tempo de casa (meses)", "payment_history_score": "Historico de pagamento",
+    "gateway_error_code": "Codigo de erro", "invoice_amount": "Valor da fatura R$",
+    "avg_ticket": "Ticket medio R$", "day_of_month": "Dia do mes",
+    "hour_of_day": "Hora da cobranca", "day_of_week": "Dia da semana",
+    "failure_count_90d": "Falhas (90 dias)", "attempt_count": "Tentativas anteriores",
+    "card_brand": "Bandeira do cartao", "ltv_estimated": "LTV estimado R$",
+}
+
+# CAUSA_LEGIVEL vem de agent/pix_codes.py -- e o mesmo rotulo que a trilha de
+# raciocinio do agente ja usa, para o painel nao inventar um segundo
+# vocabulario de traducao para a mesma causa.
+ESTRATEGIA_LEGIVEL_PAINEL = {
+    "retry_automatico":    "Nova tentativa automatica",
+    "mensagem_pagamento":  "Mensagem de pagamento enviada ao cliente",
+}
+
 BASE_EXEMPLO_PAINEL = (
     "customer_id_externo,mrr,billing_profile,days_since_last,features_used_30d,email\n"
     "ACME-2291,890,PJ,47,1,financeiro@acme-exemplo.com.br\n"
@@ -1672,8 +1694,15 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
     shap_bruto = final.get("shap_explanation") or {}
     feats = shap_bruto.get("features") or []
     rotulos = [p.strip() for p in str(shap_bruto.get("readable", "")).split("|") if p.strip()]
+    # `readable` (gerado pelo classificador) so cobre as features mais
+    # relevantes; o resto caia no nome interno em ingles (day_of_week,
+    # attempt_count...) sem traducao nenhuma. ROTULO_FEATURE_PAINEL e o
+    # mesmo dicionario que crai/scripts/relatorio.py ja usa para o mesmo
+    # problema -- um so vocabulario de traducao para os dois lugares que
+    # mostram SHAP a um humano.
     shap = [{**f, "rotulo": (rotulos[i].rsplit("(", 1)[0].strip() if i < len(rotulos)
-                             else f"{f.get('feature')} {f.get('value')}")}
+                             else f"{ROTULO_FEATURE_PAINEL.get(f.get('feature'), f.get('feature'))} "
+                                  f"{f.get('value')}")}
             for i, f in enumerate(feats)]
 
     plano = []
@@ -1686,11 +1715,18 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
             plano.append(str(t))
 
     racio = final.get("raciocinio")
+    causa_bruta = final.get("failure_cause")
+    estrategia_bruta = final.get("estrategia")
     return JSONResponse({
-        "failure_cause": final.get("failure_cause"),
+        # Valor cru mantido (uso interno/depuracao) + versao traduzida para
+        # o painel exibir -- nenhum dos dois campos muda o que o agente
+        # decidiu, so como isso aparece na tela.
+        "failure_cause": causa_bruta,
+        "failure_cause_legivel": CAUSA_LEGIVEL.get(causa_bruta, causa_bruta),
         "recovery_score": final.get("recovery_score"),
         "eprofit": final.get("eprofit"),
-        "estrategia": final.get("estrategia"),
+        "estrategia": estrategia_bruta,
+        "estrategia_legivel": ESTRATEGIA_LEGIVEL_PAINEL.get(estrategia_bruta, estrategia_bruta),
         "shap": shap, "plano": plano,
         "raciocinio": racio if isinstance(racio, list) else ([racio] if racio else []),
         "mensagem": final.get("message_sent"),

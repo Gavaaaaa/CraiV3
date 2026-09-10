@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 from .state import AgentState
 from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
-from .pix_codes import CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
+from .pix_codes import CAUSA_LEGIVEL, CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
@@ -269,8 +269,9 @@ async def decide_recovery(state: AgentState) -> AgentState:
     ainda_cabe = usadas < limite
     retentavel = causa in CAUSAS_RETENTAVEIS and ainda_cabe
 
+    causa_legivel = CAUSA_LEGIVEL.get(causa, causa)
     raciocinio = [
-        f"Observação: causa={causa}, score={score}/100, "
+        f"Observação: causa={causa_legivel}, score={score}/100, "
         f"e-Profit=R$ {eprofit:.2f}, anomalia={'sim' if anomala else 'não'}.",
     ]
 
@@ -282,9 +283,9 @@ async def decide_recovery(state: AgentState) -> AgentState:
             quando = ("na janela de liquidez prevista (Módulo 3)"
                       if causa == "insufficient_funds" else "imediatamente")
         raciocinio.append(
-            f"Pensamento: '{causa}' costuma ser resolvido por nova tentativa de "
+            f"Pensamento: '{causa_legivel}' costuma ser resolvido por nova tentativa de "
             f"cobrança {quando} — insistir aqui tem retorno esperado positivo.")
-        raciocinio.append("Decisão: retry_automatico.")
+        raciocinio.append("Decisão: nova tentativa automática.")
         estrategia = "retry_automatico"
     else:
         if causa not in CAUSAS_RETENTAVEIS:
@@ -294,7 +295,7 @@ async def decide_recovery(state: AgentState) -> AgentState:
             # a recorrência, que são ações diferentes.
             detalhe = EXPLICACAO_DA_CAUSA.get(
                 causa, "o cliente precisa agir (atualizar cartão ou pagar por outro meio)")
-            motivo = f"'{causa}' não se resolve por retentativa — {detalhe}"
+            motivo = f"'{causa_legivel}' não se resolve por retentativa — {detalhe}"
         elif metodo == "pix_automatico":
             motivo = (f"as {MAX_TENTATIVAS_PIX} tentativas da janela regulada do "
                       f"BACEN já foram usadas")
@@ -305,7 +306,7 @@ async def decide_recovery(state: AgentState) -> AgentState:
         raciocinio.append(
             f"Pensamento: {motivo}. Contatar com mensagem personalizada; "
             f"urgência {urgencia} pelo score/anomalia.")
-        raciocinio.append("Decisão: mensagem_pagamento (Pix Automático → boleto).")
+        raciocinio.append("Decisão: mensagem de pagamento (Pix Automático → boleto).")
         estrategia = "mensagem_pagamento"
 
     print(f"[AGENT] Estratégia (Módulo 5): {estrategia}")
