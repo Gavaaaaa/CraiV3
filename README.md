@@ -1,6 +1,6 @@
 # CRAI - Churn Recovery Artificial Intelligence
 
-**Retention OS para PMEs brasileiras de SaaS** (MRR R$500k - R$5M)
+**Retention OS para PMEs brasileiras de SaaS** (MRR R$10k - R$500k)
 
 Sistema autônomo de recuperação de receita que combina Machine Learning, IA generativa e automação inteligente para combater churn involuntário e voluntário em empresas SaaS B2B no mercado brasileiro.
 
