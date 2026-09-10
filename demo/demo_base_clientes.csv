@@ -1,0 +1,15 @@
+customer_id_externo,mrr,billing_profile,days_since_last,features_used_30d,email
+ACME-2291,890,PJ,47,1,financeiro@acme-exemplo.com.br
+Vertice-0834,1450,CLT,38,2,contato@vertice-exemplo.com.br
+NovaLog-7712,2680,PJ,12,6,ops@novalog-exemplo.com.br
+Ipe-4408,640,freelancer,29,2,ana@ipe-exemplo.com.br
+Solaris-1190,3200,CLT,4,11,admin@solaris-exemplo.com.br
+Kaeta-6621,410,freelancer,26,3,kaeta@exemplo.com.br
+Ribalta-3345,1180,PJ,18,4,ti@ribalta-exemplo.com.br
+Orbita-9080,750,CLT,9,8,suporte@orbita-exemplo.com.br
+Palma-5517,1620,PJ,2,14,diretoria@palma-exemplo.com.br
+Trilha-2204,520,freelancer,0,19,oi@trilha-exemplo.com.br
+Corvo-8863,980,CLT,6,9,financeiro@corvo-exemplo.com.br
+Marena-7351,1340,PJ,1,16,contato@marena-exemplo.com.br
+Aurora-1128,1750,CLT,,,fin@aurora-exemplo.com.br
+Bandeira-4490,860,PJ,,,contato@bandeira-exemplo.com.br
