@@ -1,0 +1,182 @@
+{
+  "anomaly": {
+    "modelo": "AnomalyDetector",
+    "fonte_usada": "sintetico_calibrado",
+    "n_amostras_treino": 11000,
+    "em_dominio": {
+      "dataset": "sintetico_calibrado, 3000 clientes, seed 7 (nunca visto)",
+      "roc_auc": 0.986,
+      "average_precision": 0.8279,
+      "taxa_flag": 0.129,
+      "roc_auc_treino_declarada": 0.981
+    },
+    "fora_do_dominio": {
+      "dataset": "E-Commerce Churn, 5068 clientes com as 4 features presentes",
+      "rotulo": "Churn real (16,8% de churn)",
+      "roc_auc_erro_vs_churn": 0.5058,
+      "average_precision": 0.1729,
+      "taxa_flag": 0.0006,
+      "recall_churn_no_flag": 0.0,
+      "precision_churn_no_flag": 0.0,
+      "features_reais": [
+        "days_since_last_login",
+        "avg_session_min",
+        "tickets_30d",
+        "nps_last"
+      ],
+      "features_constantes": [
+        "tenure_days",
+        "mrr_brl",
+        "seats",
+        "logins_7d",
+        "logins_30d",
+        "feature_adoption",
+        "api_calls_7d",
+        "failed_pay_90d"
+      ],
+      "nota": "queda esperada: o doador tem direcao INVERTIDA em dias/satisfacao (quem cancela pediu mais recentemente e esta mais satisfeito) e o modelo so ve 4 das 12 features; um AUC ~0,5 aqui e o resultado honesto, nao um bug"
+    }
+  },
+  "voluntario": {
+    "modelo": "risk_scorer_voluntario",
+    "regras_fixas": {
+      "dataset": "E-Commerce Churn, 5065 clientes",
+      "roc_auc_vs_churn": 0.4053,
+      "risco_medio": 0.2631,
+      "fracao_acima_de_0_60": 0.0014,
+      "nota": "as regras nunca viram este dado; DaySinceLastOrder -> days_since_last, OrderCount -> features_used_30d (proxy fraco), evento = Session Started"
+    },
+    "candidato": {
+      "fonte_usada": "sintetico_calibrado",
+      "n_amostras_treino": 4000,
+      "em_dominio_auc_vs_rotulo": 0.7517,
+      "fora_do_dominio_auc_vs_churn": 0.4295,
+      "corr_com_regras_no_real": 0.876,
+      "mrr_constante_usado": 1808.04,
+      "nota": "o candidato aprendeu as REGRAS com ruido, nao churn observado — fora do dominio ele so pode ser tao bom quanto as regras"
+    }
+  },
+  "classifier": {
+    "modelo": "FailureClassifier",
+    "fonte_usada": "sintetico_calibrado",
+    "n_amostras_treino": 6000,
+    "em_dominio": {
+      "dataset": "sintetico_calibrado, 300 linhas, seed 7 (nunca visto)",
+      "p_recovery": {
+        "media": 0.4502,
+        "p25": 0.3095,
+        "mediana": 0.4473,
+        "p75": 0.5912
+      },
+      "auc_holdout_treino_declarada": 0.6669
+    },
+    "fora_do_dominio": {
+      "dataset": "Olist, 300 transacoes reais (valor/hora/dia reais; demais features na mediana)",
+      "rotulo": "NAO EXISTE — nenhuma base publica tem 'cobranca falhada foi recuperada'",
+      "p_recovery": {
+        "media": 0.6208,
+        "p25": 0.5878,
+        "mediana": 0.6271,
+        "p75": 0.6664
+      },
+      "fracao_recommend_action": 1.0,
+      "nota": "sem rotulo nao ha AUC; o que se mede e se a distribuicao de score no dado real e plausivel e parecida com a do holdout — nao prova acerto"
+    }
+  },
+  "payday": {
+    "modelo": "PaydayInference",
+    "fora_do_dominio": "NAO APLICAVEL — nenhum doador publico de serie diaria de saldo; so a metrica em dominio existe (ver rodada_alta.json)"
+  },
+  "curva_de_volume": {
+    "fonte": "sintetico_calibrado",
+    "seeds": [
+      42,
+      7,
+      2024
+    ],
+    "classifier": [
+      {
+        "n_amostras": 1000,
+        "auc_media": 0.6264,
+        "auc_dp": 0.0372,
+        "aucs": [
+          0.6296,
+          0.5794,
+          0.6703
+        ]
+      },
+      {
+        "n_amostras": 3000,
+        "auc_media": 0.681,
+        "auc_dp": 0.0086,
+        "aucs": [
+          0.6695,
+          0.6902,
+          0.6833
+        ]
+      },
+      {
+        "n_amostras": 6000,
+        "auc_media": 0.6861,
+        "auc_dp": 0.0205,
+        "aucs": [
+          0.6669,
+          0.7145,
+          0.6768
+        ]
+      },
+      {
+        "n_amostras": 12000,
+        "auc_media": 0.6961,
+        "auc_dp": 0.0052,
+        "aucs": [
+          0.6924,
+          0.6924,
+          0.7035
+        ]
+      }
+    ],
+    "voluntario": [
+      {
+        "n_amostras": 1000,
+        "auc_media": 0.7016,
+        "auc_dp": 0.0507,
+        "aucs": [
+          0.6515,
+          0.7711,
+          0.6822
+        ]
+      },
+      {
+        "n_amostras": 3000,
+        "auc_media": 0.7507,
+        "auc_dp": 0.0184,
+        "aucs": [
+          0.7264,
+          0.771,
+          0.7548
+        ]
+      },
+      {
+        "n_amostras": 6000,
+        "auc_media": 0.7463,
+        "auc_dp": 0.0109,
+        "aucs": [
+          0.7615,
+          0.7414,
+          0.7361
+        ]
+      },
+      {
+        "n_amostras": 12000,
+        "auc_media": 0.7404,
+        "auc_dp": 0.0029,
+        "aucs": [
+          0.7394,
+          0.7443,
+          0.7375
+        ]
+      }
+    ]
+  }
+}

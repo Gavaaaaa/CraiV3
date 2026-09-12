@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-.venv/
-.ipynb_checkpoints/
-models/*.pt
-models/*.pkl
-data/*.csv
-reports/scores.csv

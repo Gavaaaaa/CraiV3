@@ -1,0 +1,501 @@
+﻿id_cliente;empresa;segmento;uf;plano;usuarios;mrr;meses_de_casa;dias_sem_uso;features_usadas_30d;perfil_pagador;historico_pagamento;falhas_90d
+cli-0001;Alpha Turismo;Construção;RS;Essencial;1;"46,69";1;0;7;PJ;"0,54";1
+cli-0002;Nexo Agro;Educação;CE;Essencial;3;"49,67";13;0;10;CLT;"0,59";1
+cli-0003;Marco Clínicas;Construção;SP;Profissional;6;"129,52";8;2;4;CLT;"0,674";0
+cli-0004;Eixo Fitness;Logística;SP;Essencial;4;"53,49";62;2;6;PJ;"0,773";2
+cli-0005;Marco Odonto ME;Agro;MG;Essencial;1;"43,17";3;1;3;CLT;"0,553";0
+cli-0006;Trilha Jurídico;Logística;MG;Profissional;5;"112,58";7;2;9;CLT;"0,911";7
+cli-0007;Prisma Fitness Ltda.;Construção;BA;Essencial;1;"39,85";4;0;9;CLT;"0,798";2
+cli-0008;Prisma Contábil;Varejo;BA;Essencial;4;"60,22";2;1;9;CLT;"0,623";2
+cli-0009;Vale Engenharia;Agro;PR;Essencial;1;"40,04";5;0;6;PJ;"0,787";1
+cli-0010;Sol Seguros ME;Educação;BA;Profissional;4;"102,11";16;0;7;CLT;"0,889";1
+cli-0011;Vale Estética;Saúde;PE;Essencial;2;"47,40";23;0;9;freelancer;"0,793";1
+cli-0012;Lumen Varejo;Serviços;PE;Essencial;3;"57,65";1;0;6;PJ;"0,82";2
+cli-0013;Lagoa Contábil;Logística;DF;Profissional;6;"139,04";4;0;8;PJ;"0,521";1
+cli-0014;Órbita Agro Ltda.;Varejo;GO;Essencial;3;"50,30";3;1;6;PJ;"0,718";2
+cli-0015;Raiz Agro ME;Saúde;DF;Essencial;3;"55,76";13;0;5;CLT;"0,785";2
+cli-0016;Mapa Farma;Saúde;SC;Profissional;5;"120,68";20;1;6;CLT;"0,81";0
+cli-0017;Vale Jurídico;Varejo;PR;Essencial;4;"57,75";10;;;CLT;"0,804";3
+cli-0018;Trilha Agro;Agro;RS;Essencial;2;"45,89";7;0;5;CLT;"0,8";1
+cli-0019;Pulso Logística;Logística;GO;Essencial;2;"45,07";1;7;1;CLT;"0,792";2
+cli-0020;Rota Estética ME;Jurídico;SP;Profissional;5;"126,19";12;1;9;CLT;"0,781";2
+cli-0021;Base Fitness Ltda.;Logística;SP;Business;11;"300,15";38;0;7;freelancer;"0,878";1
+cli-0022;Nexo Logística;Jurídico;PE;Profissional;4;"103,44";1;5;10;CLT;"0,78";1
+cli-0023;Base Pet;Jurídico;MG;Essencial;2;"45,79";10;2;6;PJ;"0,725";1
+cli-0024;Serra Clínicas;Educação;CE;Essencial;2;"44,21";6;2;8;PJ;"0,734";1
+cli-0025;Meta Imóveis ME;Logística;SP;Essencial;3;"53,12";1;2;6;CLT;"0,747";2
+cli-0026;Lumen Móveis;Agro;SP;Essencial;1;"39,73";14;0;8;CLT;"0,8";4
+cli-0027;Órbita Imóveis SP;Varejo;RS;Profissional;4;"116,21";7;0;4;CLT;"0,617";1
+cli-0028;Eixo Odonto Ltda.;Saúde;RS;Essencial;2;"45,37";43;1;9;CLT;"0,696";1
+cli-0029;Raiz Fitness;Logística;BA;Essencial;2;"51,62";5;2;8;CLT;"0,809";1
+cli-0030;Alpha Varejo ME;Varejo;RJ;Profissional;4;"118,00";27;2;9;freelancer;"0,524";2
+cli-0031;Lagoa Varejo;Agro;SP;Essencial;1;"41,98";21;2;6;freelancer;"0,375";1
+cli-0032;Meta Clínicas;Construção;SP;Essencial;2;"46,03";2;4;9;CLT;"0,846";1
+cli-0033;Clave Educação;Jurídico;SP;Essencial;4;"60,04";1;3;4;PJ;"0,943";3
+cli-0034;Rota Pet ES;Saúde;SC;Profissional;4;"100,26";2;2;9;freelancer;"0,422";3
+cli-0035;Trilha Fitness Ltda.;Serviços;SC;Profissional;3;"101,25";32;0;3;CLT;"0,832";1
+cli-0036;Cerrado Arquitetura;Serviços;PR;Business;15;"363,37";18;0;8;CLT;"0,431";0
+cli-0037;Fluxo Agro;Agro;DF;Essencial;4;"60,03";1;1;7;PJ;"0,694";2
+cli-0038;Vetor Logística;Saúde;RJ;Profissional;5;"128,33";7;0;6;PJ;"0,647";0
+cli-0039;Serra Agro DF;Varejo;CE;Essencial;2;"52,71";1;1;6;CLT;"0,95";0
+cli-0040;Mapa Contábil ME;Jurídico;PE;Essencial;2;"44,94";7;2;8;freelancer;"0,568";0
+cli-0041;Cerrado Educação;Logística;DF;Essencial;2;"45,06";6;3;5;CLT;"0,633";1
+cli-0042;Alpha Pet Ltda.;Varejo;BA;Profissional;10;"149,43";33;4;5;CLT;"0,918";0
+cli-0043;Foco Varejo;Agro;RS;Profissional;7;"144,49";1;0;6;PJ;"0,477";3
+cli-0044;Sinal Transportes SP;Saúde;DF;Essencial;2;"49,60";20;2;3;CLT;"0,666";0
+cli-0045;Mapa Pet ME;Jurídico;MG;Essencial;1;"40,63";23;0;9;CLT;"0,808";3
+cli-0046;Sinal Farma;Jurídico;SP;Profissional;3;"106,47";4;0;9;CLT;"0,846";1
+cli-0047;Nexo Consultoria;Jurídico;RJ;Essencial;1;"42,94";8;0;8;PJ;"0,815";1
+cli-0048;Prisma Varejo;Saúde;MG;Profissional;8;"142,01";66;1;8;CLT;"0,577";3
+cli-0049;Base Farma Ltda.;Jurídico;DF;Business;12;"316,38";17;;;freelancer;"0,686";0
+cli-0050;Clave Varejo ME;Construção;PR;Essencial;1;"40,20";19;1;6;CLT;"0,461";1
+cli-0051;Base Engenharia;Serviços;PE;Essencial;1;"42,31";20;3;5;CLT;"0,869";2
+cli-0052;Norte Consultoria;Agro;PE;Business;15;"341,94";23;0;8;CLT;"0,929";2
+cli-0053;Meta Estética SP;Serviços;ES;Business;15;"363,10";18;1;4;PJ;"0,798";1
+cli-0054;Nexo Móveis;Logística;DF;Essencial;1;"47,00";25;4;6;PJ;"0,774";1
+cli-0055;Marco Gráfica ME;Logística;DF;Business;7;"243,64";15;;;freelancer;"0,889";1
+cli-0056;Base Jurídico Ltda.;Serviços;ES;Essencial;1;"46,04";16;6;3;CLT;"0,576";1
+cli-0057;Mapa Educação;Varejo;GO;Essencial;1;"39,86";6;6;2;CLT;"0,806";1
+cli-0058;Ágil Logística;Jurídico;BA;Profissional;5;"111,28";6;9;5;PJ;"0,685";1
+cli-0059;Mapa Gráfica;Educação;PR;Essencial;1;"44,84";1;0;6;freelancer;"0,744";0
+cli-0060;Clave Farma ME;Jurídico;CE;Profissional;8;"153,24";27;1;8;CLT;"0,414";4
+cli-0061;Lagoa Farma;Educação;CE;Profissional;1;"85,19";16;1;2;PJ;"0,807";0
+cli-0062;Fluxo Arquitetura;Serviços;ES;Business;7;"243,41";9;4;3;PJ;"0,663";2
+cli-0063;Serra Pet Ltda.;Agro;SP;Essencial;5;"57,76";43;1;8;PJ;"0,984";1
+cli-0064;Lagoa Fitness;Logística;SC;Essencial;1;"45,87";13;;;CLT;"0,83";2
+cli-0065;Rota Arquitetura ME;Varejo;PE;Essencial;3;"52,21";18;15;1;CLT;"0,477";0
+cli-0066;Norte Gráfica;Serviços;RJ;Essencial;3;"59,32";49;1;6;CLT;"0,646";2
+cli-0067;Foco Gráfica;Construção;PE;Essencial;7;"74,81";2;4;2;CLT;"0,866";0
+cli-0068;Sinal Eventos;Jurídico;PR;Essencial;1;"43,94";10;0;6;freelancer;"0,696";2
+cli-0069;Nexo Fitness;Logística;DF;Business;7;"287,56";1;2;9;CLT;"0,795";2
+cli-0070;Cerrado Farma Ltda.;Jurídico;GO;Business;7;"244,41";3;2;5;CLT;"0,889";4
+cli-0071;Trilha Pet;Construção;PE;Profissional;6;"120,78";23;3;6;PJ;"0,889";1
+cli-0072;Foco Fitness;Serviços;RS;Essencial;2;"49,17";1;2;4;freelancer;"0,757";2
+cli-0073;Rota Logística;Serviços;CE;Profissional;8;"131,29";9;3;3;CLT;"0,977";1
+cli-0074;Vetor Estética;Construção;PE;Essencial;1;"45,43";8;0;6;freelancer;"0,395";0
+cli-0075;Rota Logística ME;Logística;SP;Profissional;4;"115,71";28;0;7;CLT;"0,76";1
+cli-0076;Raiz Logística;Serviços;BA;Business;9;"302,30";4;0;10;CLT;"0,384";0
+cli-0077;Ponte Consultoria Ltda.;Logística;BA;Profissional;4;"105,66";13;1;8;CLT;"0,887";2
+cli-0078;Pulso Fitness;Serviços;RS;Profissional;2;"98,89";2;4;9;CLT;"0,897";1
+cli-0079;Prisma Turismo;Logística;ES;Profissional;4;"118,84";8;0;8;CLT;"0,679";2
+cli-0080;Eixo Agro ME;Varejo;CE;Profissional;4;"105,29";1;0;6;CLT;"0,892";1
+cli-0081;Mapa Estética PR;Agro;CE;Essencial;4;"61,73";5;3;9;CLT;"0,714";0
+cli-0082;Clave Imóveis;Saúde;PE;Business;10;"271,76";20;0;7;freelancer;"0,534";0
+cli-0083;Sol Agro;Varejo;RJ;Profissional;4;"115,99";36;0;7;PJ;"0,917";0
+cli-0084;Ponte Varejo Ltda.;Saúde;CE;Essencial;1;"42,19";3;1;8;CLT;"0,758";2
+cli-0085;Vale Odonto ME;Logística;SC;Profissional;10;"159,13";33;4;9;PJ;"0,763";3
+cli-0086;Lagoa Turismo;Construção;BA;Profissional;2;"94,19";83;1;4;PJ;"0,546";5
+cli-0087;Prisma Seguros;Serviços;PR;Essencial;1;"42,65";16;0;4;CLT;"0,783";0
+cli-0088;Sol Gráfica;Agro;SC;Essencial;2;"53,64";2;0;6;CLT;"0,347";2
+cli-0089;Ágil Consultoria SP;Agro;PE;Profissional;8;"131,58";4;1;7;CLT;"0,522";2
+cli-0090;Órbita Transportes ME;Agro;SP;Essencial;2;"53,53";1;30;3;freelancer;"0,864";2
+cli-0091;Alpha Varejo Ltda.;Agro;RS;Business;13;"347,90";17;6;8;PJ;"0,787";2
+cli-0092;Ponte Consultoria;Saúde;BA;Profissional;6;"118,61";2;1;2;PJ;"0,462";1
+cli-0093;Mapa Clínicas SP;Agro;PE;Essencial;1;"40,17";8;0;7;PJ;"0,898";0
+cli-0094;Base Móveis;Saúde;MG;Essencial;2;"46,33";19;1;9;freelancer;"0,83";0
+cli-0095;Mapa Estética ME;Varejo;PR;Essencial;4;"56,07";2;0;7;freelancer;"0,826";2
+cli-0096;Base Gráfica;Saúde;SC;Profissional;8;"151,66";1;0;9;CLT;"0,9";1
+cli-0097;Ipê Fitness;Agro;DF;Essencial;1;"48,12";18;0;4;CLT;"0,798";0
+cli-0098;Ipê Farma Ltda.;Educação;SP;Profissional;9;"162,41";5;0;6;CLT;"0,918";0
+cli-0099;Meta Agro;Logística;SP;Profissional;7;"140,41";1;2;8;PJ;"0,824";0
+cli-0100;Eixo Estética ME;Construção;BA;Essencial;4;"60,72";7;5;2;PJ;"0,634";3
+cli-0101;Nexo Contábil;Varejo;BA;Business;16;"394,23";14;0;5;CLT;"0,63";1
+cli-0102;Vetor Móveis;Saúde;SP;Essencial;2;"49,46";12;5;3;CLT;"0,479";4
+cli-0103;Órbita Gráfica;Varejo;SP;Essencial;2;"47,62";8;0;5;CLT;"0,371";1
+cli-0104;Raiz Clínicas;Varejo;SP;Essencial;3;"56,54";42;5;5;PJ;"0,907";2
+cli-0105;Ipê Jurídico Ltda.;Logística;PR;Profissional;2;"88,60";20;2;5;PJ;"0,973";3
+cli-0106;Mapa Transportes;Logística;DF;Essencial;2;"45,49";13;0;9;PJ;"0,723";1
+cli-0107;Pulso Varejo;Logística;SP;Essencial;3;"49,42";9;5;8;CLT;"0,87";0
+cli-0108;Lagoa Móveis;Saúde;CE;Profissional;9;"154,06";2;5;4;freelancer;"0,916";2
+cli-0109;Serra Eventos;Construção;RJ;Business;17;"382,55";7;0;9;freelancer;"0,482";1
+cli-0110;Nexo Seguros ME;Varejo;ES;Essencial;4;"60,20";26;0;10;PJ;"0,579";5
+cli-0111;Marco Eventos;Agro;BA;Essencial;4;"58,13";8;1;7;CLT;"0,675";1
+cli-0112;Norte Jurídico Ltda.;Saúde;SP;Essencial;1;"47,79";6;0;7;CLT;"0,983";1
+cli-0113;Sinal Jurídico;Construção;SP;Profissional;10;"172,15";3;1;8;CLT;"0,861";1
+cli-0114;Lumen Jurídico;Construção;RS;Essencial;1;"43,59";17;4;5;PJ;"0,392";1
+cli-0115;Ponte Eventos ME;Construção;SP;Essencial;3;"51,82";1;2;3;PJ;"0,867";5
+cli-0116;Sol Móveis;Construção;DF;Profissional;6;"131,16";18;0;8;CLT;"0,676";2
+cli-0117;Alpha Consultoria;Logística;SP;Essencial;1;"42,58";27;0;6;PJ;"0,9";4
+cli-0118;Ponte Fitness;Logística;DF;Business;13;"339,81";3;1;8;PJ;"0,409";1
+cli-0119;Sinal Eventos Ltda. DF;Educação;SP;Essencial;1;"47,68";54;0;6;CLT;"0,374";1
+cli-0120;Ipê Móveis ME CE;Jurídico;SP;Profissional;4;"116,66";26;19;1;PJ;"0,635";4
+cli-0121;Lumen Odonto;Construção;PE;Profissional;2;"89,84";1;0;7;CLT;"0,67";1
+cli-0122;Cerrado Imóveis;Saúde;PR;Essencial;2;"48,12";3;3;8;CLT;"0,819";2
+cli-0123;Marco Móveis;Educação;SC;Profissional;4;"108,29";38;0;7;CLT;"0,844";1
+cli-0124;Norte Turismo;Saúde;BA;Essencial;4;"53,83";6;1;9;PJ;"0,724";2
+cli-0125;Ágil Agro ME;Serviços;GO;Essencial;1;"40,38";35;4;6;freelancer;"0,939";5
+cli-0126;Ipê Estética Ltda.;Logística;GO;Essencial;1;"42,93";19;0;8;PJ;"0,492";1
+cli-0127;Sol Transportes;Saúde;SC;Essencial;3;"57,36";38;3;7;freelancer;"0,78";0
+cli-0128;Ipê Agro;Educação;CE;Essencial;4;"58,28";9;3;7;CLT;"0,767";1
+cli-0129;Órbita Varejo;Agro;MG;Business;13;"350,79";16;4;8;CLT;"0,775";1
+cli-0130;Órbita Eventos ME;Jurídico;SP;Profissional;2;"88,92";51;3;9;freelancer;"0,828";4
+cli-0131;Norte Estética;Saúde;SP;Essencial;1;"40,97";42;0;5;PJ;"0,497";2
+cli-0132;Mapa Varejo;Logística;SC;Essencial;1;"41,79";17;1;9;CLT;"0,836";0
+cli-0133;Mapa Móveis Ltda.;Serviços;PE;Essencial;2;"52,16";1;0;7;CLT;"0,78";2
+cli-0134;Base Eventos;Agro;CE;Profissional;6;"115,33";22;1;6;PJ;"0,87";2
+cli-0135;Vale Transportes ME;Saúde;MG;Essencial;3;"54,99";17;4;6;freelancer;"0,829";1
+cli-0136;Sol Eventos;Agro;GO;Profissional;6;"122,27";16;4;4;CLT;"0,853";2
+cli-0137;Trilha Transportes;Jurídico;SP;Essencial;1;"43,53";8;0;7;PJ;"0,617";1
+cli-0138;Sol Clínicas;Agro;RS;Essencial;1;"42,70";5;0;9;CLT;"0,943";0
+cli-0139;Foco Móveis;Jurídico;SP;Profissional;6;"114,41";10;5;3;PJ;"0,985";0
+cli-0140;Norte Farma Ltda.;Varejo;SP;Essencial;4;"62,47";8;0;3;CLT;"0,635";1
+cli-0141;Ágil Gráfica;Serviços;MG;Profissional;7;"139,22";8;1;8;freelancer;"0,814";0
+cli-0142;Lumen Seguros;Saúde;PR;Essencial;1;"48,38";12;1;5;PJ;"0,918";2
+cli-0143;Vetor Engenharia;Construção;PR;Business;22;"382,44";10;0;8;PJ;"0,389";2
+cli-0144;Rota Turismo;Saúde;ES;Profissional;1;"94,14";6;3;8;freelancer;"0,913";0
+cli-0145;Sol Imóveis ME;Educação;PR;Essencial;1;"47,21";8;4;6;CLT;"0,709";0
+cli-0146;Cerrado Transportes;Logística;PR;Essencial;1;"45,73";29;0;7;PJ;"0,278";2
+cli-0147;Órbita Transportes Ltda.;Jurídico;SP;Essencial;2;"44,47";22;0;5;PJ;"0,701";2
+cli-0148;Fluxo Seguros;Construção;PE;Essencial;1;"40,07";13;0;9;PJ;"0,891";0
+cli-0149;Prisma Arquitetura;Educação;CE;Essencial;1;"43,30";36;0;8;CLT;"0,853";3
+cli-0150;Raiz Odonto ME RJ;Saúde;PE;Profissional;5;"112,07";11;0;5;PJ;"0,815";1
+cli-0151;Prisma Móveis;Educação;CE;Essencial;1;"40,26";5;1;9;freelancer;"0,76";5
+cli-0152;Serra Gráfica;Logística;PR;Business;16;"342,97";1;4;7;PJ;"0,48";2
+cli-0153;Sol Seguros;Serviços;SP;Essencial;1;"41,86";1;0;1;freelancer;"0,862";2
+cli-0154;Lagoa Fitness Ltda.;Logística;MG;Profissional;8;"142,46";12;10;2;CLT;"0,41";1
+cli-0155;Ponte Arquitetura ME;Agro;SC;Essencial;6;"72,99";7;2;8;PJ;"0,718";1
+cli-0156;Sinal Imóveis;Agro;PR;Essencial;1;"40,11";19;0;9;CLT;"0,804";0
+cli-0157;Vale Engenharia SP;Construção;SP;Essencial;2;"52,30";5;1;8;CLT;"0,732";1
+cli-0158;Ipê Jurídico;Construção;BA;Essencial;2;"49,41";22;0;5;CLT;"0,805";1
+cli-0159;Fluxo Clínicas;Jurídico;SP;Essencial;1;"47,66";13;3;7;PJ;"0,695";4
+cli-0160;Ágil Agro ME SP;Varejo;SP;Essencial;2;"51,45";13;0;8;CLT;"0,838";0
+cli-0161;Serra Educação Ltda.;Educação;RJ;Essencial;2;"44,45";4;0;5;PJ;"0,547";1
+cli-0162;Marco Consultoria SP;Varejo;SC;Essencial;2;"45,48";5;4;4;CLT;"0,568";1
+cli-0163;Ágil Pet;Educação;BA;Essencial;1;"43,41";8;5;6;CLT;"0,337";2
+cli-0164;Sinal Gráfica;Varejo;SP;Essencial;1;"45,69";59;2;5;CLT;"0,726";2
+cli-0165;Cerrado Transportes ME;Jurídico;RJ;Profissional;9;"164,48";1;;;CLT;"0,893";1
+cli-0166;Sinal Fitness;Educação;SP;Essencial;3;"57,66";66;0;9;CLT;"0,892";0
+cli-0167;Órbita Jurídico;Logística;CE;Essencial;1;"45,53";9;0;9;CLT;"0,854";1
+cli-0168;Mapa Gráfica Ltda.;Construção;PE;Profissional;3;"102,52";2;4;5;CLT;"0,894";1
+cli-0169;Órbita Odonto PE;Jurídico;RS;Profissional;4;"120,45";12;1;7;freelancer;"0,867";1
+cli-0170;Foco Contábil ME;Logística;SP;Essencial;2;"50,96";5;1;8;freelancer;"0,833";2
+cli-0171;Ágil Transportes;Educação;RJ;Essencial;3;"58,60";15;1;7;CLT;"0,927";1
+cli-0172;Rota Agro;Varejo;SP;Profissional;5;"130,22";25;2;9;CLT;"0,711";1
+cli-0173;Trilha Odonto;Logística;PR;Essencial;2;"45,21";15;2;7;freelancer;"0,77";1
+cli-0174;Vale Gráfica;Varejo;SP;Profissional;8;"131,28";10;0;8;CLT;"0,499";2
+cli-0175;Trilha Estética Ltda. BA;Serviços;DF;Essencial;1;"42,80";11;1;8;PJ;"0,568";2
+cli-0176;Ipê Turismo;Educação;CE;Business;8;"288,25";2;14;3;PJ;"0,45";1
+cli-0177;Sol Educação;Jurídico;MG;Essencial;2;"52,68";1;0;9;CLT;"0,417";2
+cli-0178;Rota Transportes;Educação;SP;Essencial;1;"45,87";18;1;7;CLT;"0,822";3
+cli-0179;Meta Móveis;Construção;MG;Profissional;2;"93,95";1;2;9;CLT;"0,657";0
+cli-0180;Mapa Odonto ME;Jurídico;RJ;Essencial;1;"46,47";2;4;7;CLT;"0,728";1
+cli-0181;Cerrado Odonto DF;Varejo;SP;Profissional;1;"86,83";14;0;1;CLT;"0,844";4
+cli-0182;Vale Consultoria Ltda.;Agro;BA;Essencial;2;"48,69";3;0;10;CLT;"0,798";2
+cli-0183;Ponte Arquitetura;Serviços;BA;Business;12;"350,32";4;2;7;CLT;"0,641";3
+cli-0184;Sinal Seguros;Serviços;ES;Profissional;6;"136,34";8;1;8;PJ;"0,223";2
+cli-0185;Base Transportes ME;Serviços;ES;Essencial;4;"60,61";34;4;4;freelancer;"0,859";2
+cli-0186;Vetor Jurídico;Logística;SC;Essencial;1;"46,35";7;0;7;CLT;"0,821";4
+cli-0187;Norte Farma;Varejo;PR;Business;10;"312,96";11;2;8;freelancer;"0,522";0
+cli-0188;Vale Contábil;Construção;CE;Business;12;"349,81";17;1;7;PJ;"0,539";0
+cli-0189;Pulso Contábil Ltda.;Construção;SP;Essencial;1;"43,17";21;4;6;freelancer;"0,553";1
+cli-0190;Fluxo Contábil ME;Educação;GO;Business;14;"328,90";4;0;5;freelancer;"0,654";1
+cli-0191;Lumen Turismo;Jurídico;RS;Essencial;1;"42,37";10;1;7;CLT;"0,78";1
+cli-0192;Trilha Fitness;Saúde;RJ;Business;6;"240,32";5;1;9;PJ;"0,861";0
+cli-0193;Foco Imóveis;Varejo;DF;Essencial;1;"45,63";17;1;8;freelancer;"0,982";2
+cli-0194;Fluxo Móveis;Logística;RJ;Essencial;2;"44,52";25;0;7;CLT;"0,756";2
+cli-0195;Sol Gráfica ME;Construção;SP;Essencial;2;"48,36";2;2;8;freelancer;"0,577";2
+cli-0196;Pulso Educação Ltda.;Agro;MG;Business;11;"280,76";11;0;7;PJ;"0,814";1
+cli-0197;Prisma Seguros RJ;Jurídico;SC;Essencial;1;"42,83";8;8;5;CLT;"0,859";2
+cli-0198;Vetor Arquitetura;Logística;ES;Essencial;1;"47,96";21;1;6;CLT;"0,693";0
+cli-0199;Cerrado Estética;Saúde;RJ;Essencial;1;"45,53";1;1;8;CLT;"0,701";1
+cli-0200;Rota Consultoria ME;Educação;MG;Essencial;1;"41,64";4;2;6;PJ;"0,79";2
+cli-0201;Lagoa Transportes;Jurídico;SP;Essencial;1;"41,85";19;0;4;PJ;"0,624";0
+cli-0202;Sol Turismo;Jurídico;GO;Essencial;1;"45,95";14;;;freelancer;"0,783";2
+cli-0203;Vale Arquitetura Ltda.;Educação;MG;Essencial;2;"48,62";2;0;8;freelancer;"0,73";3
+cli-0204;Clave Odonto;Construção;DF;Essencial;1;"45,99";4;4;9;PJ;"0,715";1
+cli-0205;Foco Agro ME BA;Construção;PR;Profissional;1;"80,99";8;0;4;CLT;"0,57";3
+cli-0206;Nexo Gráfica;Agro;SC;Business;15;"348,68";9;0;9;PJ;"0,58";2
+cli-0207;Base Estética;Agro;RS;Essencial;1;"42,93";5;0;7;PJ;"0,929";2
+cli-0208;Órbita Imóveis;Agro;BA;Profissional;5;"109,26";3;1;8;CLT;"0,786";4
+cli-0209;Vetor Educação;Agro;PE;Profissional;13;"195,18";16;4;9;PJ;"0,826";2
+cli-0210;Alpha Educação Ltda.;Construção;PE;Essencial;1;"43,38";39;1;6;CLT;"0,341";1
+cli-0211;Norte Clínicas;Varejo;MG;Essencial;1;"42,51";3;2;6;freelancer;"0,664";2
+cli-0212;Mapa Turismo;Logística;RS;Essencial;1;"47,14";2;1;8;CLT;"0,78";3
+cli-0213;Pulso Agro;Educação;ES;Profissional;6;"137,33";19;0;7;CLT;"0,248";1
+cli-0214;Lagoa Jurídico;Saúde;RS;Profissional;3;"104,57";37;0;8;PJ;"0,807";1
+cli-0215;Eixo Imóveis ME;Serviços;PR;Essencial;7;"73,25";4;0;6;PJ;"0,694";2
+cli-0216;Norte Odonto GO;Educação;SP;Essencial;2;"45,10";67;;;CLT;"0,875";5
+cli-0217;Sinal Logística Ltda.;Varejo;SP;Profissional;7;"140,54";12;0;9;CLT;"0,903";1
+cli-0218;Marco Consultoria SC;Logística;ES;Profissional;4;"101,18";13;29;5;PJ;"0,725";2
+cli-0219;Sinal Gráfica SC;Saúde;SC;Profissional;1;"84,44";15;1;9;freelancer;"0,738";1
+cli-0220;Norte Turismo ME;Logística;PE;Business;12;"318,72";1;0;8;CLT;"0,564";2
+cli-0221;Foco Consultoria;Educação;SC;Essencial;4;"57,77";7;2;8;CLT;"0,595";2
+cli-0222;Cerrado Logística;Logística;CE;Business;13;"350,14";7;15;4;freelancer;"0,834";3
+cli-0223;Cerrado Engenharia;Agro;ES;Essencial;4;"60,25";42;1;9;CLT;"0,496";1
+cli-0224;Nexo Consultoria Ltda.;Construção;RJ;Profissional;4;"113,35";41;0;8;CLT;"0,635";1
+cli-0225;Prisma Jurídico ME;Jurídico;SP;Essencial;3;"55,01";2;0;8;freelancer;"0,653";0
+cli-0226;Rota Móveis;Saúde;SP;Profissional;7;"128,58";30;0;9;PJ;"0,369";2
+cli-0227;Sol Engenharia;Jurídico;SP;Essencial;3;"52,10";5;0;6;freelancer;"0,791";0
+cli-0228;Órbita Logística;Serviços;SP;Profissional;3;"108,14";26;0;7;CLT;"0,767";2
+cli-0229;Rota Imóveis;Jurídico;SP;Profissional;3;"105,25";21;7;6;freelancer;"0,771";1
+cli-0230;Sinal Engenharia ME;Agro;PE;Profissional;7;"122,86";26;0;8;PJ;"0,651";2
+cli-0231;Nexo Educação Ltda.;Jurídico;DF;Essencial;5;"63,68";2;2;6;PJ;"0,703";1
+cli-0232;Raiz Contábil;Agro;BA;Essencial;2;"50,01";5;22;1;CLT;"0,825";1
+cli-0233;Nexo Imóveis PR;Jurídico;DF;Profissional;8;"151,49";7;2;8;PJ;"0,524";2
+cli-0234;Vetor Clínicas;Saúde;RJ;Profissional;5;"126,05";9;2;7;CLT;"0,581";0
+cli-0235;Ponte Turismo ME;Varejo;PE;Essencial;2;"52,35";46;1;6;PJ;"0,536";5
+cli-0236;Órbita Móveis;Jurídico;SP;Essencial;3;"59,30";8;1;7;PJ;"0,689";1
+cli-0237;Marco Turismo;Serviços;RJ;Essencial;1;"46,61";30;1;7;freelancer;"0,419";0
+cli-0238;Órbita Farma Ltda.;Educação;ES;Essencial;1;"40,70";28;0;7;PJ;"0,514";2
+cli-0239;Base Turismo SP;Serviços;MG;Profissional;7;"132,96";10;12;1;freelancer;"0,745";0
+cli-0240;Nexo Móveis ME;Educação;PE;Essencial;1;"45,82";21;1;10;CLT;"0,494";0
+cli-0241;Meta Farma;Construção;RS;Profissional;2;"86,36";11;1;5;CLT;"0,763";3
+cli-0242;Raiz Pet;Logística;SP;Essencial;1;"43,37";40;0;8;freelancer;"0,935";3
+cli-0243;Trilha Móveis;Varejo;RS;Business;18;"409,05";6;0;8;PJ;"0,842";2
+cli-0244;Lumen Gráfica SC;Educação;DF;Profissional;8;"156,33";1;0;6;CLT;"0,503";2
+cli-0245;Marco Pet Ltda.;Jurídico;GO;Essencial;3;"52,70";1;1;8;CLT;"0,623";1
+cli-0246;Sinal Contábil;Construção;MG;Essencial;3;"52,69";1;0;8;freelancer;"0,594";5
+cli-0247;Prisma Jurídico;Varejo;CE;Essencial;1;"41,14";29;0;7;PJ;"0,883";0
+cli-0248;Rota Seguros;Construção;SP;Profissional;6;"127,52";38;0;8;CLT;"0,755";1
+cli-0249;Base Transportes;Varejo;SC;Essencial;3;"57,79";2;12;2;CLT;"0,582";1
+cli-0250;Serra Odonto ME;Agro;GO;Business;15;"323,20";30;0;4;PJ;"0,678";0
+cli-0251;Sol Imóveis SP;Agro;SP;Profissional;5;"124,68";17;1;8;freelancer;"0,359";2
+cli-0252;Lagoa Consultoria Ltda. SC;Logística;SP;Profissional;3;"107,81";1;;;freelancer;"0,842";2
+cli-0253;Nexo Odonto;Saúde;ES;Profissional;2;"95,60";5;1;9;freelancer;"0,753";0
+cli-0254;Pulso Clínicas;Educação;SP;Profissional;3;"94,86";29;7;3;PJ;"0,452";1
+cli-0255;Fluxo Pet ME;Varejo;PR;Profissional;3;"105,62";9;2;7;CLT;"0,595";2
+cli-0256;Ágil Gráfica ES;Educação;GO;Business;10;"292,74";1;4;1;CLT;"0,695";3
+cli-0257;Foco Arquitetura;Educação;SP;Business;10;"298,51";2;2;8;CLT;"0,833";0
+cli-0258;Raiz Jurídico;Logística;DF;Essencial;2;"46,82";3;11;4;CLT;"0,893";1
+cli-0259;Raiz Móveis Ltda.;Varejo;CE;Essencial;1;"45,03";21;3;5;CLT;"0,864";2
+cli-0260;Fluxo Farma ME PR;Logística;CE;Essencial;1;"41,89";9;3;8;PJ;"0,827";2
+cli-0261;Ipê Estética PR;Serviços;SP;Business;10;"292,69";11;1;6;CLT;"0,802";1
+cli-0262;Marco Contábil SP;Serviços;SC;Profissional;2;"98,68";10;14;5;CLT;"0,83";0
+cli-0263;Vale Engenharia SC;Educação;PR;Essencial;1;"46,01";4;1;4;CLT;"0,871";2
+cli-0264;Raiz Varejo;Saúde;SP;Essencial;1;"40,42";2;0;6;CLT;"0,552";0
+cli-0265;Raiz Educação ME;Serviços;DF;Profissional;3;"104,61";2;2;5;PJ;"0,337";1
+cli-0266;Vetor Educação Ltda.;Saúde;MG;Essencial;2;"53,27";22;4;8;PJ;"0,894";1
+cli-0267;Cerrado Gráfica;Logística;DF;Essencial;2;"53,77";12;14;3;CLT;"0,748";3
+cli-0268;Ágil Contábil;Construção;ES;Essencial;1;"47,33";19;1;8;CLT;"0,561";1
+cli-0269;Norte Estética SC;Jurídico;PE;Business;7;"286,38";8;1;5;CLT;"0,921";0
+cli-0270;Lumen Pet ME;Jurídico;SC;Profissional;4;"101,84";1;4;6;CLT;"0,843";2
+cli-0271;Serra Varejo;Educação;DF;Essencial;3;"49,83";18;3;7;CLT;"0,86";0
+cli-0272;Meta Logística PE;Construção;MG;Profissional;4;"103,39";16;0;9;CLT;"0,716";0
+cli-0273;Foco Contábil Ltda.;Jurídico;PE;Profissional;6;"130,59";13;0;8;PJ;"0,678";1
+cli-0274;Fluxo Estética;Logística;RS;Profissional;7;"146,64";4;21;1;CLT;"0,611";3
+cli-0275;Trilha Engenharia ME;Agro;RS;Essencial;2;"50,50";25;0;7;PJ;"0,96";1
+cli-0276;Ponte Farma;Logística;GO;Essencial;7;"78,92";3;2;7;PJ;"0,786";0
+cli-0277;Sinal Logística;Agro;PR;Profissional;7;"145,33";31;3;9;freelancer;"0,597";1
+cli-0278;Lumen Arquitetura;Educação;PE;Essencial;2;"49,13";15;30;4;freelancer;"0,681";2
+cli-0279;Raiz Transportes;Educação;MG;Essencial;1;"45,87";13;3;8;PJ;"0,871";1
+cli-0280;Ipê Transportes Ltda.;Agro;CE;Profissional;5;"127,86";26;2;8;CLT;"0,829";1
+cli-0281;Norte Clínicas DF;Educação;SC;Profissional;5;"115,66";7;0;8;CLT;"0,849";1
+cli-0282;Base Seguros;Serviços;PR;Profissional;7;"142,78";3;0;9;freelancer;"0,924";0
+cli-0283;Sinal Logística ES;Serviços;SC;Business;21;"415,98";9;0;9;PJ;"0,733";4
+cli-0284;Ipê Eventos;Varejo;CE;Profissional;8;"152,44";12;2;8;CLT;"0,765";2
+cli-0285;Eixo Consultoria ME;Saúde;BA;Profissional;5;"125,11";9;0;4;freelancer;"0,642";0
+cli-0286;Lagoa Logística SP;Agro;CE;Essencial;1;"44,84";3;0;9;freelancer;"0,842";1
+cli-0287;Fluxo Contábil Ltda.;Jurídico;PE;Essencial;1;"43,65";3;1;4;freelancer;"0,632";1
+cli-0288;Marco Odonto;Logística;MG;Profissional;5;"129,64";1;2;8;freelancer;"0,774";0
+cli-0289;Marco Seguros;Logística;CE;Essencial;1;"40,91";15;4;8;PJ;"0,461";1
+cli-0290;Marco Logística ME;Logística;SP;Essencial;2;"45,98";17;0;8;CLT;"0,924";0
+cli-0291;Raiz Consultoria;Varejo;BA;Profissional;6;"121,87";27;2;7;PJ;"0,706";0
+cli-0292;Vale Consultoria;Serviços;ES;Business;17;"358,09";2;1;9;PJ;"0,817";2
+cli-0293;Alpha Pet;Logística;GO;Essencial;1;"43,14";6;0;7;PJ;"0,666";3
+cli-0294;Marco Arquitetura Ltda.;Varejo;DF;Business;13;"342,62";20;0;8;CLT;"0,825";3
+cli-0295;Cerrado Móveis ME;Construção;RJ;Essencial;2;"49,81";29;0;9;CLT;"0,717";1
+cli-0296;Ágil Jurídico;Educação;ES;Essencial;2;"46,36";5;3;5;CLT;"0,484";3
+cli-0297;Cerrado Clínicas;Construção;RS;Essencial;1;"47,55";8;0;6;freelancer;"0,6";2
+cli-0298;Sinal Odonto;Jurídico;SP;Essencial;2;"50,45";1;10;5;CLT;"0,566";3
+cli-0299;Alpha Estética;Saúde;PE;Profissional;3;"96,44";51;1;8;CLT;"0,574";0
+cli-0300;Ipê Pet ME;Agro;SP;Profissional;6;"136,13";1;2;4;freelancer;"0,707";1
+cli-0301;Cerrado Clínicas Ltda.;Agro;ES;Essencial;2;"47,66";15;3;7;PJ;"0,678";1
+cli-0302;Meta Fitness PE;Construção;SC;Profissional;7;"132,39";1;21;1;CLT;"0,782";2
+cli-0303;Base Educação;Construção;SC;Essencial;2;"46,11";17;0;6;PJ;"0,819";3
+cli-0304;Lumen Engenharia;Agro;PR;Essencial;1;"46,90";4;2;9;CLT;"0,932";1
+cli-0305;Eixo Arquitetura ME;Construção;SP;Business;11;"294,37";2;2;10;CLT;"0,375";2
+cli-0306;Ponte Agro;Jurídico;SP;Essencial;3;"52,96";3;2;4;PJ;"0,528";3
+cli-0307;Meta Eventos;Serviços;RS;Profissional;5;"108,52";18;1;8;CLT;"0,744";3
+cli-0308;Eixo Estética Ltda.;Serviços;GO;Essencial;1;"42,76";1;2;6;PJ;"0,483";1
+cli-0309;Clave Móveis;Logística;RJ;Profissional;5;"116,98";2;0;6;CLT;"0,752";4
+cli-0310;Rota Gráfica ME;Serviços;ES;Profissional;5;"126,99";83;2;6;PJ;"0,946";1
+cli-0311;Clave Agro;Educação;SP;Essencial;1;"46,96";27;1;8;freelancer;"0,775";2
+cli-0312;Marco Varejo;Jurídico;SP;Essencial;2;"53,84";1;2;2;CLT;"0,696";1
+cli-0313;Sinal Varejo;Logística;BA;Essencial;1;"45,58";32;1;9;PJ;"0,745";2
+cli-0314;Clave Odonto BA;Saúde;SC;Profissional;5;"120,38";8;0;7;CLT;"0,718";1
+cli-0315;Órbita Imóveis Ltda. SP;Jurídico;PE;Essencial;4;"59,60";3;1;6;CLT;"0,807";1
+cli-0316;Alpha Imóveis;Serviços;MG;Essencial;5;"64,60";8;0;5;CLT;"0,961";3
+cli-0317;Ponte Logística;Jurídico;CE;Essencial;4;"60,82";1;0;8;CLT;"0,555";1
+cli-0318;Base Contábil;Jurídico;SP;Essencial;1;"39,86";20;;;PJ;"0,858";3
+cli-0319;Vetor Eventos;Educação;SP;Essencial;1;"44,68";6;3;8;CLT;"0,621";0
+cli-0320;Alpha Agro ME;Varejo;RJ;Essencial;3;"53,39";5;1;8;CLT;"0,492";1
+cli-0321;Serra Consultoria;Saúde;PR;Profissional;2;"98,85";1;0;10;CLT;"0,871";0
+cli-0322;Meta Varejo Ltda. CE;Saúde;GO;Profissional;6;"128,51";3;1;7;CLT;"0,607";5
+cli-0323;Clave Gráfica;Varejo;ES;Essencial;1;"47,16";17;0;7;CLT;"0,839";2
+cli-0324;Norte Farma PR;Construção;SC;Business;10;"318,11";22;0;10;CLT;"0,751";2
+cli-0325;Ágil Varejo ME;Saúde;GO;Profissional;7;"136,02";23;3;9;CLT;"0,809";2
+cli-0326;Pulso Contábil RJ;Construção;CE;Essencial;1;"40,56";1;4;7;freelancer;"0,469";2
+cli-0327;Serra Clínicas SP;Educação;PE;Business;16;"351,41";50;4;2;PJ;"0,894";2
+cli-0328;Ponte Pet;Saúde;RS;Essencial;2;"45,04";5;0;7;CLT;"0,836";2
+cli-0329;Raiz Varejo Ltda.;Saúde;SP;Business;11;"284,18";6;0;8;CLT;"0,783";0
+cli-0330;Pulso Gráfica ME;Educação;RS;Essencial;3;"58,56";3;0;7;CLT;"0,678";3
+cli-0331;Rota Jurídico;Varejo;PR;Essencial;2;"53,75";1;0;6;PJ;"0,76";4
+cli-0332;Clave Transportes;Serviços;PR;Essencial;3;"52,66";17;0;6;freelancer;"0,946";0
+cli-0333;Clave Fitness;Jurídico;RJ;Essencial;1;"44,58";20;2;9;CLT;"0,988";1
+cli-0334;Cerrado Seguros;Serviços;RS;Essencial;6;"63,53";2;0;6;CLT;"0,622";0
+cli-0335;Base Contábil ME;Saúde;SP;Profissional;10;"158,51";33;0;4;freelancer;"0,785";2
+cli-0336;Vale Logística Ltda.;Serviços;MG;Essencial;2;"48,52";1;0;2;CLT;"0,712";1
+cli-0337;Vale Pet SP;Construção;GO;Profissional;6;"132,08";1;0;10;PJ;"0,66";2
+cli-0338;Vetor Turismo;Construção;PR;Profissional;7;"123,13";42;1;9;CLT;"0,684";1
+cli-0339;Meta Varejo;Jurídico;SP;Essencial;1;"44,80";21;0;6;CLT;"0,752";2
+cli-0340;Vale Móveis ME;Jurídico;PR;Essencial;2;"53,58";38;1;7;PJ;"0,918";1
+cli-0341;Ágil Odonto RS;Saúde;RJ;Profissional;7;"143,73";1;4;5;CLT;"0,475";2
+cli-0342;Base Agro;Construção;RJ;Essencial;1;"46,81";2;13;4;CLT;"0,877";0
+cli-0343;Marco Móveis Ltda.;Construção;BA;Essencial;2;"51,68";3;1;7;CLT;"0,346";0
+cli-0344;Ipê Odonto;Logística;PE;Essencial;4;"54,52";15;1;9;CLT;"0,482";1
+cli-0345;Serra Consultoria ME;Agro;SP;Profissional;2;"96,93";1;;;CLT;"0,878";1
+cli-0346;Fluxo Pet SC;Serviços;SP;Business;12;"346,77";9;0;7;freelancer;"0,369";2
+cli-0347;Clave Clínicas;Logística;GO;Business;15;"333,17";16;3;7;PJ;"0,225";1
+cli-0348;Ágil Clínicas;Logística;RJ;Essencial;4;"56,88";1;;;freelancer;"0,571";0
+cli-0349;Lumen Turismo CE;Jurídico;RS;Essencial;1;"46,88";1;5;8;CLT;"0,729";2
+cli-0350;Nexo Arquitetura Ltda. CE;Jurídico;RS;Essencial;1;"46,17";16;2;4;PJ;"0,65";0
+cli-0351;Pulso Engenharia;Educação;SP;Essencial;2;"45,25";18;0;6;PJ;"0,356";1
+cli-0352;Alpha Imóveis RS;Saúde;PR;Essencial;1;"42,11";66;0;7;CLT;"0,825";2
+cli-0353;Nexo Pet;Varejo;CE;Business;14;"310,69";1;0;5;freelancer;"0,709";1
+cli-0354;Alpha Gráfica PE;Educação;RJ;Essencial;1;"41,42";1;2;6;CLT;"0,904";1
+cli-0355;Vetor Turismo ME;Serviços;ES;Essencial;1;"47,52";9;1;9;PJ;"0,841";1
+cli-0356;Marco Contábil;Jurídico;GO;Profissional;5;"111,08";12;0;4;CLT;"0,805";2
+cli-0357;Sol Estética Ltda.;Varejo;PR;Essencial;1;"47,73";18;1;9;PJ;"0,848";1
+cli-0358;Raiz Arquitetura GO;Serviços;DF;Profissional;4;"118,19";1;1;8;PJ;"0,412";0
+cli-0359;Vale Educação;Saúde;ES;Profissional;4;"102,19";6;2;8;CLT;"0,602";0
+cli-0360;Lumen Jurídico ME;Varejo;SP;Profissional;5;"113,66";5;20;2;CLT;"0,794";4
+cli-0361;Sinal Arquitetura;Educação;MG;Essencial;3;"49,83";2;13;1;freelancer;"0,772";1
+cli-0362;Mapa Contábil;Varejo;BA;Profissional;3;"103,38";57;0;6;PJ;"0,921";2
+cli-0363;Rota Clínicas SP;Saúde;PR;Essencial;3;"51,78";32;0;6;PJ;"0,777";2
+cli-0364;Cerrado Agro Ltda.;Educação;SP;Essencial;1;"47,43";3;0;6;PJ;"0,637";2
+cli-0365;Rota Varejo ME;Saúde;CE;Profissional;12;"157,62";1;6;7;freelancer;"0,561";3
+cli-0366;Vale Arquitetura;Educação;PE;Profissional;2;"87,90";13;1;8;PJ;"0,945";2
+cli-0367;Marco Gráfica;Jurídico;CE;Essencial;1;"48,08";9;0;7;CLT;"0,838";1
+cli-0368;Foco Logística;Varejo;GO;Essencial;3;"58,05";37;3;8;CLT;"0,708";2
+cli-0369;Clave Contábil DF;Serviços;MG;Profissional;4;"102,07";8;1;4;CLT;"0,742";1
+cli-0370;Lumen Farma ME;Serviços;RS;Essencial;3;"55,47";11;0;7;freelancer;"0,599";3
+cli-0371;Sinal Agro Ltda.;Construção;RS;Essencial;1;"45,08";62;0;6;freelancer;"0,888";1
+cli-0372;Foco Educação;Construção;ES;Profissional;6;"116,16";2;0;7;PJ;"0,449";2
+cli-0373;Meta Estética;Jurídico;SC;Profissional;4;"115,74";4;3;7;freelancer;"0,709";2
+cli-0374;Prisma Clínicas PR;Varejo;MG;Profissional;9;"150,65";62;0;8;freelancer;"0,773";2
+cli-0375;Norte Fitness ME;Saúde;SP;Business;15;"360,41";1;0;5;PJ;"0,891";2
+cli-0376;Sinal Eventos DF;Logística;SP;Essencial;3;"55,79";33;1;8;CLT;"0,479";3
+cli-0377;Foco Clínicas BA;Construção;SP;Essencial;2;"44,10";19;0;8;CLT;"0,614";1
+cli-0378;Eixo Seguros Ltda.;Construção;ES;Business;6;"247,09";40;1;8;CLT;"0,95";1
+cli-0379;Ágil Seguros;Educação;SP;Profissional;6;"127,02";3;1;5;PJ;"0,667";1
+cli-0380;Mapa Logística ME;Serviços;RJ;Profissional;4;"109,79";5;0;4;CLT;"0,843";2
+cli-0381;Eixo Contábil SP;Logística;ES;Profissional;3;"103,90";21;0;8;PJ;"0,487";0
+cli-0382;Sinal Consultoria MG;Educação;DF;Profissional;6;"123,94";8;5;2;PJ;"0,966";0
+cli-0383;Meta Arquitetura GO;Agro;DF;Business;11;"308,14";6;0;8;freelancer;"0,542";0
+cli-0384;Serra Fitness SP;Agro;SC;Profissional;3;"101,58";14;13;6;PJ;"0,817";2
+cli-0385;Órbita Logística Ltda.;Varejo;RS;Profissional;7;"128,97";6;9;7;PJ;"0,67";0
+cli-0386;Foco Odonto;Logística;RS;Business;10;"313,12";21;7;6;PJ;"0,421";0
+cli-0387;Prisma Seguros PE;Educação;PR;Business;17;"341,14";8;0;8;freelancer;"0,694";4
+cli-0388;Foco Fitness SP;Construção;GO;Essencial;2;"49,51";6;1;8;CLT;"0,788";0
+cli-0389;Vetor Varejo;Agro;SP;Essencial;2;"47,34";69;0;7;freelancer;"0,662";5
+cli-0390;Lagoa Transportes ME;Logística;CE;Essencial;4;"53,94";38;0;8;PJ;"0,243";1
+cli-0391;Norte Educação;Agro;ES;Profissional;2;"97,25";13;0;9;PJ;"0,857";0
+cli-0392;Sol Educação Ltda.;Construção;SP;Essencial;2;"46,55";5;4;2;CLT;"0,937";2
+cli-0393;Prisma Estética PE;Serviços;CE;Essencial;2;"47,16";1;0;7;PJ;"0,965";2
+cli-0394;Mapa Clínicas;Serviços;PR;Essencial;1;"42,86";3;1;8;CLT;"0,819";1
+cli-0395;Foco Jurídico ME;Varejo;DF;Essencial;2;"50,72";9;0;8;CLT;"0,616";0
+cli-0396;Lumen Pet;Construção;SP;Business;10;"291,70";3;0;4;PJ;"0,835";0
+cli-0397;Cerrado Seguros RJ;Logística;SP;Essencial;1;"47,41";4;3;4;CLT;"0,407";1
+cli-0398;Nexo Arquitetura CE;Educação;SC;Business;18;"413,58";26;0;4;CLT;"0,86";0
+cli-0399;Cerrado Móveis Ltda.;Agro;RJ;Essencial;1;"46,11";1;0;7;freelancer;"0,482";2
+cli-0400;Sinal Educação ME SP;Construção;DF;Profissional;2;"96,94";1;0;7;PJ;"0,928";0
+cli-0401;Fluxo Varejo;Saúde;ES;Essencial;1;"43,69";12;0;9;freelancer;"0,843";1
+cli-0402;Ponte Varejo DF;Serviços;PE;Essencial;1;"42,77";31;0;8;PJ;"0,81";2
+cli-0403;Clave Pet;Educação;PE;Business;11;"282,93";8;1;9;CLT;"0,474";0
+cli-0404;Marco Arquitetura;Logística;RJ;Business;13;"350,31";12;0;7;PJ;"0,589";1
+cli-0405;Sinal Educação ME;Saúde;SP;Profissional;10;"169,72";9;8;2;CLT;"0,745";0
+cli-0406;Vale Engenharia Ltda.;Serviços;ES;Profissional;3;"108,38";8;0;6;CLT;"0,853";4
+cli-0407;Serra Contábil;Construção;GO;Essencial;3;"59,39";25;0;6;freelancer;"0,811";2
+cli-0408;Alpha Jurídico;Agro;SC;Essencial;1;"44,82";40;1;7;CLT;"0,782";2
+cli-0409;Alpha Seguros;Educação;DF;Essencial;1;"39,74";2;0;9;CLT;"0,69";3
+cli-0410;Norte Arquitetura ME;Varejo;PR;Essencial;1;"45,73";4;1;9;PJ;"0,851";2
+cli-0411;Trilha Engenharia;Saúde;PE;Essencial;1;"39,80";10;3;8;CLT;"0,58";0
+cli-0412;Pulso Móveis;Educação;ES;Profissional;6;"133,20";1;2;9;CLT;"0,833";2
+cli-0413;Alpha Transportes Ltda.;Saúde;RS;Essencial;1;"39,69";20;0;6;CLT;"0,942";1
+cli-0414;Base Consultoria;Serviços;SP;Business;10;"274,45";1;0;9;CLT;"0,897";2
+cli-0415;Sol Logística ME;Saúde;MG;Essencial;3;"52,80";8;30;4;CLT;"0,531";0
+cli-0416;Alpha Educação CE;Educação;PR;Profissional;8;"135,05";7;1;9;PJ;"0,683";0
+cli-0417;Marco Jurídico;Serviços;ES;Business;10;"317,92";6;3;3;freelancer;"0,813";3
+cli-0418;Vale Seguros GO;Logística;PR;Profissional;3;"100,10";17;2;4;CLT;"0,689";0
+cli-0419;Eixo Farma;Construção;BA;Profissional;5;"121,32";21;2;8;CLT;"0,557";3
+cli-0420;Cerrado Estética Ltda. RS;Logística;SP;Essencial;1;"41,23";17;1;3;CLT;"0,579";3
+cli-0421;Norte Imóveis;Construção;RS;Essencial;5;"60,10";29;4;9;PJ;"0,722";0
+cli-0422;Trilha Odonto PR;Varejo;SP;Essencial;2;"52,75";13;0;6;CLT;"0,784";1
+cli-0423;Meta Seguros;Educação;RJ;Essencial;3;"56,79";3;0;7;PJ;"0,7";0
+cli-0424;Sinal Farma MG;Jurídico;SP;Business;18;"406,16";14;1;8;freelancer;"0,712";1
+cli-0425;Órbita Agro ME;Serviços;SP;Profissional;5;"115,92";3;1;5;freelancer;"0,356";2
+cli-0426;Fluxo Pet;Serviços;SP;Profissional;5;"122,97";2;0;10;CLT;"0,86";3
+cli-0427;Alpha Jurídico Ltda.;Logística;MG;Essencial;2;"51,41";21;0;6;CLT;"0,823";1
+cli-0428;Vale Educação BA;Serviços;SP;Profissional;6;"125,79";1;0;7;CLT;"0,511";3
+cli-0429;Sinal Transportes;Jurídico;SP;Essencial;2;"53,41";14;6;2;CLT;"0,717";0
+cli-0430;Órbita Turismo ME;Logística;SP;Profissional;9;"140,56";5;1;8;CLT;"0,761";1
+cli-0431;Foco Odonto PE;Agro;ES;Essencial;2;"51,53";27;0;8;PJ;"0,623";2
+cli-0432;Ágil Fitness;Serviços;RJ;Essencial;1;"46,44";5;0;5;CLT;"0,677";1
+cli-0433;Ágil Logística RS;Serviços;CE;Profissional;9;"136,59";18;2;7;freelancer;"0,91";4
+cli-0434;Vale Móveis Ltda.;Jurídico;SP;Profissional;7;"142,96";16;2;6;PJ;"0,818";1
+cli-0435;Lagoa Eventos ME;Varejo;ES;Essencial;3;"51,37";12;;;PJ;"0,957";0
+cli-0436;Rota Odonto;Construção;DF;Profissional;6;"119,61";7;0;7;CLT;"0,809";0
+cli-0437;Nexo Estética;Agro;RJ;Essencial;1;"44,84";29;0;7;CLT;"0,814";2
+cli-0438;Fluxo Imóveis RS;Educação;RJ;Business;9;"298,74";4;30;3;PJ;"0,754";3
+cli-0439;Alpha Transportes;Logística;RJ;Essencial;2;"47,14";9;0;5;freelancer;"0,943";1
+cli-0440;Base Odonto ME;Saúde;GO;Essencial;2;"48,91";12;1;9;freelancer;"0,725";4
+cli-0441;Trilha Arquitetura Ltda.;Educação;DF;Business;15;"373,17";43;0;7;PJ;"0,578";1
+cli-0442;Foco Estética SP;Educação;RJ;Profissional;6;"129,48";10;0;5;CLT;"0,899";2
+cli-0443;Meta Gráfica GO;Logística;SP;Essencial;3;"58,03";1;0;8;CLT;"0,893";0
+cli-0444;Meta Educação;Logística;PR;Profissional;12;"180,82";10;0;7;CLT;"0,915";0
+cli-0445;Cerrado Educação ME;Construção;SP;Business;13;"327,02";1;6;10;freelancer;"0,788";2
+cli-0446;Alpha Eventos;Saúde;SP;Profissional;4;"106,85";15;0;3;PJ;"0,429";1
+cli-0447;Prisma Odonto;Serviços;SP;Profissional;6;"134,51";8;2;8;PJ;"0,859";0
+cli-0448;Clave Engenharia Ltda.;Varejo;SP;Essencial;1;"42,40";13;1;9;PJ;"0,545";3
+cli-0449;Cerrado Odonto;Construção;PE;Profissional;3;"94,23";18;1;8;CLT;"0,647";0
+cli-0450;Serra Varejo ME;Varejo;CE;Essencial;1;"45,60";54;0;7;PJ;"0,801";2
+cli-0451;Trilha Jurídico GO;Educação;ES;Business;15;"328,01";3;2;5;CLT;"0,733";2
+cli-0452;Cerrado Engenharia SC;Varejo;CE;Essencial;1;"41,20";42;0;9;CLT;"0,884";2
+cli-0453;Base Farma;Varejo;ES;Profissional;6;"122,92";8;0;3;freelancer;"0,786";4
+cli-0454;Trilha Educação PR;Varejo;SP;Business;13;"332,60";11;0;7;CLT;"0,852";2
+cli-0455;Marco Varejo Ltda.;Serviços;SP;Essencial;2;"44,81";1;0;9;PJ;"0,776";1
+cli-0456;Alpha Fitness;Construção;CE;Essencial;2;"50,21";2;1;6;PJ;"0,666";1
+cli-0457;Sinal Educação ES;Serviços;SC;Essencial;5;"66,79";13;2;5;PJ;"0,872";2
+cli-0458;Eixo Móveis;Varejo;RS;Essencial;2;"44,15";10;1;8;freelancer;"0,685";2
+cli-0459;Pulso Contábil;Educação;PE;Business;17;"347,22";45;0;5;CLT;"0,572";0
+cli-0460;Pulso Jurídico ME;Saúde;RS;Profissional;3;"94,72";11;4;9;CLT;"0,924";2
+cli-0461;Órbita Turismo PR;Serviços;BA;Profissional;5;"112,88";14;1;6;PJ;"0,918";1
+cli-0462;Base Contábil Ltda.;Saúde;RS;Essencial;1;"41,62";1;1;9;PJ;"0,527";2
+cli-0463;Ponte Transportes RJ;Agro;ES;Profissional;5;"123,10";54;0;6;PJ;"0,884";1
+cli-0464;Pulso Arquitetura;Agro;RJ;Essencial;1;"44,23";12;0;9;CLT;"0,874";1
+cli-0465;Fluxo Clínicas ME;Serviços;DF;Business;15;"348,00";7;2;8;CLT;"0,83";5
+cli-0466;Sol Educação SP;Educação;GO;Essencial;2;"53,34";6;16;2;PJ;"0,549";1
+cli-0467;Pulso Varejo BA;Jurídico;GO;Essencial;3;"53,31";12;0;9;PJ;"0,538";0
+cli-0468;Rota Consultoria;Construção;SP;Profissional;8;"146,56";5;0;3;PJ;"0,865";2
+cli-0469;Norte Educação Ltda. RJ;Educação;PE;Profissional;5;"130,35";17;2;6;CLT;"0,457";2
+cli-0470;Ipê Pet ME DF;Serviços;CE;Business;7;"248,60";8;3;7;CLT;"0,497";4
+cli-0471;Serra Logística SP;Educação;DF;Essencial;3;"55,85";1;4;6;CLT;"0,85";3
+cli-0472;Clave Turismo;Serviços;BA;Profissional;6;"128,95";1;0;10;PJ;"0,93";0
+cli-0473;Clave Engenharia;Educação;BA;Essencial;2;"53,78";10;2;8;CLT;"0,566";0
+cli-0474;Fluxo Varejo ES;Jurídico;PR;Profissional;3;"105,20";2;3;6;CLT;"0,622";0
+cli-0475;Sol Arquitetura ME;Varejo;SC;Profissional;4;"105,72";1;0;8;CLT;"0,488";2
+cli-0476;Órbita Contábil Ltda.;Logística;DF;Essencial;2;"49,13";1;0;7;CLT;"0,822";2
+cli-0477;Ipê Contábil;Jurídico;CE;Profissional;6;"126,54";2;0;4;PJ;"0,699";2
+cli-0478;Eixo Odonto;Jurídico;RS;Business;8;"253,81";1;3;6;PJ;"0,757";0
+cli-0479;Ipê Engenharia BA;Serviços;SP;Essencial;1;"42,75";1;2;9;PJ;"0,797";0
+cli-0480;Eixo Contábil ME;Construção;MG;Essencial;1;"47,84";4;11;3;CLT;"0,799";0
+cli-0481;Fluxo Farma;Varejo;BA;Profissional;8;"155,44";25;0;10;CLT;"0,459";3
+cli-0482;Ipê Móveis;Jurídico;RJ;Essencial;2;"51,96";29;1;6;PJ;"0,838";1
+cli-0483;Clave Estética Ltda.;Agro;PR;Essencial;1;"41,31";1;1;9;freelancer;"0,591";4
+cli-0484;Sol Logística;Serviços;ES;Essencial;3;"55,76";5;1;8;PJ;"0,775";0
+cli-0485;Ipê Estética ME;Jurídico;CE;Profissional;2;"98,29";4;0;8;CLT;"0,355";2
+cli-0486;Nexo Arquitetura SP;Agro;PE;Essencial;2;"51,12";2;6;2;CLT;"0,707";2
+cli-0487;Órbita Consultoria GO;Educação;SP;Essencial;3;"58,48";9;2;3;freelancer;"0,65";1
+cli-0488;Ponte Consultoria MG;Construção;PR;Essencial;1;"46,10";2;1;7;CLT;"0,662";1
+cli-0489;Marco Logística;Logística;BA;Business;7;"273,48";20;3;8;freelancer;"0,715";4
+cli-0490;Clave Farma Ltda.;Logística;GO;Essencial;6;"63,58";1;3;9;freelancer;"0,551";1
+cli-0491;Vale Móveis SP;Serviços;CE;Profissional;3;"106,66";44;1;10;CLT;"0,805";1
+cli-0492;Foco Agro RJ;Agro;RS;Essencial;1;"46,75";8;4;8;CLT;"0,862";1
+cli-0493;Base Fitness;Saúde;SC;Essencial;1;"42,17";4;0;9;freelancer;"0,87";2
+cli-0494;Foco Seguros;Educação;PR;Essencial;4;"64,14";1;3;7;PJ;"0,56";3
+cli-0495;Ágil Farma ME PR;Jurídico;MG;Profissional;1;"93,33";5;2;3;CLT;"0,753";1
+cli-0496;Meta Seguros BA;Jurídico;MG;Essencial;3;"54,05";7;0;6;CLT;"0,784";1
+cli-0497;Rota Estética Ltda.;Educação;ES;Essencial;3;"55,88";8;1;4;freelancer;"0,501";1
+cli-0498;Órbita Turismo;Educação;RJ;Essencial;4;"59,26";15;0;7;freelancer;"0,702";1
+cli-0499;Rota Engenharia SP;Saúde;BA;Essencial;2;"50,90";32;1;9;PJ;"0,621";4
+cli-0500;Rota Odonto ME;Serviços;SC;Essencial;5;"62,24";31;0;7;freelancer;"0,774";5

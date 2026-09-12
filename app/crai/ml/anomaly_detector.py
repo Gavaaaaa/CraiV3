@@ -9,6 +9,7 @@ Produção: autoencoder treinado por train(), com artefatos em crai/models/.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import joblib
@@ -21,8 +22,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from . import calibracao
+from .calibracao import conferir_meta
 from .synthetic_data import (
     BEHAVIORAL_FEATURES,
+    _behavioral_population,
     generate_behavioral_dataset,
     seed_por_cliente,
 )
@@ -73,6 +77,12 @@ class AnomalyDetector:
         self.threshold = None
         self.features = BEHAVIORAL_FEATURES
         self._train_metrics: dict = {}
+        self.meta: dict = {}
+        # Fonte com que o artefato carregado/treinado foi gerado. Decide como
+        # `_behavioral_snapshot` simula o cliente na inferência: um modelo
+        # treinado com parâmetros calibrados precisa de um snapshot na mesma
+        # escala, senão TODO cliente vira anomalia. "sintetico" = caminho antigo.
+        self._fonte = "sintetico"
 
     # ══════════════════════════════════════════════════════════════════════
     # TREINO
@@ -90,6 +100,7 @@ class AnomalyDetector:
         patience: int = 10,
         threshold_percentile: float = 95.0,
         seed: int = 42,
+        fonte: str = "sintetico",
     ) -> dict:
         """
         Treina o autoencoder em dataset comportamental sintético e retorna métricas.
@@ -111,10 +122,14 @@ class AnomalyDetector:
             patience: Épocas sem melhora antes do early stopping
             threshold_percentile: Percentil do erro dos saudáveis que vira threshold
             seed: Seed para reprodutibilidade
+            fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
+                   (parâmetros medidos em doadores reais + exceções ao rótulo)
 
         Returns:
-            Dicionário com métricas de treino (ROC-AUC, precision/recall, threshold)
+            Dicionário com métricas de treino (ROC-AUC, precision/recall, threshold),
+            mais `fonte_usada`, `n_amostras`, `proveniencia` e `versoes`.
         """
+        calibracao.validar_fonte(fonte)
         if not TORCH_AVAILABLE:
             raise RuntimeError(
                 "PyTorch não instalado — necessário para treinar o autoencoder "
@@ -124,11 +139,12 @@ class AnomalyDetector:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        print("[ANOMALY] Gerando dataset comportamental sintético...")
+        print(f"[ANOMALY] Gerando dataset comportamental sintético (fonte={fonte})...")
         df = generate_behavioral_dataset(
-            n_samples=n_samples, anomaly_rate=anomaly_rate, seed=seed
+            n_samples=n_samples, anomaly_rate=anomaly_rate, seed=seed, fonte=fonte
         )
         self.features = list(BEHAVIORAL_FEATURES)
+        self._fonte = fonte
 
         saudaveis = df[df["is_anomalous"] == 0]
         anomalos = df[df["is_anomalous"] == 1]
@@ -159,6 +175,11 @@ class AnomalyDetector:
 
         metrics = self._evaluate(X_val_s, X_anomalous, threshold_percentile, historico)
         metrics["n_train_healthy"] = int(len(X_train))
+        metrics["fonte_usada"] = fonte
+        metrics["n_amostras"] = int(n_samples)
+        metrics["proveniencia"] = calibracao.resumo_proveniencia("AnomalyDetector", fonte)
+        metrics["versoes"] = calibracao.versoes_bibliotecas()
+        metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
         self._train_metrics = metrics
         self.is_fitted = True
 
@@ -305,7 +326,15 @@ class AnomalyDetector:
             "n_anomalos_avaliacao": metrics["n_anomalous"],
             "roc_auc": metrics["roc_auc"],
             "seed": seed,
+            "modelo": "AnomalyDetector",
+            "algoritmo": "autoencoder denso 12-32-16-4-16-32-12 (PyTorch)",
+            "fonte_usada": metrics["fonte_usada"],
+            "n_amostras": metrics["n_amostras"],
+            "proveniencia": metrics["proveniencia"],
+            "versoes": metrics["versoes"],
+            "treinado_em": metrics["treinado_em"],
         }
+        self.meta = meta
         with open(MODELS_DIR / "autoencoder_meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
@@ -329,6 +358,8 @@ class AnomalyDetector:
             self.model.load_state_dict(torch.load(MODELS_DIR / "autoencoder.pt"))
             self.model.eval()
             self.scaler = joblib.load(MODELS_DIR / "autoencoder_scaler.pkl")
+            self.meta = conferir_meta(MODELS_DIR / "autoencoder_meta.json", "ANOMALY")
+            self._fonte = self.meta.get("fonte_usada", "sintetico")
 
             self.is_fitted = True
             print(f"[ANOMALY] Autoencoder carregado de {MODELS_DIR}/ (threshold={self.threshold:.4f})")
@@ -377,9 +408,21 @@ class AnomalyDetector:
 
         Determinístico por customer_id: ~15% dos clientes exibem o padrão
         degradado (queda de uso, fricção alta) usado no treino como anomalia.
+
+        Com um artefato treinado em fonte="sintetico_calibrado", o snapshot é
+        sorteado com os MESMOS parâmetros calibrados do treino (via
+        `_behavioral_population`), senão a escala não bate e o autoencoder
+        marca todo mundo como anômalo. O caminho default é o de sempre.
         """
         rng = np.random.default_rng(seed=seed_por_cliente(customer_id))
         degradado = rng.uniform() < 0.15
+
+        if self._fonte != "sintetico":
+            P = calibracao.parametros(self._fonte)["behavioral"]
+            linha = _behavioral_population(1, rng, anomalous=bool(degradado), parametros=P)
+            return {f: (float(linha.at[0, f]) if f in ("mrr_brl", "feature_adoption",
+                                                      "avg_session_min", "nps_last")
+                        else int(linha.at[0, f])) for f in BEHAVIORAL_FEATURES}
 
         seats = int(np.clip(rng.poisson(lam=15), 1, 200))
         if degradado:

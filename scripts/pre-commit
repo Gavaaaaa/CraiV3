@@ -9,17 +9,17 @@
 #     git commit --no-verify
 #
 # Verifica duas coisas nos arquivos ESTAGIADOS:
-#   1. Nenhum arquivo .env / .env.* (excecao: .env.example)
+#   1. Nenhum arquivo .env / .env.* — sem excecao. O repositorio nao tem
+#      arquivo de exemplo de .env; as variaveis estao em docs/CONFIGURACAO.md.
 #   2. Nenhum valor que pareca uma chave real de API
 #
 # Sem dependencias externas: apenas sh + git + grep.
 
 BLOQUEIOS=0
 
-# ── 1. Arquivos .env reais ────────────────────────────────────────────
+# ── 1. Arquivos .env ──────────────────────────────────────────────────
 ARQUIVOS_ENV=$(git diff --cached --name-only --diff-filter=ACM \
-  | grep -E '(^|/)\.env($|\.)' \
-  | grep -v -E '(^|/)\.env\.example$')
+  | grep -E '(^|/)\.env($|\.)')
 
 if [ -n "$ARQUIVOS_ENV" ]; then
   echo "[SECURITY] Commit bloqueado — arquivo .env estagiado:"
@@ -29,7 +29,7 @@ if [ -n "$ARQUIVOS_ENV" ]; then
 fi
 
 # ── 2. Padroes de chave real no conteudo estagiado ────────────────────
-# Os placeholders de .env.example (sk-ant-..., whsec_...) nao casam,
+# Placeholders escritos em documentacao (sk-ant-..., whsec_...) nao casam,
 # pois os padroes exigem 8+ caracteres alfanumericos reais apos o prefixo.
 PADROES='sk-ant-[A-Za-z0-9_-]{8,}'
 PADROES="$PADROES|sk_live_[A-Za-z0-9]{8,}"

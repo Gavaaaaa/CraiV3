@@ -37,9 +37,15 @@ joblib==1.4.2
 # torch e prophet sao usados no treino dos Modulos 2 e 3 (autoencoder e LSTM).
 # Sem eles, os dois modulos caem no fallback heuristico e o resto roda normal.
 # Para CPU (suficiente para este projeto), instale o torch pelo indice de CPU:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-torch>=2.3
-prophet>=1.1
+#   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# Versoes EXATAS (nao faixas): um .joblib/.pt gravado com uma versao e aberto
+# com outra carrega com aviso, carrega errado em silencio ou nao carrega. As
+# versoes usadas em cada treino ficam gravadas no meta.json do artefato
+# (`crai/ml/calibracao.versoes_bibliotecas`), e `load()` avisa nominalmente
+# quando o ambiente diverge. Os valores abaixo sao os do requirements-lock.txt.
+torch==2.13.0
+prophet==1.4.0
 
 # ── Pagamentos ────────────────────────────────────────────
 stripe==10.12.0

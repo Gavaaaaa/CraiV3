@@ -1,0 +1,137 @@
+Importing plotly failed. Interactive plots will not work.
+21:41:48 - cmdstanpy - INFO - Chain [1] start processing
+21:41:48 - cmdstanpy - INFO - Chain [1] done processing
+21:41:48 - cmdstanpy - INFO - Chain [1] start processing
+21:41:48 - cmdstanpy - INFO - Chain [1] done processing
+21:41:49 - cmdstanpy - INFO - Chain [1] start processing
+21:41:49 - cmdstanpy - INFO - Chain [1] done processing
+
+======================================================================
+  CRAI -- TREINO COMPLETO DOS MODELOS DE ML
+======================================================================
+  Artefatos serao salvos em: /home/claude/Crai/app/models/
+  Fonte dos parametros: sintetico_calibrado
+
+======================================================================
+  MODULO 1/3 -- Failure Classifier (XGBoost + Random Forest + SHAP)
+======================================================================
+[CLASSIFIER] Gerando dataset sintético (fonte=sintetico_calibrado)...
+[CLASSIFIER] Treinando XGBoost...
+[CLASSIFIER] Treinando Random Forest...
+[CLASSIFIER] Inicializando SHAP explainers...
+[CLASSIFIER] Modelos salvos em /home/claude/Crai/app/models/
+[CLASSIFIER] Treino concluído — AUC: 0.669 | e-Profit médio (teste): R$ 143.76
+[CLASSIFIER] Limiar do relatório 0.25 -> recall 0.911, acurácia 0.525
+[CLASSIFIER] Recall OPERACIONAL (regra de e-Profit, que é quem decide): 1.000 — 0 recuperável(is) perdido(s)
+[CLASSIFIER] artefato treinado com fonte=sintetico_calibrado, n_amostras=3000
+[CLASSIFIER] Modelos carregados de /home/claude/Crai/app/models/
+
+======================================================================
+  MODULO 2/3 -- Anomaly Detector (Autoencoder PyTorch)
+======================================================================
+[ANOMALY] Gerando dataset comportamental sintético (fonte=sintetico_calibrado)...
+[ANOMALY] Treinando autoencoder (12→4→12) em 4254 clientes saudáveis...
+[ANOMALY]   época   1 | train 1.00046 | val 1.02091
+[ANOMALY]   época  10 | train 0.54969 | val 0.54240
+[ANOMALY]   época  20 | train 0.45995 | val 0.44767
+[ANOMALY]   época  30 | train 0.41815 | val 0.40449
+[ANOMALY]   época  40 | train 0.39477 | val 0.37851
+[ANOMALY]   época  50 | train 0.37905 | val 0.36588
+[ANOMALY]   época  60 | train 0.37252 | val 0.35588
+[ANOMALY]   época  70 | train 0.36594 | val 0.34854
+[ANOMALY]   época  80 | train 0.35940 | val 0.34278
+[ANOMALY]   época  90 | train 0.35731 | val 0.33636
+[ANOMALY]   época 100 | train 0.35345 | val 0.33339
+[ANOMALY] Modelos salvos em /home/claude/Crai/app/models/
+[ANOMALY] Treino concluído — ROC-AUC: 0.979 | recall: 0.899 | threshold: 0.8717 | separação: 4.5x
+[ANOMALY] artefato treinado com fonte=sintetico_calibrado, n_amostras=5500
+[ANOMALY] Autoencoder carregado de /home/claude/Crai/app/models/ (threshold=0.8717)
+
+======================================================================
+  MODULO 3/3 -- Payday Inference (LSTM + Prophet)
+======================================================================
+[PAYDAY] Gerando séries de liquidez sintéticas (fonte=sintetico_calibrado)...
+[PAYDAY] Treinando LSTM (64 unid., 2 camadas) em 8160 janelas de 480 clientes...
+[PAYDAY]   época   1 | train 0.62199 | val 0.49624
+[PAYDAY]   época   5 | train 0.34058 | val 0.33007
+[PAYDAY]   época  10 | train 0.31292 | val 0.29839
+[PAYDAY]   época  15 | train 0.28778 | val 0.27468
+[PAYDAY]   época  20 | train 0.27015 | val 0.26479
+[PAYDAY]   época  25 | train 0.26176 | val 0.26041
+[PAYDAY]   época  30 | train 0.25593 | val 0.25358
+[PAYDAY]   época  35 | train 0.25102 | val 0.25240
+[PAYDAY]   época  40 | train 0.24697 | val 0.25230
+[PAYDAY] Ajustando priors sazonais (Prophet) por perfil...
+[PAYDAY]   prophet CLT         | 180 dias | liquidez média 78.9%
+[PAYDAY]   prophet PJ          | 180 dias | liquidez média 33.8%
+[PAYDAY]   prophet freelancer  | 180 dias | liquidez média 62.5%
+[PAYDAY] Modelos salvos em /home/claude/Crai/app/models/
+[PAYDAY] Treino concluído — ROC-AUC diário: 0.942 | MAE da janela: 0.68 dia(s) (heurística: 4.43) | acerto ±1d: 89.7%
+[PAYDAY] artefato treinado com fonte=sintetico_calibrado, n_amostras=600
+[PAYDAY] LSTM + 3 Prophets carregados de /home/claude/Crai/app/models/
+
+======================================================================
+  EXTRA -- risk_scorer voluntario (candidato, GradientBoosting)
+======================================================================
+[RISK-VOL] Gerando dataset de risco voluntario (fonte=sintetico_calibrado)...
+[RISK-VOL] Treinando GradientBoosting em 1600 eventos...
+[RISK-VOL] Candidato salvo em /home/claude/Crai/app/models/voluntary_risk_candidato.joblib (NAO ativo: o scorer continua nas regras ate `ativar()`)
+[RISK-VOL] Treino concluido — AUC vs rotulo: 0.713 (teto das regras: 0.741) | corr com as regras: 0.942
+[RISK-VOL] artefato treinado com fonte=sintetico_calibrado, n_amostras=2000
+[RISK-VOL] Modelo carregado de /home/claude/Crai/app/models/voluntary_risk_candidato.joblib
+
+======================================================================
+  RESUMO DO TREINO
+======================================================================
+
+  Fonte: sintetico_calibrado | amostras: classifier 3000 / anomaly 5500 / payday 600 / voluntario 2000
+  Proveniencia classifier: ancoradas 2 | proxy fraco 4 | sinteticas puras 6
+  Proveniencia anomaly   : ancoradas 1 | proxy fraco 3 | sinteticas puras 9
+  Proveniencia payday    : ancoradas 0 | proxy fraco 0 | sinteticas puras 5
+
+  [1] Failure Classifier -- ensemble XGBoost (70%) + Random Forest (30%)
+      AUC-ROC              : 0.6695
+      Acuracia             : 0.5250
+      Recall (recuperado)  : 0.9114
+      e-Profit medio       : R$ 143.76
+      Clientes e-Profit>0  : 600/600
+
+  [2] Anomaly Detector -- autoencoder treinado so em clientes saudaveis
+      ROC-AUC              : 0.9789
+      Average Precision    : 0.9503
+      Precision @ threshold: 0.9213
+      Recall @ threshold   : 0.8990
+      Threshold (p95)       : 0.8717
+      Separacao saudavel/anomalo: 4.5x
+      Epocas treinadas     : 100
+
+  [3] Payday Inference -- LSTM individual + prior sazonal Prophet
+      ROC-AUC diario (LSTM/Prophet/ensemble): 0.9546 / 0.6957 / 0.9418
+      MAE da janela otima  : 0.68 dia(s) (heuristica: 4.43)
+      Acerto exato / +-1d  : 81.1% / 89.7%
+      Epocas treinadas     : 40
+      Por perfil (MAE heuristica -> ensemble):
+        CLT        : 5.60 -> 0.21 dias (582 janelas)
+        PJ         : 3.22 -> 1.14 dias (296 janelas)
+        freelancer : 2.76 -> 1.36 dias (194 janelas)
+
+  [extra] risk_scorer voluntario -- candidato (NAO ativo)
+      AUC vs rotulo        : 0.7133 (teto das regras: 0.7405)
+      Corr. com as regras  : 0.9415 | MAE vs regra 0.0561
+
+  Versoes gravadas no meta.json: sklearn 1.5.2 | xgboost 2.1.1 | torch 2.13.0+cu130 | prophet 1.4.0
+
+----------------------------------------------------------------------
+  VERIFICACAO DE CARREGAMENTO (load() apos train())
+----------------------------------------------------------------------
+    classifier  : OK
+    anomaly     : OK
+    payday      : OK
+    voluntario  : OK
+
+======================================================================
+  Tempo total: 69.4s | Artefatos em: /home/claude/Crai/app/models/
+======================================================================
+
+  Metricas gravadas em /tmp/claude-0/-home-claude/c51807b4-feea-5cff-ae53-48c1c31b3b2f/scratchpad/resultados/rodada_baixa.json
+

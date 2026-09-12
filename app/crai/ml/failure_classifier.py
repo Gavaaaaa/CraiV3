@@ -33,7 +33,9 @@ from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
 from ..config import CUSTOS_PADRAO, custo_intervencao, custos_por_canal
-from .synthetic_data import generate_dataset
+from . import calibracao
+from .calibracao import conferir_meta
+from .synthetic_data import SEED, generate_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -190,24 +192,37 @@ class FailureClassifier:
         self._xgb_explainer: Optional[shap.TreeExplainer] = None
         self._rf_explainer: Optional[shap.TreeExplainer] = None
         self._train_metrics: dict = {}
+        self.meta: dict = {}
 
     # ══════════════════════════════════════════════════════════════════════
     # TREINO
     # ══════════════════════════════════════════════════════════════════════
 
-    def train(self, n_samples: int = 3000, test_size: float = 0.2) -> dict:
+    def train(self, n_samples: int = 3000, test_size: float = 0.2,
+              fonte: str = "sintetico", seed: int = SEED) -> dict:
         """
         Treina o ensemble em dataset sintético e retorna métricas.
 
         Args:
             n_samples: Tamanho do dataset sintético
             test_size: Fração para teste
+            fonte: "sintetico" (default — o gerador de sempre, saída idêntica
+                   à de antes deste parâmetro existir) ou "sintetico_calibrado"
+                   (parâmetros medidos em doadores reais, `models/calibracao.json`)
+            seed: seed do GERADOR (default 42, o de sempre). O split e os
+                  modelos continuam com random_state=42 — o parâmetro existe
+                  para a curva de volume (`scripts/sanity_check_fora_do_dominio`)
+                  medir variância entre datasets, não para mudar o default.
 
         Returns:
-            Dicionário com métricas de treino (AUC, report, e-Profit médio)
+            Dicionário com métricas de treino (AUC, report, e-Profit médio),
+            mais `fonte_usada`, `n_amostras`, `proveniencia` (quais features
+            são ancoradas em real vs. sintéticas puras) e `versoes` das
+            bibliotecas usadas neste treino.
         """
-        print("[CLASSIFIER] Gerando dataset sintético...")
-        df = generate_dataset(n_samples=n_samples)
+        calibracao.validar_fonte(fonte)
+        print(f"[CLASSIFIER] Gerando dataset sintético (fonte={fonte})...")
+        df = generate_dataset(n_samples=n_samples, seed=seed, fonte=fonte)
 
         # Separar LTV antes de preparar features (não entra no treino)
         ltv_series = df["ltv_estimated"].copy()
@@ -241,7 +256,32 @@ class FailureClassifier:
 
         # Calcular métricas no conjunto de teste
         metrics = self._evaluate(X_test, y_test, ltv_test)
+
+        # Rastreabilidade do treino: de onde veio o dado, quanto dado, quais
+        # features têm doador real e com que versão de biblioteca o binário
+        # foi gravado. Vai no retorno E no meta.json ao lado do .joblib.
+        metrics["fonte_usada"] = fonte
+        metrics["n_amostras"] = int(n_samples)
+        metrics["n_treino"] = int(len(X_train))
+        metrics["n_teste"] = int(len(X_test))
+        metrics["proveniencia"] = calibracao.resumo_proveniencia("FailureClassifier", fonte)
+        metrics["versoes"] = calibracao.versoes_bibliotecas()
+        metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
         self._train_metrics = metrics
+        self.meta = {
+            "modelo": "FailureClassifier",
+            "algoritmo": "XGBClassifier (0,7) + RandomForestClassifier (0,3)",
+            "features": self.feature_names,
+            "fonte_usada": fonte,
+            "n_amostras": int(n_samples),
+            "n_treino": int(len(X_train)),
+            "n_teste": int(len(X_test)),
+            "auc": metrics["auc"],
+            "limiar_classificacao": LIMIAR_CLASSIFICACAO,
+            "proveniencia": metrics["proveniencia"],
+            "versoes": metrics["versoes"],
+            "treinado_em": metrics["treinado_em"],
+        }
 
         # Salvar modelos
         self._save_models()
@@ -685,6 +725,11 @@ class FailureClassifier:
         with open(MODELS_DIR / "train_metrics.json", "w", encoding="utf-8") as f:
             json.dump(self._train_metrics, f, ensure_ascii=False, indent=2, default=str)
 
+        # meta.json: fonte, volume, proveniência e versões — o mesmo contrato
+        # dos módulos 2 e 3 (`autoencoder_meta.json`, `payday_meta.json`).
+        with open(MODELS_DIR / "failure_classifier_meta.json", "w", encoding="utf-8") as f:
+            json.dump(self.meta, f, ensure_ascii=False, indent=2, default=str)
+
         print(f"[CLASSIFIER] Modelos salvos em {MODELS_DIR}/")
 
     def load(self) -> bool:
@@ -697,6 +742,8 @@ class FailureClassifier:
 
             self._xgb_explainer = shap.TreeExplainer(self.xgb)
             self._rf_explainer = shap.TreeExplainer(self.rf)
+
+            self.meta = conferir_meta(MODELS_DIR / "failure_classifier_meta.json", "CLASSIFIER")
 
             self.is_fitted = True
             print(f"[CLASSIFIER] Modelos carregados de {MODELS_DIR}/")

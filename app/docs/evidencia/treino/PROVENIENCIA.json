@@ -1,0 +1,415 @@
+{
+  "gerado_por": "crai/scripts/preparar_amostra_real.py",
+  "gerado_em": "2026-09-11T21:31:34+00:00",
+  "seed": 42,
+  "n_amostra": 300,
+  "fonte_a": {
+    "nome": "Brazilian E-Commerce Public Dataset by Olist",
+    "licenca": "CC BY-NC-SA 4.0 (nao comercial)",
+    "origem_canonica": "kaggle.com/datasets/olistbr/brazilian-ecommerce",
+    "espelho_usado": "https://raw.githubusercontent.com/dujiaying/olist/master/data",
+    "sha256_arquivos": {
+      "olist_order_payments_dataset.csv": "4f713964f2815dbbaa40b9488268c55aac3627bfce5aa96cf58d1f3616de3cc0",
+      "olist_orders_dataset.csv": "8df58ef3d2d7e9944010f7beecd9b75367f5588ec6e3c91cec19ae3345ef9ecf",
+      "olist_customers_dataset.csv": "983a422239e1712ded753b3bf9ecf47dc73f144d306029dcfa99e70a226883d2"
+    },
+    "linhas_populacao_filtrada": 103877,
+    "periodo": [
+      "2016-09-04 21:15:19",
+      "2018-10-17 17:30:18"
+    ]
+  },
+  "fonte_b": {
+    "nome": "BACEN SGS",
+    "licenca": "ODbL",
+    "series": {
+      "21084": null,
+      "21129": null
+    },
+    "serie_21084_usada": {
+      "media": 3.92,
+      "ultimo": 5.81,
+      "n_obs": 79,
+      "origem": "DECLARADO no DATA_CARD 3 — API e cache indisponiveis nesta execucao"
+    }
+  },
+  "fonte_e": {
+    "nome": "Ecommerce Customer Churn Analysis and Prediction",
+    "licenca": "nao declarada na pagina do Kaggle — uso academico apenas, bruto fora do git",
+    "origem_canonica": "kaggle.com/datasets/ankitverma2010/ecommerce-customer-churn-analysis-and-prediction",
+    "espelho_usado": "https://raw.githubusercontent.com/JamshidSalimov/Ai-Fayls/master/E-Commerce-Dataset.xlsx",
+    "sha256_arquivo_bruto": "db70f1e34bc5326887ea3fb3d2a0854e82c577d55ef3a76fdfb25328631bd44d",
+    "n_linhas": 5630,
+    "colunas_usadas": [
+      "Churn",
+      "Tenure",
+      "DaySinceLastOrder",
+      "OrderCount",
+      "HourSpendOnApp",
+      "Complain",
+      "SatisfactionScore"
+    ],
+    "nulos_por_coluna": {
+      "Churn": 0,
+      "Tenure": 264,
+      "DaySinceLastOrder": 307,
+      "OrderCount": 258,
+      "HourSpendOnApp": 255,
+      "Complain": 0,
+      "SatisfactionScore": 0
+    },
+    "taxa_churn": 0.1684,
+    "describe": {
+      "Tenure": {
+        "count": 5366.0,
+        "mean": 10.1899,
+        "std": 8.5572,
+        "min": 0.0,
+        "25%": 2.0,
+        "50%": 9.0,
+        "75%": 16.0,
+        "max": 61.0
+      },
+      "DaySinceLastOrder": {
+        "count": 5323.0,
+        "mean": 4.5435,
+        "std": 3.6544,
+        "min": 0.0,
+        "25%": 2.0,
+        "50%": 3.0,
+        "75%": 7.0,
+        "max": 46.0
+      },
+      "OrderCount": {
+        "count": 5372.0,
+        "mean": 3.008,
+        "std": 2.9397,
+        "min": 1.0,
+        "25%": 1.0,
+        "50%": 2.0,
+        "75%": 3.0,
+        "max": 16.0
+      },
+      "HourSpendOnApp": {
+        "count": 5375.0,
+        "mean": 2.9315,
+        "std": 0.7219,
+        "min": 0.0,
+        "25%": 2.0,
+        "50%": 3.0,
+        "75%": 3.0,
+        "max": 5.0
+      },
+      "Complain": {
+        "count": 5630.0,
+        "mean": 0.2849,
+        "std": 0.4514,
+        "min": 0.0,
+        "25%": 0.0,
+        "50%": 0.0,
+        "75%": 1.0,
+        "max": 1.0
+      },
+      "SatisfactionScore": {
+        "count": 5630.0,
+        "mean": 3.0668,
+        "std": 1.3802,
+        "min": 1.0,
+        "25%": 2.0,
+        "50%": 3.0,
+        "75%": 4.0,
+        "max": 5.0
+      }
+    },
+    "arquivo_derivado": {
+      "nome": "ecommerce_churn.csv",
+      "sha256": "78e1e80a86446288e2bef89bffac5fb9ae91146d1faf69522ebbd55e7ae82fdc"
+    },
+    "papel_do_churn": "NAO entra em parametro nem em treino; so na checagem fora do dominio (scripts/sanity_check_fora_do_dominio.py)"
+  },
+  "amostra": {
+    "arquivo": "amostra_300.csv",
+    "sha256": "39485c22968bd7336174f8ba2683991cd5b04024156f39e7625830b56d617427",
+    "mix_payment_type": {
+      "credit_card": 222,
+      "boleto": 57,
+      "voucher": 17,
+      "debit_card": 4
+    },
+    "valor": {
+      "min": 0.99,
+      "media": 142.17,
+      "mediana": 100.57,
+      "max": 1312.67
+    }
+  },
+  "proveniencia_features": {
+    "FailureClassifier": [
+      {
+        "feature": "tenure_months",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mistura exponencial+uniforme a mao"
+      },
+      {
+        "feature": "day_of_month",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.day",
+        "nota": "histograma empirico do dia de order_purchase_timestamp, suavizacao 0,5 por dia"
+      },
+      {
+        "feature": "invoice_amount",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "MLE de log(payment_value) nas 300 reais (Fonte A). Mediana ~R$ 100: ticket de e-commerce, nao de SaaS B2B (DATA_CARD 2.3)."
+      },
+      {
+        "feature": "avg_ticket",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "derivada de invoice_amount x U(0,85; 1,15); a relacao ticket/fatura e inventada"
+      },
+      {
+        "feature": "gateway_error_code",
+        "status": "proxy_fraco",
+        "fonte": "B: BACEN SGS 21084",
+        "coluna": "serie 21084 (inadimplencia PF)",
+        "nota": "fatia de insufficient_funds x 1.482 (ultimo/media da SGS 21084: 5.81/3.92, origem: DECLARADO no DATA_CARD 3 — API e cache indisponiveis nesta execucao); demais codigos renormalizados. Hipotese declarada no DATA_CARD 3."
+      },
+      {
+        "feature": "card_brand",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix de bandeiras a mao"
+      },
+      {
+        "feature": "payment_history_score",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) + tenure, a mao"
+      },
+      {
+        "feature": "failure_count_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(1,5) a mao"
+      },
+      {
+        "feature": "hour_of_day",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.hour",
+        "nota": "histograma empirico da hora de compra (proxy: hora de compra em e-commerce, nao hora de cobranca de assinatura)"
+      },
+      {
+        "feature": "day_of_week",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.dayofweek",
+        "nota": "histograma empirico do dia da semana da compra (proxy)"
+      },
+      {
+        "feature": "attempt_count",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix 45/30/15/10 a mao"
+      },
+      {
+        "feature": "recovered (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "modelo causal declarado (DATA_CARD 7) + N(0, 0,05) + Bernoulli + 2% das linhas com rotulo sorteado ao acaso, ignorando a regra. Pequeno de proposito: cada ponto custa AUC e o gate G3 exige AUC >= 0,70; o objetivo e impedir que o modelo decore a formula, nao apagar o sinal"
+      }
+    ],
+    "AnomalyDetector": [
+      {
+        "feature": "tenure_days",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "gamma(2,5; 180) a mao"
+      },
+      {
+        "feature": "mrr_brl",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal(8,5; 0,7) a mao"
+      },
+      {
+        "feature": "seats",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(15) a mao"
+      },
+      {
+        "feature": "logins_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "fracao de logins_30d a mao"
+      },
+      {
+        "feature": "logins_30d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "normal(seats x 18 / x 5) a mao"
+      },
+      {
+        "feature": "feature_adoption",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) / beta(2,5) a mao"
+      },
+      {
+        "feature": "avg_session_min",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "HourSpendOnApp",
+        "nota": "proxy fraco: HourSpendOnApp e horas/dia no app, nao minutos por sessao. Calibrado SO o coeficiente de variacao (0.2462); a escala (22 / 6 min) continua inventada."
+      },
+      {
+        "feature": "api_calls_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal a mao"
+      },
+      {
+        "feature": "days_since_last_login",
+        "status": "ancorada",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "DaySinceLastOrder",
+        "nota": "saudavel: media de DaySinceLastOrder (4.543 dias, n=5323) como scale da exponencial. Anomalo: saudavel + 7.5 dias (o deslocamento que o gerador default ja tinha). O corte por Churn do doador NAO foi usado para separar as populacoes: nele quem cancela tem MENOS dias desde o ultimo pedido, o inverso da hipotese do gerador — declarado, nao escondido."
+      },
+      {
+        "feature": "tickets_30d",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "Complain",
+        "nota": "proxy fraco: Complain e um flag 0/1, nao contagem de tickets. lambda da Poisson = P(Complain) por populacao do doador (Churn=0: 0.2341; Churn=1: 0.5359) — unica feature em que a direcao do doador coincide com a do gerador."
+      },
+      {
+        "feature": "failed_pay_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "binomial(3; 0,05 / 0,35) a mao"
+      },
+      {
+        "feature": "nps_last",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "SatisfactionScore",
+        "nota": "proxy fraco: SatisfactionScore 1-5 reescalado x2 para 0-10 (saudavel: media 6.134, sd 2.760). Anomalo: media x 0.6707 (razao do gerador default). No doador quem cancela e MAIS satisfeito em media — direcao inversa, nao usada."
+      },
+      {
+        "feature": "is_anomalous (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "populacao de origem; 15% dos anomalos recebem 3 das 8 features comportamentais da distribuicao saudavel (churn silencioso); 5% dos saudaveis recebem 2 features da distribuicao anomala (degradacao passageira)"
+      }
+    ],
+    "PaydayInference": [
+      {
+        "feature": "balance_norm",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador publico para saldo diario de cliente: perfis CLT/PJ/freelancer, ancoras de payday e gasto diario continuam inventados (DATA_CARD 6: 'nao calibravel')"
+      },
+      {
+        "feature": "has_liquidity (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "saldo >= 1 mensalidade; 10% das entradas chegam 1-5 dias depois: a LSTM nao pode aprender so o calendario; 2% dos dias com gasto extra de 0,5-1,5 mensalidade"
+      },
+      {
+        "feature": "day_of_month (sin/cos)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "calendario"
+      },
+      {
+        "feature": "weekday",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "calendario"
+      },
+      {
+        "feature": "profile (CLT/PJ/freelancer)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix 50/30/20 a mao"
+      }
+    ],
+    "risk_scorer_voluntario": [
+      {
+        "feature": "days_since_last",
+        "status": "ancorada",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "DaySinceLastOrder",
+        "nota": "histograma empirico de DaySinceLastOrder (n=5323, 0-46 dias) — mesma unidade da feature"
+      },
+      {
+        "feature": "features_used_30d",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "OrderCount",
+        "nota": "proxy fraco: OrderCount (pedidos acumulados, n=5372) no lugar de features distintas usadas em 30 dias"
+      },
+      {
+        "feature": "mrr",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: lognormal inventada (mean 7,5 / sigma 0,8, R$ 99-50.000)"
+      },
+      {
+        "feature": "evento_cancelamento",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "evento_downgrade",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "evento_sessao",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "churn (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "churn = Bernoulli(regras fixas do risk_scorer + N(0, 0,08)), com 3% de excecoes ao acaso. Nao e churn observado: e o que as regras dizem, com ruido suficiente para o modelo nao decorar a formula."
+      }
+    ]
+  }
+}

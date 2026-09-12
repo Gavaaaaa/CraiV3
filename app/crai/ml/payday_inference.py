@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
+from . import calibracao
+from .calibracao import conferir_meta
 from .synthetic_data import generate_liquidity_series, seed_por_cliente
 
 try:
@@ -83,6 +85,7 @@ class PaydayInference:
         self.model = None
         self.priors = {}
         self._train_metrics: dict = {}
+        self.meta: dict = {}
 
     # ══════════════════════════════════════════════════════════════════════
     # TREINO
@@ -99,6 +102,7 @@ class PaydayInference:
         hidden_size: int = 64,
         patience: int = 6,
         seed: int = 42,
+        fonte: str = "sintetico",
     ) -> dict:
         """
         Treina a LSTM de liquidez + os Prophets por perfil e retorna métricas.
@@ -118,10 +122,15 @@ class PaydayInference:
             hidden_size: Unidades ocultas da LSTM
             patience: Épocas sem melhora antes do early stopping
             seed: Seed para reprodutibilidade
+            fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
+                   (mesmas séries + choques anti-circularidade; não há doador
+                   real para saldo diário — ver calibracao.json)
 
         Returns:
-            Dicionário com métricas (ROC-AUC diário, MAE da janela ótima vs heurística)
+            Dicionário com métricas (ROC-AUC diário, MAE da janela ótima vs heurística),
+            mais `fonte_usada`, `n_amostras`, `proveniencia` e `versoes`.
         """
+        calibracao.validar_fonte(fonte)
         if not TORCH_AVAILABLE or not PROPHET_AVAILABLE:
             raise RuntimeError(
                 "torch e prophet são necessários para treinar o módulo de liquidez "
@@ -131,8 +140,9 @@ class PaydayInference:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        print("[PAYDAY] Gerando séries de liquidez sintéticas...")
-        df = generate_liquidity_series(n_customers=n_samples, n_days=n_days, seed=seed)
+        print(f"[PAYDAY] Gerando séries de liquidez sintéticas (fonte={fonte})...")
+        df = generate_liquidity_series(n_customers=n_samples, n_days=n_days, seed=seed,
+                                       fonte=fonte)
 
         rng = np.random.default_rng(seed)
         clientes = np.sort(df["customer_id"].unique())
@@ -173,6 +183,11 @@ class PaydayInference:
         metrics = self._evaluate(df_teste, historico)
         metrics["n_clientes_treino"] = len(clientes_treino)
         metrics["n_janelas_treino"] = int(len(X_tr))
+        metrics["fonte_usada"] = fonte
+        metrics["n_amostras"] = int(n_samples)
+        metrics["proveniencia"] = calibracao.resumo_proveniencia("PaydayInference", fonte)
+        metrics["versoes"] = calibracao.versoes_bibliotecas()
+        metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
         self._train_metrics = metrics
 
         self._save_models(hidden_size, seed, metrics)
@@ -449,7 +464,15 @@ class PaydayInference:
             "roc_auc_ensemble": metrics["roc_auc_ensemble"],
             "mae_dias_ensemble": metrics["mae_dias_ensemble"],
             "seed": seed,
+            "modelo": "PaydayInference",
+            "algoritmo": "LSTM seq2vec (PyTorch) 0,6 + Prophet por perfil 0,4",
+            "fonte_usada": metrics["fonte_usada"],
+            "n_amostras": metrics["n_amostras"],
+            "proveniencia": metrics["proveniencia"],
+            "versoes": metrics["versoes"],
+            "treinado_em": metrics["treinado_em"],
         }
+        self.meta = meta
         with open(MODELS_DIR / "payday_meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
 
@@ -464,6 +487,7 @@ class PaydayInference:
         try:
             with open(MODELS_DIR / "payday_meta.json", encoding="utf-8") as f:
                 meta = json.load(f)
+            self.meta = conferir_meta(MODELS_DIR / "payday_meta.json", "PAYDAY")
             self.model = LiquidityLSTM(hidden_size=meta["hidden_size"])
             self.model.load_state_dict(torch.load(MODELS_DIR / "payday_lstm.pt"))
             self.model.eval()

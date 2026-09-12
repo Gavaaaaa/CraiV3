@@ -6,8 +6,8 @@ Agente autônomo de recuperação de receita: churn involuntário + churn volunt
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env
-# edite .env — só ANTHROPIC_API_KEY é necessária para mensagens reais via Claude
+# crie .env com ENV=development — as variáveis estão em ../docs/CONFIGURACAO.md
+# para mensagens reais via Claude, acrescente ANTHROPIC_API_KEY ao .env
 
 python test_pipeline.py
 ```

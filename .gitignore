@@ -45,7 +45,6 @@ app/vault/
 # Ambiente
 .env
 .env.*
-!.env.example
 .venv/
 venv/
 
@@ -71,6 +70,11 @@ app/relatorio_execucao.html
 app/relatorio_clientes.db
 app/painel_teste.db
 app/clientes_local.db
+app/clientes_dev.db
+# Qualquer SQLite criado em app/: ja sao quatro nomes diferentes, e listar um
+# a um garante que o quinto passe. Nenhum .db e versionado neste repositorio.
+app/*.db
+app/*.db-journal
 
 # Cobertura
 .coverage
