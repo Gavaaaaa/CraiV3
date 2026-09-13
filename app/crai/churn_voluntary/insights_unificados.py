@@ -73,6 +73,9 @@ def _linha_do_sdk(ciclo: dict) -> dict:
         "explicacao": explicacao,
         "email": None,
         "importado_em": None,
+        # O evento pontual não tem base para se comparar: é sempre a régua
+        # global. Guardar a distribuição para o SDK é tarefa de outra sessão.
+        "origem_da_regua": batch_scoring.REGUA_GLOBAL,
         "origem": ORIGEM_SDK,
         "atualizado_em": ciclo.get("registrado_em"),
         "evento": evento,

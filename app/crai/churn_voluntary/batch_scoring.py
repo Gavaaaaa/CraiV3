@@ -23,14 +23,36 @@ Com UMA das duas presente, o motor roda com o default da outra, e a explicação
 diz qual faltou — a empresa vê que o número é parcial em vez de descobrir
 depois.
 
+A RÉGUA DA BASE. As regras fixas comparam `days_since_last` com 30 e
+`features_used_30d` com 5 — constantes iguais para toda base. Como
+`pontuar_base` já lê a base inteira do tenant antes de pontuar, ele calcula
+ali, em memória, os percentis 50/75/90 das duas colunas (`regua_da_base`) e
+pontua cada cliente pela POSIÇÃO dele na própria base
+(`risk_scorer.risco_por_posicao`). Nada é gravado e nenhum schema muda.
+REGRA DE SEGURANÇA: com menos de `MINIMO_LINHAS_REGUA_DA_BASE` linhas
+utilizáveis em qualquer das duas colunas, ou com distribuição degenerada, a
+régua é a global e o número é IDÊNTICO ao de antes. Cada linha do ranking diz
+qual régua usou em `origem_da_regua`, e a explicação diz em português.
+POSIÇÃO ORDENA, CRITICIDADE EXIGE SINAL ABSOLUTO: na régua da base, "alto" e
+"critico" por risco só saem se o cliente também cruzou o piso absoluto de
+desengajamento (`risk_scorer.sinal_absoluto_de_desengajamento`). Numa base
+saudável a lista continua ordenada — "por quem eu começo?" — e ninguém vira
+alarme.
+
 Sem estado, sem escrita: é leitura + cálculo. O que persiste é a base (Sprint
 2) e, no caminho do SDK, o log de ciclos; este módulo não grava nada.
 """
 
 import logging
 
+import numpy as np
+
 from . import clientes_importados
-from .risk_scorer import classify_criticality, risco_por_features
+from .risk_scorer import (HIGH_RISK_THRESHOLD, PISO_ABSOLUTO_DIAS_SEM_LOGIN,
+                          classify_criticality, desengajamento_de_uso,
+                          is_critical_risk, modelo_ativo, posicao_na_base,
+                          risco_por_features, risco_por_posicao,
+                          sinal_absoluto_de_desengajamento)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +63,96 @@ TEXTO_SEM_DADO = ("sem dado de atividade — impossível avaliar risco de churn 
 # Ordem de exibição da criticidade quando o risco empata (e para o frontend
 # filtrar por "mínima"): maior primeiro.
 ORDEM_CRITICIDADE = {"critico": 3, "alto": 2, "padrao": 1, CRITICIDADE_SEM_DADO: 0}
+
+# ── Régua da base ────────────────────────────────────────────────────────
+REGUA_BASE = "base_do_tenant"
+REGUA_GLOBAL = "padrao_global"
+CAMPOS_DA_REGUA = ("days_since_last", "features_used_30d")
+# Cada coluna olha para a cauda onde o sinal mora: em dias sem login, MAIS é
+# pior (cauda alta); em funcionalidades usadas, MENOS é pior (cauda baixa).
+PERCENTIS_DA_REGUA = {
+    "days_since_last":   {"p50": 50, "p75": 75, "p90": 90},
+    "features_used_30d": {"p10": 10, "p25": 25, "p50": 50},
+}
+# O percentil que precisa ser > 0 para haver distribuição: se 90% da base
+# tem 0 dias sem login, ou se metade da base usa 0 funcionalidades, não há
+# posição a medir naquela coluna.
+_PERCENTIL_DE_REFERENCIA = {"days_since_last": "p90", "features_used_30d": "p50"}
+MINIMO_LINHAS_REGUA_DA_BASE = 30
+
+
+def regua_da_base(base: list[dict]):
+    """Os percentis da base: p50/p75/p90 de `days_since_last` e p10/p25/p50 de
+    `features_used_30d`.
+
+    Nulos são ignorados, e `n` diz quantas linhas entraram no cálculo de cada
+    coluna. Devolve None — "use a régua global" — quando a base não sustenta
+    uma régua própria: menos de `MINIMO_LINHAS_REGUA_DA_BASE` valores em
+    qualquer das duas colunas, ou percentil de referência zero (a base
+    concentrada num ponto só, sem distribuição para se comparar).
+    """
+    regua = {}
+    for campo in CAMPOS_DA_REGUA:
+        valores = []
+        for c in base:
+            v = c.get(campo)
+            if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            v = float(v)
+            if np.isfinite(v) and v >= 0:
+                valores.append(v)
+        if len(valores) < MINIMO_LINHAS_REGUA_DA_BASE:
+            return None
+        percentis = PERCENTIS_DA_REGUA[campo]
+        p = np.percentile(valores, list(percentis.values()))
+        resumo = {chave: round(float(x), 3) for chave, x in zip(percentis, p)}
+        if resumo[_PERCENTIL_DE_REFERENCIA[campo]] <= 0:
+            return None
+        resumo["n"] = len(valores)
+        regua[campo] = resumo
+    regua["n_linhas"] = len(base)
+    regua["n_utilizaveis"] = sum(
+        1 for c in base if any(c.get(campo) is not None for campo in CAMPOS_DA_REGUA))
+    return regua
+
+
+def _frase_de_inatividade(pos: float) -> str:
+    """Como o dono do SaaS deve ler a posição de 'dias sem login' na base dele.
+
+    Comparações ESTRITAS: quem está exatamente no p90 ganha a frase do p75.
+    Com empates no percentil, "acima de 90%" seria a afirmação mais forte do
+    que os dados sustentam; a frase mais fraca é sempre verdadeira.
+    """
+    if pos > 0.9:
+        return "acima de 90% da sua base"
+    if pos > 0.75:
+        return "acima de 75% da sua base"
+    if pos > 0.5:
+        return "acima da metade da sua base"
+    return "dentro do normal da sua base"
+
+
+def _frase_de_uso(desengajamento: float) -> str:
+    """Idem para 'funcionalidades usadas': aqui, estar embaixo é o sinal.
+    `desengajamento` vem de `desengajamento_de_uso`: 0,9 é o p10 da base."""
+    if desengajamento > 0.9:
+        return "menos que 90% da sua base"
+    if desengajamento > 0.75:
+        return "menos que 75% da sua base"
+    if desengajamento > 0.5:
+        return "menos que a metade da sua base"
+    return "dentro do normal da sua base"
+
+
+def _frase_sem_sinal_absoluto(dias, uso) -> str:
+    """Por que um cliente no topo da lista NÃO é alarme: o que se sabe dele
+    está dentro do que é uso normal em escala absoluta."""
+    motivos = []
+    if dias is not None:
+        motivos.append(f"entrou há menos de {int(PISO_ABSOLUTO_DIAS_SEM_LOGIN)} dias")
+    if uso is not None:
+        motivos.append("usa o produto")
+    return " — primeiro da fila da sua base, mas sem sinal de abandono: " + " e ".join(motivos)
 
 
 def _reais(valor) -> str:
@@ -58,12 +170,20 @@ def _inteiro_se_der(valor):
     return int(f) if f.is_integer() else f
 
 
-def explicar(cliente: dict, risk_score, criticality: str) -> str:
+def explicar(cliente: dict, risk_score, criticality: str, regua: dict | None = None) -> str:
     """Uma frase curta, em PT-BR, com os números que produziram o risco.
 
     É a explicabilidade do caminho (2): as próprias features, ditas. Não há
     SHAP aqui porque não há modelo treinado hoje; quando houver, o texto
     continua verdadeiro — são as entradas, não os pesos.
+
+    Com `regua` (a da base, de `regua_da_base`), cada número vem seguido da
+    posição dele na base do próprio cliente — "sem login há 47 dias — acima de
+    90% da sua base". Sem `regua`, é a frase de sempre, da régua global.
+
+    Ainda com `regua`: quando o cliente está no topo da lista (risco >= 0,75)
+    mas NÃO cruzou o piso absoluto e ficou "padrao", a frase diz o porquê —
+    é a resposta a "então por que ele está em primeiro e não é alarme?".
     """
     if criticality == CRITICIDADE_SEM_DADO:
         return TEXTO_SEM_DADO
@@ -73,30 +193,63 @@ def explicar(cliente: dict, risk_score, criticality: str) -> str:
     uso = cliente.get("features_used_30d")
     if dias is not None:
         d = _inteiro_se_der(dias)
-        partes.append("acessou hoje" if d == 0 else f"sem login há {d} dia{'s' if d != 1 else ''}")
+        frase = "acessou hoje" if d == 0 else f"sem login há {d} dia{'s' if d != 1 else ''}"
+        if regua is not None and d != 0:
+            frase += " — " + _frase_de_inatividade(posicao_na_base(dias, regua["days_since_last"]))
+        partes.append(frase)
     else:
         partes.append("dias sem login desconhecidos (assumido 0)")
     if uso is not None:
         u = _inteiro_se_der(uso)
-        partes.append(f"usa {u} funcionalidade{'s' if u != 1 else ''} nos últimos 30 dias")
+        frase = f"usa {u} funcionalidade{'s' if u != 1 else ''} nos últimos 30 dias"
+        if regua is not None:
+            frase += " — " + _frase_de_uso(desengajamento_de_uso(uso, regua["features_used_30d"]))
+        partes.append(frase)
+    elif regua is not None:
+        partes.append("uso de funcionalidades desconhecido (assumido como os mais ativos da sua base)")
     else:
         partes.append("uso de funcionalidades desconhecido (assumido 10)")
     partes.append(f"MRR {_reais(cliente.get('mrr'))}")
 
     texto = ", ".join(partes)
-    if criticality == "critico" and risk_score is not None and risk_score < 0.90:
+    if risk_score is None:
+        return texto
+
+    # Na régua da base o risco crítico só conta com sinal absoluto; na global
+    # o risco já é absoluto. `risco_critico_valido` é "crítico POR RISCO".
+    com_sinal = regua is None or sinal_absoluto_de_desengajamento(dias, uso)
+    risco_critico_valido = is_critical_risk(risk_score) and com_sinal
+    if criticality == "critico" and not risco_critico_valido:
         texto += " — crítico pelo valor da conta, não pelo risco"
+    elif (regua is not None and criticality == "padrao"
+          and risk_score >= HIGH_RISK_THRESHOLD and not com_sinal):
+        texto += _frase_sem_sinal_absoluto(dias, uso)
     return texto
 
 
-def pontuar_cliente(cliente: dict) -> dict:
-    """Uma linha da base → uma linha do ranking. Não grava nada."""
+def pontuar_cliente(cliente: dict, regua: dict | None = None) -> dict:
+    """Uma linha da base → uma linha do ranking. Não grava nada.
+
+    Sem `regua` (o default, e o caso de toda base pequena), o número é o de
+    sempre: `risco_por_features`, régua global. Com `regua`, o risco é pela
+    posição na base — a não ser que haja modelo treinado ativo, que decide
+    antes de qualquer régua, como já decidia.
+    """
     dias = cliente.get("days_since_last")
     uso = cliente.get("features_used_30d")
     mrr = cliente.get("mrr")
 
+    usar_regua_da_base = regua is not None and not modelo_ativo()
+    origem_da_regua = REGUA_BASE if usar_regua_da_base else REGUA_GLOBAL
+    regua_da_explicacao = regua if usar_regua_da_base else None
+
     if dias is None and uso is None:
         risk, crit = None, CRITICIDADE_SEM_DADO
+    elif usar_regua_da_base:
+        # POSIÇÃO ordena; CRITICIDADE exige também o sinal absoluto — por isso
+        # os valores crus vão junto para `classify_criticality`.
+        risk = risco_por_posicao(dias, uso, regua)
+        crit = classify_criticality(risk, mrr, dias, uso)
     else:
         risk = risco_por_features(dias, uso, mrr)
         crit = classify_criticality(risk, mrr)
@@ -105,13 +258,14 @@ def pontuar_cliente(cliente: dict) -> dict:
         "customer_id_externo": cliente["customer_id_externo"],
         "risk_score": risk,
         "criticality": crit,
-        "explicacao": explicar(cliente, risk, crit),
+        "explicacao": explicar(cliente, risk, crit, regua_da_explicacao),
         "mrr": mrr,
         "billing_profile": cliente.get("billing_profile"),
         "days_since_last": dias,
         "features_used_30d": uso,
         "email": cliente.get("email"),
         "importado_em": cliente.get("importado_em"),
+        "origem_da_regua": origem_da_regua,
     }
 
 
@@ -141,8 +295,15 @@ def pontuar_base(tenant_id: str) -> list[dict]:
     filtro, de propósito. Devolve lista ordenada (ver `ordenar`).
     """
     base = clientes_importados.listar(tenant_id)
-    ranking = ordenar([pontuar_cliente(c) for c in base])
+    regua = regua_da_base(base)
+    ranking = ordenar([pontuar_cliente(c, regua) for c in base])
     sem_dado = sum(1 for l in ranking if l["criticality"] == CRITICIDADE_SEM_DADO)
-    logger.info("[BATCH-SCORING] tenant=%s clientes=%d sem_dado=%d",
-                tenant_id, len(ranking), sem_dado)
+    logger.info("[BATCH-SCORING] tenant=%s clientes=%d sem_dado=%d regua=%s",
+                tenant_id, len(ranking), sem_dado,
+                REGUA_GLOBAL if regua is None else
+                f"{REGUA_BASE} (dias p50/p75/p90={regua['days_since_last']['p50']}/"
+                f"{regua['days_since_last']['p75']}/{regua['days_since_last']['p90']}, "
+                f"uso p10/p25/p50={regua['features_used_30d']['p10']}/"
+                f"{regua['features_used_30d']['p25']}/{regua['features_used_30d']['p50']}, "
+                f"n={regua['n_utilizaveis']})")
     return ranking

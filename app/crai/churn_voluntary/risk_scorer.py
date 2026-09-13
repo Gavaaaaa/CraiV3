@@ -309,7 +309,8 @@ def _numero_utilizavel(bruto) -> float | None:
     return valor
 
 
-def classify_criticality(risk_score: float, mrr: float | None) -> str:
+def classify_criticality(risk_score: float, mrr: float | None,
+                         days_since_last=None, features_used_30d=None) -> str:
     """Rótulo de tom: "critico" | "alto" | "padrao".
 
     Duas portas levam a "critico", e elas são independentes:
@@ -322,15 +323,161 @@ def classify_criticality(risk_score: float, mrr: float | None) -> str:
                 caro demais para receber o texto padrão.
 
     "alto" é a faixa [0.75, 0.90): risco declarado, ainda não crítico.
+
+    PISO ABSOLUTO. Quando `days_since_last` e/ou `features_used_30d` são
+    passados — o caminho da régua da base, em que o risco é POSICIONAL —,
+    "alto" e "critico" por risco exigem também `sinal_absoluto_de_desengajamento`.
+    Sem sinal, o cliente pode estar no topo da lista e continua "padrao": o
+    sistema não inventa vítima numa base saudável. Sem os dois argumentos (o
+    SDK e a régua global), o comportamento é o de sempre: lá o risco já é
+    absoluto por construção (0,75 exige >= 19,3 dias mesmo com uso zero). A
+    porta do VALOR não passa pelo piso — é sobre dinheiro, não sobre risco.
     """
-    if is_critical_risk(risk_score):
+    exige_sinal = days_since_last is not None or features_used_30d is not None
+    risco_conta = (not exige_sinal
+                   or sinal_absoluto_de_desengajamento(days_since_last, features_used_30d))
+
+    if risco_conta and is_critical_risk(risk_score):
         return "critico"
 
     mrr = mrr_utilizavel(mrr)
     if mrr is not None and mrr >= limiar_de_alto_valor():
         return "critico"
 
-    if risk_score >= HIGH_RISK_THRESHOLD:
+    if risco_conta and risk_score >= HIGH_RISK_THRESHOLD:
         return "alto"
 
     return "padrao"
+
+
+# ── Régua da base: o risco pela POSIÇÃO do cliente na própria base ────────
+#
+# `_risco_por_regras` compara `days_since_last` com a constante 30 e
+# `features_used_30d` com a constante 5 — a mesma régua para toda base do
+# mundo. Um SaaS cujos clientes entram todo dia e outro cujos clientes entram
+# uma vez por mês recebem o mesmo número para "7 dias sem login".
+#
+# Aqui a régua é a distribuição da própria base: quem calcula os percentis é
+# `batch_scoring.regua_da_base` (em memória, a partir das linhas que ele já
+# tem na mão); este módulo só converte posição em risco. Os PESOS são os
+# mesmos das regras fixas (0,7 inatividade, 0,3 uso), de propósito: muda a
+# régua, não a fórmula. `_risco_por_regras` continua intacta e continua sendo
+# o chão do sistema — é para onde `batch_scoring` volta quando a base é
+# pequena demais para ter distribuição.
+#
+# CADA COLUNA OLHA PARA A CAUDA CERTA. Em `days_since_last`, MAIS é pior, e a
+# régua são os percentis ALTOS (p50/p75/p90): "acima de 90% da sua base". Em
+# `features_used_30d`, MENOS é pior, e a régua são os percentis BAIXOS
+# (p10/p25/p50): "menos que 90% da sua base". Medir p90 de uso descreveria
+# justamente quem está bem.
+#
+# POSIÇÃO ORDENA; CRITICIDADE EXIGE SINAL ABSOLUTO. O risco posicional é
+# relativo por construção: os 10% mais frios de QUALQUER base ficam "acima de
+# 90% da sua base", inclusive numa base em que ninguém está em risco. Por isso
+# `classify_criticality` só rotula "alto"/"critico" quando, além da posição,
+# há um sinal absoluto de desengajamento (ver `sinal_absoluto_de_desengajamento`).
+# Sem ele, o cliente fica no topo da lista — "por quem eu começo?" — com
+# criticidade "padrao". O sistema não pode gritar numa base saudável.
+
+PESO_INATIVIDADE = 0.7
+PESO_USO = 0.3
+
+# Piso absoluto de desengajamento. Escolhido a partir das bases de
+# demonstração e da regra global, não de número redondo:
+#   - 7 dias é um ciclo semanal inteiro sem entrar — o ritmo mais curto que um
+#     SaaS B2B tem. Fica ACIMA do máximo da base de uso diário (5 dias) e
+#     ABAIXO da mediana da base de uso mensal (25): o piso nunca decide a
+#     demonstração, a posição decide. Na base de 500 clientes de exemplo,
+#     6,8% cruzam esse piso; o resto não pode virar alarme.
+#   - A própria regra global, o chão do sistema, dá 0,463 a 7 dias sem login
+#     com uso zero: quase metade do risco máximo. É sinal também na escala
+#     absoluta.
+#   - Nenhuma funcionalidade em 30 dias é abandono em qualquer SaaS, qualquer
+#     base; 1 ou mais já depende do produto, e aí quem julga é a posição.
+PISO_ABSOLUTO_DIAS_SEM_LOGIN = 7.0
+PISO_ABSOLUTO_FUNCIONALIDADES = 0.0
+
+
+def sinal_absoluto_de_desengajamento(days_since_last, features_used_30d) -> bool:
+    """Há sinal de abandono em escala absoluta, independente da base?
+
+    Sim quando o cliente está há pelo menos `PISO_ABSOLUTO_DIAS_SEM_LOGIN`
+    dias sem login, OU usou no máximo `PISO_ABSOLUTO_FUNCIONALIDADES`
+    funcionalidades em 30 dias. Valor desconhecido não conta nem a favor nem
+    contra: sem nenhum dos dois, não há sinal.
+    """
+    dias = _numero_utilizavel(days_since_last)
+    uso = _numero_utilizavel(features_used_30d)
+    if dias is not None and dias >= PISO_ABSOLUTO_DIAS_SEM_LOGIN:
+        return True
+    if uso is not None and uso <= PISO_ABSOLUTO_FUNCIONALIDADES:
+        return True
+    return False
+
+
+def _interpolar(x: float, nos: list, alem: float) -> float:
+    """Interpolação linear por nós (x crescente). Nós com o mesmo x colapsam
+    ficando com a afirmação MAIS FRACA (o menor y): se p50 e p90 coincidem,
+    40% da base está naquele valor, e quem está nele não está "acima de 90%"."""
+    limpos: list = []
+    for px, py in nos:
+        if limpos and px <= limpos[-1][0]:
+            limpos[-1] = (limpos[-1][0], min(limpos[-1][1], py))
+        else:
+            limpos.append((px, py))
+    if x <= limpos[0][0]:
+        return limpos[0][1]
+    for (x0, y0), (x1, y1) in zip(limpos, limpos[1:]):
+        if x <= x1:
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    return alem
+
+
+def posicao_na_base(valor, percentis: dict) -> float:
+    """Posição estimada (0..1) de `valor` na cauda ALTA da distribuição.
+
+    Para `days_since_last`. `percentis` traz p50/p75/p90. Interpolação linear
+    por (0, 0) → (p50, 0,5) → (p75, 0,75) → (p90, 0,9) → (2·p90, 1,0); acima
+    disso, 1,0. Zero é posição zero: acessou hoje.
+    """
+    x = float(valor)
+    if x <= 0.0:
+        return 0.0
+    p90 = float(percentis["p90"])
+    nos = [(0.0, 0.0), (float(percentis["p50"]), 0.5), (float(percentis["p75"]), 0.75),
+           (p90, 0.9), (2.0 * p90, 1.0)]
+    return _interpolar(x, nos, alem=1.0)
+
+
+def desengajamento_de_uso(valor, percentis: dict) -> float:
+    """Quanto `valor` está na cauda BAIXA da distribuição de uso (0..1).
+
+    Para `features_used_30d`. `percentis` traz p10/p25/p50. 1,0 é usar nada;
+    0,9 é estar no p10 ("menos que 90% da sua base"); 0,5 é a mediana; zero a
+    partir do dobro da mediana. É o complemento da posição, medido onde o
+    sinal mora.
+    """
+    x = float(valor)
+    p50 = float(percentis["p50"])
+    nos = [(0.0, 1.0), (float(percentis["p10"]), 0.9), (float(percentis["p25"]), 0.75),
+           (p50, 0.5), (2.0 * p50, 0.0)]
+    return _interpolar(max(x, 0.0), nos, alem=0.0)
+
+
+def risco_por_posicao(days_since_last, features_used_30d, regua: dict) -> float:
+    """O risco pela posição do cliente na própria base, em vez de pelas constantes.
+
+    `regua` é o dicionário de `batch_scoring.regua_da_base`, com os percentis
+    altos de `days_since_last` e os baixos de `features_used_30d`. Ausência
+    tem o MESMO sentido das regras fixas: dias ausentes = acessou hoje
+    (posição 0), uso ausente = como os mais ativos da base (desengajamento 0)
+    — nenhum dos dois inventa risco.
+    """
+    dias = _numero_utilizavel(days_since_last)
+    uso = _numero_utilizavel(features_used_30d)
+    pos_inatividade = (posicao_na_base(dias, regua["days_since_last"])
+                       if dias is not None else 0.0)
+    desengajamento = (desengajamento_de_uso(uso, regua["features_used_30d"])
+                      if uso is not None else 0.0)
+    risco = min(1.0, PESO_INATIVIDADE * pos_inatividade + PESO_USO * desengajamento)
+    return round(risco, 3)
