@@ -19,6 +19,15 @@ variável de configuração.
 | `POST /modelos/retreinar` | **a implementar** | `painel/fixtures/modelos_retreinar.json` |
 | `GET /resultado` | **a implementar** | `painel/fixtures/resultado.json` |
 
+Além desses, há as **rotas de demonstração** `/simulate/painel/*`, sem
+autenticação e bloqueadas fora de `ENV=development|demo`. Duas delas fazem
+parte deste contrato porque o painel de demonstração as consome (seção 6):
+
+| Endpoint | Estado | Fixture |
+|---|---|---|
+| `POST /simulate/painel/evento-risco` | existe | `painel/fixtures/evento_risco.json` |
+| `POST /simulate/painel/disparo-lote` | existe | `painel/fixtures/disparo_lote.json` |
+
 Convenções: JSON em UTF-8; datas em ISO-8601 com fuso (`2026-09-12T14:30:00+00:00`);
 dinheiro em `number` (reais, duas casas), nunca em texto; `null` é um valor com
 significado próprio e **nunca deve ser tratado como zero** (ver `/insights`).
@@ -400,3 +409,208 @@ para não precisar mudar quando isso for decidido (ver `DECISOES.md`); a fixture
 usa o valor do código.
 
 Erros previstos: 422 `mes_invalido`; 500 `base_nao_configurada`.
+
+---
+
+## 6. Rotas de demonstração `/simulate/painel/*` — existem hoje
+
+Atualizado em 13/09/2026. São as rotas que o painel de demonstração servido
+pela própria API consome. **Não têm autenticação** e respondem **403** fora de
+`ENV=development` ou `ENV=demo`; o tenant é fixo (`painel_avaliacao`). Tudo o
+que sai daqui é decisão real do motor (bandit, cadeia de canal, régua), com o
+envio simulado.
+
+### 6.1 Blocos comuns: `candidatas` e `canais_considerados`
+
+Os dois blocos aparecem em `evento-risco` e, por cliente, em `disparo-lote`.
+Documentados uma vez.
+
+**`candidatas`** — as três mensagens que o motor considerou, e qual venceu.
+São os três braços de maior e-Profit amostrado na rodada de Thompson Sampling
+que decidiu a oferta; **a escolha continua sendo do bandit**, a lista só
+expõe o que ele considerou. Exatamente **uma** tem `escolhida: true`, e o
+texto dela é o mesmo de `message` (ou `mensagem`).
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `oferta` | string | não | `desconto_10` \| `desconto_20` \| `pausa_1_mes` \| `pix_boleto_flash`. Nunca `consulta_cs`: não existe braço humano. |
+| `oferta_label` | string | não | a oferta em português, para a tela |
+| `texto` | string | não | a mensagem pronta. **Nenhuma candidata encaminha para atendente, suporte ou pessoa**; é invariante de produto, travada por teste e por filtro no código. |
+| `p_sucesso` | number 0–1 | não | probabilidade de aceite **aprendida** pelo bandit (média do posterior Beta) para este perfil e oferta. É o número a mostrar. |
+| `p_amostrado` | number 0–1 | sim | a taxa sorteada nesta rodada (é o que decidiu). `null` quando a candidata veio de um caminho sem rodada. |
+| `eprofit_amostrado` | number | sim | `p_amostrado × LTV retido − custo da oferta`, em reais: o critério do ranking |
+| `escolhida` | boolean | não | exatamente uma `true` por lista |
+| `origem_texto` | string | não | `gerado` (Claude API) \| `template` (texto de reserva). As não escolhidas são sempre `template`; a escolhida é `template` quando a API está fora ou o texto gerado foi descartado pelo filtro, e no `disparo-lote` sempre. **A tela deve mostrar isso**: "gerado" onde houve template é a tela mentindo. |
+| `motivo` | string | não | por que venceu, ou a posição em que ficou |
+
+As três candidatas são **abordagens diferentes** (ofertas diferentes), não
+três redações da mesma oferta. A ordem da lista é a do ranking do bandit.
+
+**`canais_considerados`** — cada canal que a cadeia de decisão olhou, com o
+motivo de ter sido escolhido ou descartado. Exatamente **um** tem
+`escolhido: true`, e é o mesmo de `channel`.
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `canal` | string | não | no fluxo voluntário: `whatsapp` \| `popup` \| `email` (sempre os três, nesta ordem). No involuntário (`cobranca-falhada`): os cinco da tabela de custos, `bot_whatsapp`, `email_auto`, `sms`, `ligacao_cs`, `pix_boleto_link`. |
+| `escolhido` | boolean | não | |
+| `motivo` | string | não | frase em pt-BR: "sem telefone utilizável no evento", "cliente não está no produto agora", "canal de reserva; …", "telefone presente e criticidade 'critico': o canal mais pessoal", "o cliente já converteu por popup antes (histórico)" |
+| `eprofit` | number | sim | **só no involuntário**: o e-Profit do canal no comparativo; `null` no fallback heurístico |
+| `melhor_eprofit` | boolean | — | **só no involuntário**: se este foi o canal de maior e-Profit. Hoje é sempre `email_auto`, e ele **não** é o escolhido: o único canal com integração de envio nesta fase é o bot de WhatsApp, e o motivo diz isso. |
+
+`ligacao_cs` aparece no comparativo do involuntário com o motivo "canal
+humano: proibido pela invariante de escalonamento zero" e **nunca** vem com
+`escolhido: true`. Travado por teste.
+
+### 6.2 `POST /simulate/painel/evento-risco`
+
+Roda o grafo do churn voluntário para um evento e devolve a decisão inteira.
+
+**Requisição** (JSON; todos os campos têm padrão):
+
+| Campo | Tipo | Padrão | Significado |
+|---|---|---|---|
+| `event` | string | `Cancellation Page Viewed` | `Cancellation Page Viewed` \| `Downgrade Clicked` \| `Session Started` |
+| `days_since_last` | number ≥ 0 | 21 | dias sem login |
+| `features_used_30d` | number ≥ 0 | 2 | funcionalidades usadas em 30 dias |
+| `mrr` | number | 1200 | receita mensal, em reais |
+| `billing_profile` | string | `CLT` | `CLT` \| `PJ` \| `freelancer` |
+| **`phone`** | string | `null` | telefone do cliente, só dígitos ou formatado. **Decide o canal**: com telefone e criticidade `alto`/`critico`, o canal é `whatsapp`. |
+| **`on_site_now`** | boolean | `true` | se o cliente está no produto agora. **Decide o canal**: fora do produto, sem telefone e sem histórico, o canal é `email`. |
+
+Antes de 13/09 a rota fixava `on_site_now: true` e não enviava telefone, e o
+canal saía sempre `popup`. Com os dois campos, o canal muda de verdade; o
+padrão (sem telefone, no site) continua dando `popup`.
+
+**Resposta 200** — exemplo real em `painel/fixtures/evento_risco.json`:
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `risk_score` | number 0–1 | não | |
+| `criticality` | string | não | `critico` \| `alto` \| `padrao` |
+| `profile` | string | não | |
+| `offer_type` | string | **sim** | a oferta escolhida pelo bandit; `null` quando o risco ficou abaixo de 0,60 e o sistema decidiu não abordar |
+| `offer_label` | string | não | `--` quando não há oferta |
+| `channel` | string | sim | `whatsapp` \| `popup` \| `email`; `null` sem abordagem |
+| `canais_considerados` | array | não (pode ser `[]`) | ver 6.1; `[]` sem abordagem |
+| `message` | string | sim | o texto da candidata escolhida |
+| `candidatas` | array | não (pode ser `[]`) | ver 6.1; três itens quando houve abordagem |
+| `abordado` | boolean | não | `offer_type != null` |
+
+### 6.3 `POST /simulate/painel/disparo-lote`
+
+"Trate todos os clientes que precisam." Recebe um conjunto de clientes e, para
+cada um que precisa, monta as candidatas, escolhe uma, escolhe o canal e
+registra o envio — **simulado nesta fase** — no log de ciclos de retenção (o
+cliente passa a aparecer no `/insights` como origem `sdk`, evento
+`Disparo em lote`).
+
+**Quem precisa:** criticidade `critico` ou `alto`. É o mesmo cálculo do
+`/insights` (régua da base quando a lista sustenta uma, régua global senão),
+não um corte numérico de risco: crítico pelo **valor** (MRR alto, risco baixo)
+também entra.
+
+**Requisição** (JSON; corpo opcional):
+
+| Campo | Tipo | Obrigatório | Significado |
+|---|---|---|---|
+| `clientes` | array de objetos | não | sem ele (ou vazio), o lote é a **base importada** do tenant do painel (`/simulate/painel/importar`). Máximo **5.000** por chamada. |
+| `clientes[].customer_id_externo` | string | sim | |
+| `clientes[].mrr` | number | sim | |
+| `clientes[].billing_profile` | string | sim | `CLT` \| `PJ` \| `freelancer` |
+| `clientes[].days_since_last` | number | não | |
+| `clientes[].features_used_30d` | number | não | |
+| `clientes[].phone` | string | não | decide o canal (ver 6.2) |
+| `clientes[].on_site_now` | boolean | não (padrão `false`) | no lote o padrão é **fora** do produto: é abordagem proativa |
+| `clientes[].email` | string | não | |
+| `limite` | integer ≥ 1 | não | corta a lista **depois** da ordenação por risco: "trate os N piores". Os cortados entram só em `resumo.nao_avaliados`. |
+
+Uma linha inválida (perfil fora da lista, MRR que não é número, id vazio)
+**não derruba o lote**: vira um item de `pulados` com motivo
+`cadastro_invalido`. Um item que não é objeto JSON é 422 (requisição
+malformada).
+
+**Resposta 200** — exemplo real em `painel/fixtures/disparo_lote.json`:
+
+```json
+{
+  "tenant_id": "painel_avaliacao",
+  "origem": "corpo",
+  "criterio": "criticidade critico ou alto",
+  "simulado": true,
+  "aviso": "Envio simulado: …",
+  "resumo": {
+    "recebidos": 6, "processados": 3, "pulados": 3, "nao_avaliados": 0,
+    "por_motivo": {"abaixo_do_criterio": 1, "dado_insuficiente": 1, "cadastro_invalido": 1},
+    "mrr_envolvido": 3198.74,
+    "por_canal": {"whatsapp": 1, "email": 1, "popup": 1},
+    "por_oferta": {"desconto_20": 2, "pausa_1_mes": 1}
+  },
+  "clientes": [ { …um por cliente tratado… } ],
+  "pulados":  [ { …um por cliente pulado… } ],
+  "gerado_em": "2026-09-13T15:02:11+00:00"
+}
+```
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `origem` | string | não | `corpo` \| `base_importada` |
+| `criterio` | string | não | o critério de inclusão, em texto |
+| **`simulado`** | boolean | não | **`true` nesta fase**: decidido e registrado, nenhum canal externo acionado. A tela mostra `aviso`. |
+| `aviso` | string | não | texto pronto para a tela |
+| `resumo.recebidos` | integer | não | linhas recebidas (ou lidas da base), inclusive as inválidas |
+| `resumo.processados` | integer | não | clientes tratados (= `clientes.length`) |
+| `resumo.pulados` | integer | não | (= `pulados.length`); `processados + pulados + nao_avaliados = recebidos` |
+| `resumo.nao_avaliados` | integer | não | cortados por `limite` |
+| `resumo.por_motivo` | object | não | contagem por motivo de pulo (chaves abaixo) |
+| `resumo.mrr_envolvido` | number | não | soma do MRR dos tratados, em reais |
+| `resumo.por_canal`, `resumo.por_oferta` | object | não | contagens entre os tratados |
+
+**Cada item de `clientes`** (tratado):
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `customer_id_externo` | string | não | |
+| `criticality` | string | não | `critico` \| `alto` |
+| `risk_score` | number 0–1 | não | |
+| `mrr` | number | não | o valor mensal envolvido |
+| `billing_profile` | string | não | |
+| `offer_type`, `offer_label` | string | não | a oferta escolhida pelo bandit |
+| `channel` | string | não | `whatsapp` \| `popup` \| `email` |
+| `canais_considerados` | array | não | ver 6.1 |
+| `mensagem` | string | não | o texto da candidata escolhida |
+| `candidatas` | array | não | ver 6.1; três itens; a escolhida vem com `origem_texto: "template"` — o lote não chama a Claude API, de propósito (ver abaixo) |
+| `envio.simulado` | boolean | não | sempre `true` nesta fase |
+| `envio.registrado` | boolean | não | se o ciclo entrou no log de retenção |
+| `envio.ciclo_id` | integer | sim | id da linha no log; `null` se o registro falhou |
+
+**Cada item de `pulados`:**
+
+| Campo | Tipo | Nulo? | Significado |
+|---|---|---|---|
+| `customer_id_externo` | string | não | (`linha N` quando a linha nem tinha id) |
+| `criticality` | string | sim | ausente nos `cadastro_invalido` |
+| `motivo` | string | não | `dado_insuficiente` \| `abaixo_do_criterio` \| `cadastro_invalido` \| `ciclo_aberto` |
+| `detalhe` | string | não | a frase para a tela |
+
+Os quatro motivos:
+
+- **`dado_insuficiente`** — sem `days_since_last` **e** sem `features_used_30d`.
+  Cliente sem sinal suficiente é **pulado, nunca contatado** (a mesma
+  invariante do `risk_score: null` no `/insights`).
+- **`abaixo_do_criterio`** — criticidade `padrao`.
+- **`cadastro_invalido`** — a linha não passou na validação; `detalhe` cita o valor.
+- **`ciclo_aberto`** — já existe ciclo de retenção sem desfecho para o
+  cliente. **Rodar o lote duas vezes não contata ninguém duas vezes.** O
+  ciclo fecha por `POST /webhooks/retention-outcome`.
+
+**Tempo de resposta.** O lote **não** roda o grafo LangGraph por cliente: o
+grafo chama a Claude API, o HubSpot e o WhatsApp a cada nó. Aqui o bandit, a
+cadeia de canal e a montagem de candidatas são os mesmos do grafo, o texto da
+vencedora é o template da própria oferta, e o registro é uma transação só.
+Medido: 2.000 clientes em menos de 1 s; o teto de 5.000 por chamada mantém a
+resposta em segundos. Acima do teto: **413** `lote_grande_demais`.
+
+**Erros:** 403 fora de `development`/`demo`; 413 `lote_grande_demais`; 422
+`limite_invalido` (ou 422 do pydantic para corpo malformado); 500
+`base_nao_configurada` (sem `clientes` e sem base configurada).

@@ -23,6 +23,10 @@ class ChurnVoluntaryState(TypedDict):
 
     # Oferta (Multi-Armed Bandit)
     offer_type: Optional[str]
+    # A rodada do bandit que decidiu `offer_type`: os braços de maior e-Profit
+    # amostrado, com a probabilidade aprendida de cada um. É o que vira as
+    # candidatas de mensagem — a decisão continua sendo do bandit.
+    ofertas_consideradas: Optional[list]
 
     # Canal (LangGraph — roteamento com memória de histórico)
     channel:       Optional[str]   # popup | email | whatsapp
@@ -31,6 +35,13 @@ class ChurnVoluntaryState(TypedDict):
 
     # Mensagem (Claude API)
     message: Optional[str]
+    # As candidatas que o painel mostra: uma por braço considerado, cada uma
+    # com texto, oferta, probabilidade e a marca de qual venceu. `message` é
+    # sempre o texto da vencedora.
+    candidatas: Optional[list]
+    # Cada canal que `choose_channel` olhou, com o motivo de ter sido escolhido
+    # ou descartado.
+    canais_considerados: Optional[list]
 
     # Resultado
     offer_sent: bool

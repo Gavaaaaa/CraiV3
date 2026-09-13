@@ -329,13 +329,17 @@ class TestCriticidadeNoGrafo:
     async def test_mrr_numerico_continua_chegando_ao_bandit(self, monkeypatch):
         """CATRACA: a defesa acima não pode ter cortado o caminho válido."""
         recebidos = []
-        real = va._bandit.choose_offer
+        # O nó chama `classificar_ofertas` (a rodada inteira, para as
+        # candidatas) desde a etapa das três mensagens; `choose_offer` é
+        # `[0]` dela. O espião fica no primitivo — o que se mede continua
+        # sendo se o MRR chega ao bandit.
+        real = va._bandit.classificar_ofertas
 
         def espiao(tenant_id, profile, risk_score, mrr=None):
             recebidos.append(mrr)
             return real(tenant_id, profile, risk_score, mrr=mrr)
 
-        monkeypatch.setattr(va._bandit, "choose_offer", espiao)
+        monkeypatch.setattr(va._bandit, "classificar_ofertas", espiao)
 
         estado = _estado("critico")
         estado["props"] = {"billing_profile": "PJ", "mrr": 4200.0}

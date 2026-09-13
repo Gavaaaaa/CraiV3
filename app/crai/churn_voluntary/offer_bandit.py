@@ -287,13 +287,29 @@ class OfferBandit:
     # parâmetro no Sprint 5. É posicional de propósito — um default silencioso
     # deixaria uma chamada esquecida escrevendo no tenant errado sem erro, que é
     # o pior desfecho possível numa camada de isolamento.
-    def choose_offer(self, tenant_id: str, profile: str, risk_score: float,
-                     mrr: float | None = None) -> str:
-        """Thompson Sampling em TODA a faixa de risco: amostra um posterior por
-        oferta e devolve a que maximiza o e-Profit com a taxa amostrada.
+    def classificar_ofertas(self, tenant_id: str, profile: str, risk_score: float,
+                            mrr: float | None = None) -> list[dict]:
+        """UMA rodada de Thompson Sampling, com todos os braços à vista.
 
-        `risk_score` não desvia mais a decisão em ponto nenhum da faixa — quem lê
-        a criticidade é o tom da mensagem, via `is_critical_risk`.
+        É o mesmo sorteio de `choose_offer` — uma amostra Beta por oferta e o
+        ranking pelo e-Profit com a taxa amostrada —, só que devolve a rodada
+        inteira em vez de só o vencedor. Cada linha traz:
+
+            offer              o braço
+            p_amostrado        a taxa sorteada do posterior NESTA rodada (é o
+                               número que decidiu)
+            p_estimado         a média do posterior — a probabilidade de aceite
+                               que o bandit aprendeu até aqui
+            eprofit_amostrado  p_amostrado * LTV_retido - custo (o critério)
+            custo              custo da oferta em R$ para este MRR
+
+        A lista vem ordenada do maior para o menor e-Profit amostrado, e o [0]
+        é exatamente o que `choose_offer` devolve com a mesma semente: os dois
+        consomem o gerador na mesma ordem. Não existe braço "sem oferta" nem
+        braço humano — a lista é sempre OFFERS, e nada além dela.
+
+        `risk_score` não desvia a decisão em ponto nenhum da faixa — quem lê a
+        criticidade é o tom da mensagem, via `is_critical_risk`.
         """
         if mrr is None:
             mrr = MRR_TIPICO.get(profile, MRR_TIPICO["default"])
@@ -301,8 +317,35 @@ class OfferBandit:
 
         perfis = self._perfis_do_tenant(tenant_id)
         perfil = perfis.get(profile, perfis["CLT"])
-        amostras = {o: self.rng.beta(s["alpha"], s["beta"]) for o, s in perfil.items()}
-        return max(amostras, key=lambda o: amostras[o] * ltv_retido - offer_cost(o, mrr))
+
+        linhas = []
+        for o, s in perfil.items():
+            p = float(self.rng.beta(s["alpha"], s["beta"]))
+            custo = offer_cost(o, mrr)
+            linhas.append({
+                "offer": o,
+                "p_amostrado": round(p, 4),
+                "p_estimado": round(s["alpha"] / (s["alpha"] + s["beta"]), 3),
+                "eprofit_amostrado": round(p * ltv_retido - custo, 2),
+                "custo": round(custo, 2),
+                "_criterio": p * ltv_retido - custo,
+            })
+        # Ordenação estável sobre o critério SEM arredondar: em empate, vence a
+        # primeira na ordem do dicionário — o mesmo desempate do `max` antigo.
+        linhas.sort(key=lambda l: l["_criterio"], reverse=True)
+        for l in linhas:
+            del l["_criterio"]
+        return linhas
+
+    def choose_offer(self, tenant_id: str, profile: str, risk_score: float,
+                     mrr: float | None = None) -> str:
+        """Thompson Sampling em TODA a faixa de risco: amostra um posterior por
+        oferta e devolve a que maximiza o e-Profit com a taxa amostrada.
+
+        É `classificar_ofertas(...)[0]`. Continua existindo para quem só quer
+        a decisão; quem precisa mostrar as candidatas usa a rodada inteira.
+        """
+        return self.classificar_ofertas(tenant_id, profile, risk_score, mrr=mrr)[0]["offer"]
 
     def record_outcome(self, tenant_id: str, profile: str, offer: str, accepted: bool):
         """Atualiza o posterior após saber se o cliente aceitou e persiste."""

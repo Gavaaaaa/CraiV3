@@ -103,5 +103,9 @@ class AgentState(TypedDict):
     # Dunning (LangGraph + Claude) — mensagem personalizada, sem escalonamento humano
     dunning_sent:     bool
     channel:          Optional[str]
+    # O comparativo de canal do classificador, canal a canal, com o motivo de
+    # cada descarte. O envio sai pelo bot de WhatsApp por limitação de
+    # integração — a lista existe para o painel dizer isso, não esconder.
+    canais_considerados: Optional[list]
     metodo_pagamento: Optional[str]   # pix_automatico | boleto (Pix Automático como fallback antes do boleto)
     message_sent:     Optional[str]

@@ -56,6 +56,12 @@ CUSTOS_PADRAO = {
     "pix_boleto_link": 0.50,
 }
 
+# Canais que dependem de uma PESSOA do lado da CRAI. Escalonamento humano é
+# zero neste produto: estes canais continuam na tabela de custos — o
+# comparativo de e-Profit os mostra, com o motivo do descarte — mas nunca são
+# elegíveis como canal de envio, em nenhum caminho.
+CANAIS_HUMANOS = frozenset({"ligacao_cs"})
+
 # Custo por instrução de pagamento reenviada ao PSP. Default ZERO, e isso é
 # deliberado: o número real depende do contrato com o Pagar.me e não é conhecido
 # aqui. Com zero, o e-Profit sai idêntico ao de antes deste sprint — nenhuma

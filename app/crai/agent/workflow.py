@@ -3,7 +3,14 @@
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
-from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
+from ..config import (
+    CANAIS_HUMANOS,
+    CANAL_PADRAO,
+    custo_intervencao,
+    custo_tentativa_pix,
+    custos_por_canal,
+    success_fee_pct,
+)
 from .pix_codes import CAUSA_LEGIVEL, CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
 from ..ml.failure_classifier import FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
@@ -85,6 +92,47 @@ def _janela_vigente(state: AgentState, agora: datetime) -> tuple[int, Optional[d
     return usadas, prazo
 
 
+def canais_considerados_involuntario(optimal: dict | None) -> list[dict]:
+    """O comparativo de canal do classificador, com o motivo de cada descarte.
+
+    `_find_optimal_channel` compara os cinco canais da tabela de custos pelo
+    e-Profit. Esse resultado NÃO decide o envio, e isto é limitação de
+    integração declarada, não otimização: o único canal com integração nesta
+    fase é o bot de WhatsApp (`CANAL_PADRAO`), e é por ele que a mensagem sai.
+    Antes desta função o comparativo era calculado e descartado no caminho
+    entre o classificador e o grafo; agora ele chega ao estado e ao painel,
+    canal a canal, dizendo por que cada um não foi o escolhido.
+
+    `ligacao_cs` é canal humano e nunca é elegível — nem quando o comparativo
+    o apontar como o de maior e-Profit.
+    """
+    optimal = optimal or {}
+    eprofits = optimal.get("all_channels") or {}
+    melhor = optimal.get("channel")
+    linhas = []
+    for canal in custos_por_canal():
+        if canal == CANAL_PADRAO:
+            escolhido = True
+            motivo = "único canal com integração de envio nesta fase (bot de WhatsApp)"
+        elif canal in CANAIS_HUMANOS:
+            escolhido = False
+            motivo = "canal humano: proibido pela invariante de escalonamento zero"
+        elif canal == melhor:
+            escolhido = False
+            motivo = "maior e-Profit do comparativo, mas sem integração de envio nesta fase"
+        else:
+            escolhido = False
+            motivo = "sem integração de envio nesta fase"
+        linhas.append({
+            "canal": canal,
+            "eprofit": eprofits.get(canal),
+            "melhor_eprofit": canal == melhor,
+            "escolhido": escolhido,
+            "motivo": motivo,
+        })
+    return linhas
+
+
 async def diagnose_failure(state: AgentState) -> AgentState:
     """Diagnostica causa da falha via ensemble XGBoost+RF com e-Profit e SHAP."""
     features = _extract_features(
@@ -126,6 +174,8 @@ async def diagnose_failure(state: AgentState) -> AgentState:
             f["feature"]: f["contribution_pct"]
             for f in result["shap_explanation"].get("features", [])[:5]
         },
+        # Era calculado pelo classificador e descartado aqui. Agora viaja.
+        "canais_considerados": canais_considerados_involuntario(result.get("optimal_channel")),
     }
 
 

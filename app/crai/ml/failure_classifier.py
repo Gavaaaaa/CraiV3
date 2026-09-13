@@ -32,7 +32,7 @@ from sklearn.metrics import (
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
-from ..config import CUSTOS_PADRAO, custo_intervencao, custos_por_canal
+from ..config import CANAIS_HUMANOS, CUSTOS_PADRAO, custo_intervencao, custos_por_canal
 from . import calibracao
 from .calibracao import conferir_meta
 from .synthetic_data import SEED, generate_dataset
@@ -492,7 +492,13 @@ class FailureClassifier:
         return np.array([row], dtype=float)
 
     def _find_optimal_channel(self, p_recovery: float, ltv: float) -> dict:
-        """Encontra o canal com maior e-Profit positivo."""
+        """Encontra o canal com maior e-Profit positivo.
+
+        `all_channels` traz o e-Profit de TODOS os canais da tabela, inclusive
+        os humanos — é o comparativo que o painel mostra. Mas um canal humano
+        (`CANAIS_HUMANOS`) nunca é o `channel` devolvido: escalonamento
+        humano é zero, e isso não depende de o custo dele ser o maior.
+        """
         best_channel = None
         best_eprofit = 0.0
         channel_eprofits = {}
@@ -500,6 +506,8 @@ class FailureClassifier:
         for ch, cost in custos_por_canal().items():
             ep = round(p_recovery * ltv - cost, 2)
             channel_eprofits[ch] = ep
+            if ch in CANAIS_HUMANOS:
+                continue
             if ep > best_eprofit:
                 best_eprofit = ep
                 best_channel = ch

@@ -123,6 +123,42 @@ def _num(valor):
     return float(valor)
 
 
+_INSERT_CICLO = """INSERT INTO ciclos_retencao (
+                       tenant_id, user_id, registrado_em,
+                       event, days_since_last, features_used_30d, mrr,
+                       billing_profile, on_site_now,
+                       risk_score, profile, criticality, offer_type, channel,
+                       offer_sent, accepted, desfecho_em, origem_desfecho)
+                   VALUES (?,?,?, ?,?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?)"""
+
+
+def _linha_do_ciclo(state: dict) -> tuple:
+    """Os valores do INSERT, na ordem de `_INSERT_CICLO`. Uma função só para
+    o registro unitário e o em lote gravarem exatamente a mesma linha."""
+    props = state.get("props") or {}
+    return (
+        state.get("tenant_id") or TENANT_PADRAO,
+        state.get("user_id", ""),
+        _agora(),
+        state.get("event"),
+        _num(props.get("days_since_last")),
+        _num(props.get("features_used_30d")),
+        _num(props.get("mrr")),
+        props.get("billing_profile") if isinstance(
+            props.get("billing_profile"), str) else None,
+        int(bool(state.get("on_site_now"))),
+        _num(state.get("risk_score")),
+        state.get("profile"),
+        state.get("criticality"),
+        state.get("offer_type"),
+        state.get("channel"),
+        int(bool(state.get("offer_sent"))),
+        None if state.get("accepted") is None else int(state["accepted"]),
+        _agora() if state.get("accepted") is not None else None,
+        "simulacao" if state.get("accepted") is not None else None,
+    )
+
+
 def registrar_ciclo(state: dict) -> int | None:
     """Grava features + decisão. Devolve o id da linha, ou None se falhou.
 
@@ -130,43 +166,36 @@ def registrar_ciclo(state: dict) -> int | None:
     `accepted` já é conhecido e entra junto; em produção fica NULL até o
     webhook.
     """
-    props = state.get("props") or {}
     try:
         with _conectar() as conn:
-            cur = conn.execute(
-                """INSERT INTO ciclos_retencao (
-                       tenant_id, user_id, registrado_em,
-                       event, days_since_last, features_used_30d, mrr,
-                       billing_profile, on_site_now,
-                       risk_score, profile, criticality, offer_type, channel,
-                       offer_sent, accepted, desfecho_em, origem_desfecho)
-                   VALUES (?,?,?, ?,?,?,?, ?,?, ?,?,?,?,?, ?,?,?,?)""",
-                (
-                    state.get("tenant_id") or TENANT_PADRAO,
-                    state.get("user_id", ""),
-                    _agora(),
-                    state.get("event"),
-                    _num(props.get("days_since_last")),
-                    _num(props.get("features_used_30d")),
-                    _num(props.get("mrr")),
-                    props.get("billing_profile") if isinstance(
-                        props.get("billing_profile"), str) else None,
-                    int(bool(state.get("on_site_now"))),
-                    _num(state.get("risk_score")),
-                    state.get("profile"),
-                    state.get("criticality"),
-                    state.get("offer_type"),
-                    state.get("channel"),
-                    int(bool(state.get("offer_sent"))),
-                    None if state.get("accepted") is None else int(state["accepted"]),
-                    _agora() if state.get("accepted") is not None else None,
-                    "simulacao" if state.get("accepted") is not None else None,
-                ),
-            )
+            cur = conn.execute(_INSERT_CICLO, _linha_do_ciclo(state))
             return cur.lastrowid
     except Exception as e:                       # noqa: BLE001 — best effort declarado
         print(f"[RETENTION-LOG] Falha ao registrar ciclo: {e}")
         return None
+
+
+def registrar_ciclos(states: list[dict]) -> list[int | None]:
+    """O mesmo registro, para N ciclos numa conexão e numa transação só.
+
+    Existe para o disparo em lote: medido, `registrar_ciclo` por cliente
+    custava ~6 ms (abrir conexão, garantir schema, commit) e 2.000 clientes
+    levavam 12 s só gravando. Aqui o custo é de um commit. A linha gravada é
+    a mesma (`_linha_do_ciclo`), então o dataset de treino não distingue um
+    ciclo do lote de um ciclo do grafo — exceto pelo `event`.
+
+    Best effort como o unitário: falha na transação devolve `None` para
+    todos, com log — o lote já decidiu; o que falhou foi o registro.
+    """
+    if not states:
+        return []
+    try:
+        with _conectar() as conn:
+            return [conn.execute(_INSERT_CICLO, _linha_do_ciclo(s)).lastrowid
+                    for s in states]
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao registrar {len(states)} ciclos em lote: {e}")
+        return [None] * len(states)
 
 
 def ciclo_aberto(tenant_id: str, user_id: str, offer_type: str) -> dict | None:

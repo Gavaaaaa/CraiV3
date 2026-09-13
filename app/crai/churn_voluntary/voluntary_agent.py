@@ -79,6 +79,36 @@ OFFER_LABELS = {
     "pix_boleto_flash": "trocar para pagamento via Pix ou boleto em 1 clique",
 }
 
+# Quantas candidatas de mensagem o painel vê por evento.
+N_CANDIDATAS = 3
+
+# INVARIANTE DE PRODUTO: nenhuma mensagem encaminha o cliente para uma pessoa.
+# Escalonamento humano é zero (o banco trava `offer_type <> 'consulta_cs'`;
+# esta lista trava o TEXTO). Um texto que contenha qualquer termo daqui é
+# descartado antes de virar candidata — venha do template ou da Claude API.
+TERMOS_DE_ENCAMINHAMENTO_HUMANO = (
+    "atendente", "atendimento", "suporte", "humano", "humana",
+    "consultor", "consultora", "especialista", "gerente",
+    "fale com", "falar com", "conversar com", "converse com",
+    "ligamos", "ligar para", "te ligar", "te liga",
+    "nossa equipe", "nosso time", "time de", "equipe de",
+    "chat", "agende", "agendar", "agendamento",
+)
+
+
+def encaminha_para_humano(texto: str) -> str | None:
+    """O primeiro termo de encaminhamento humano no texto, ou None.
+
+    Comparação em minúsculas por substring: é deliberadamente rigorosa, porque
+    o custo de deixar passar "fale com nosso suporte" numa mensagem de um
+    produto que não tem suporte humano é a promessa que ninguém vai atender.
+    """
+    baixo = (texto or "").lower()
+    for termo in TERMOS_DE_ENCAMINHAMENTO_HUMANO:
+        if termo in baixo:
+            return termo
+    return None
+
 
 # ── Nós do grafo ─────────────────────────────────────────────────────────
 
@@ -101,11 +131,16 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # trazia plano nenhum.
     mrr = mrr_utilizavel(state["props"].get("mrr"))
     tenant = state.get("tenant_id") or TENANT_PADRAO
-    offer = _bandit.choose_offer(tenant, state["profile"], state["risk_score"], mrr=mrr)
-    p_estimado = _bandit.conversion_rates(tenant, state["profile"]).get(offer, 0.0)
+    # A rodada inteira, não só o vencedor: o painel mostra as candidatas que o
+    # bandit considerou. A escolha continua sendo a mesma — `rodada[0]` é o
+    # que `choose_offer` devolveria com a mesma semente.
+    rodada = _bandit.classificar_ofertas(tenant, state["profile"], state["risk_score"], mrr=mrr)
+    offer = rodada[0]["offer"]
+    p_estimado = rodada[0]["p_estimado"]
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
     return {**state, "offer_type": offer,
+            "ofertas_consideradas": rodada[:N_CANDIDATAS],
             "is_critical": is_critical_risk(state["risk_score"])}
 
 
@@ -143,16 +178,60 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
 
     if destino and criticality in ("critico", "alto"):
         channel = "whatsapp"
+        motivo = f"telefone presente e criticidade '{criticality}': o canal mais pessoal"
         print(f"[CHURN-VOL] Canal por criticidade ({criticality}): whatsapp")
     elif prior and (prior != "whatsapp" or destino):
         channel = prior
+        motivo = f"o cliente já converteu por {prior} antes (histórico)"
         print(f"[CHURN-VOL] Canal por histórico: {channel} (converteu antes)")
     elif on_site:
         channel = "popup"
+        motivo = "cliente está no produto agora: a intervenção mais barata e imediata"
     else:
         channel = "email"
+        motivo = "sem telefone utilizável, sem histórico e fora do produto: canal de reserva"
 
-    return {**state, "channel": channel, "on_site_now": on_site}
+    return {**state, "channel": channel, "on_site_now": on_site,
+            "canais_considerados": _canais_considerados(
+                channel, motivo, destino, criticality, prior, on_site)}
+
+
+def _canais_considerados(channel: str, motivo_escolha: str, destino, criticality: str,
+                         prior, on_site) -> list[dict]:
+    """Os três canais do fluxo, cada um com o motivo de ter sido escolhido ou
+    descartado — a cadeia de `choose_channel` explicada canal a canal.
+
+    A lista é fechada: whatsapp, popup, e-mail. Não há canal humano aqui e
+    nunca haverá — ver `TERMOS_DE_ENCAMINHAMENTO_HUMANO` para o texto e
+    `CANAIS_HUMANOS` em `config.py` para o involuntário.
+    """
+    descartes = {}
+
+    if not destino:
+        descartes["whatsapp"] = "sem telefone utilizável no evento"
+    elif criticality not in ("critico", "alto"):
+        descartes["whatsapp"] = (f"telefone presente, mas criticidade '{criticality}' não pede "
+                                 f"o canal mais pessoal, e não há histórico de conversão por WhatsApp")
+    else:
+        descartes["whatsapp"] = "preterido"   # não acontece: whatsapp vence quando os dois valem
+
+    if not on_site:
+        descartes["popup"] = "cliente não está no produto agora"
+    elif channel == "whatsapp":
+        descartes["popup"] = "cliente está no site, mas a criticidade pediu o canal mais pessoal"
+    else:
+        descartes["popup"] = f"cliente está no site, mas o histórico aponta {prior}"
+
+    if channel == "whatsapp":
+        descartes["email"] = "canal de reserva; a criticidade pediu o canal mais pessoal"
+    elif channel == "popup":
+        descartes["email"] = "canal de reserva; o cliente estava no produto"
+    else:
+        descartes["email"] = f"canal de reserva; o histórico aponta {prior}"
+
+    return [{"canal": c, "escolhido": c == channel,
+             "motivo": motivo_escolha if c == channel else descartes[c]}
+            for c in ("whatsapp", "popup", "email")]
 
 
 def _assinatura() -> str:
@@ -225,9 +304,15 @@ def _fallback_de_retencao(criticality: str, offer_label: str) -> str:
     return f"Antes de você ir, que tal {offer_label}? Estamos aqui para ajudar."
 
 
-async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
-    offer_label = OFFER_LABELS.get(state["offer_type"], "uma oferta especial")
-    criticality = state.get("criticality", "padrao")
+async def _texto_da_oferta_escolhida(state: ChurnVoluntaryState, offer_label: str,
+                                     criticality: str) -> tuple[str, str]:
+    """O texto da vencedora e de onde ele veio: ("...", "gerado" | "template").
+
+    Depois de gerado, o texto passa pelo filtro de encaminhamento humano. Se a
+    API devolver "fale com nosso suporte", o texto é DESCARTADO e o template
+    entra no lugar — o prompt pede o tom, mas quem garante a invariante é o
+    código, não a instrução.
+    """
     prompt = _prompt_de_retencao(state, offer_label)
     try:
         response = await claude.messages.create(
@@ -237,8 +322,82 @@ async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         message = response.content[0].text.strip()
     except Exception as e:
         print(f"[CHURN-VOL] Claude API indisponível ({e}) — fallback ({criticality})")
-        message = _fallback_de_retencao(criticality, offer_label)
-    return {**state, "message": message}
+        return _fallback_de_retencao(criticality, offer_label), "template"
+
+    termo = encaminha_para_humano(message)
+    if termo:
+        print(f"[CHURN-VOL] Texto gerado encaminhava para humano ('{termo}') "
+              f"— descartado, fallback ({criticality})")
+        return _fallback_de_retencao(criticality, offer_label), "template"
+    return message, "gerado"
+
+
+def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
+                      origem_texto_vencedora: str = "gerado") -> list[dict]:
+    """As candidatas que o painel mostra, e qual venceu.
+
+    São os braços de maior e-Profit amostrado na rodada do bandit que decidiu
+    `offer_type` (`ofertas_consideradas`, no máximo `N_CANDIDATAS`), cada um
+    com a probabilidade de aceite que o posterior aprendeu. A vencedora leva o
+    texto que o nó gerou (Claude, ou o fallback); as outras levam o texto de
+    reserva da própria oferta, na mesma criticidade — o painel compara
+    ABORDAGENS (desconto, pausa, forma de pagamento), não redações.
+
+    A decisão não é refeita aqui: `escolhida` é `offer_type`, que o bandit
+    decidiu em `choose_offer`. Esta função só expõe o que ele considerou.
+
+    Estado sem `ofertas_consideradas` (chamadores antigos, testes de nó
+    isolado) produz uma lista de UMA candidata: a oferta escolhida, com a
+    probabilidade lida do bandit. O caminho antigo continua valendo.
+
+    `origem_texto_vencedora` diz de onde veio o texto da vencedora: "gerado"
+    (Claude API, o caso do grafo) ou "template" (o disparo em lote, que não
+    chama a API). O painel mostra isso para não dar a entender que houve
+    geração onde não houve.
+    """
+    criticality = state.get("criticality", "padrao")
+    escolhida = state["offer_type"]
+    rodada = list(state.get("ofertas_consideradas") or [])
+
+    if not any(linha.get("offer") == escolhida for linha in rodada):
+        tenant = state.get("tenant_id") or TENANT_PADRAO
+        p = _bandit.conversion_rates(tenant, state.get("profile", "CLT")).get(escolhida, 0.0)
+        rodada = [{"offer": escolhida, "p_estimado": p, "p_amostrado": None,
+                   "eprofit_amostrado": None, "custo": None}] + rodada
+
+    candidatas = []
+    for posicao, linha in enumerate(rodada[:N_CANDIDATAS], start=1):
+        oferta = linha["offer"]
+        label = OFFER_LABELS.get(oferta, "uma oferta especial")
+        vencedora = oferta == escolhida
+        candidatas.append({
+            "oferta": oferta,
+            "oferta_label": label,
+            "texto": texto_vencedora if vencedora else _fallback_de_retencao(criticality, label),
+            "p_sucesso": linha.get("p_estimado"),
+            "p_amostrado": linha.get("p_amostrado"),
+            "eprofit_amostrado": linha.get("eprofit_amostrado"),
+            "escolhida": vencedora,
+            "origem_texto": origem_texto_vencedora if vencedora else "template",
+            "motivo": ("maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+                       if vencedora else
+                       f"e-Profit amostrado abaixo da escolhida nesta rodada (posição {posicao})"),
+        })
+    return candidatas
+
+
+async def generate_message(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    """Gera o texto da oferta escolhida e monta as candidatas ao redor dela.
+
+    `message` continua sendo UMA string — o texto da vencedora — para quem já
+    lia esse campo. `candidatas` é a novidade: a lista completa, com a
+    vencedora marcada.
+    """
+    offer_label = OFFER_LABELS.get(state["offer_type"], "uma oferta especial")
+    criticality = state.get("criticality", "padrao")
+    message, origem = await _texto_da_oferta_escolhida(state, offer_label, criticality)
+    return {**state, "message": message,
+            "candidatas": montar_candidatas(state, message, origem_texto_vencedora=origem)}
 
 
 async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:

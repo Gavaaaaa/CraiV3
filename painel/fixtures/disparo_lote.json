@@ -1,0 +1,254 @@
+{
+  "tenant_id": "painel_avaliacao",
+  "origem": "corpo",
+  "criterio": "criticidade critico ou alto",
+  "simulado": true,
+  "aviso": "Envio simulado: as mensagens foram decididas e registradas, mas nenhum canal externo foi acionado nesta fase.",
+  "resumo": {
+    "recebidos": 6,
+    "processados": 3,
+    "pulados": 3,
+    "nao_avaliados": 0,
+    "por_motivo": {
+      "cadastro_invalido": 1,
+      "abaixo_do_criterio": 1,
+      "dado_insuficiente": 1
+    },
+    "mrr_envolvido": 3198.74,
+    "por_canal": {
+      "whatsapp": 1,
+      "popup": 1,
+      "email": 1
+    },
+    "por_oferta": {
+      "desconto_20": 2,
+      "pausa_1_mes": 1
+    }
+  },
+  "clientes": [
+    {
+      "customer_id_externo": "cli-0438",
+      "criticality": "critico",
+      "risk_score": 1.0,
+      "mrr": 298.74,
+      "billing_profile": "CLT",
+      "offer_type": "desconto_20",
+      "offer_label": "20% de desconto por 3 meses",
+      "channel": "whatsapp",
+      "canais_considerados": [
+        {
+          "canal": "whatsapp",
+          "escolhido": true,
+          "motivo": "telefone presente e criticidade 'critico': o canal mais pessoal"
+        },
+        {
+          "canal": "popup",
+          "escolhido": false,
+          "motivo": "cliente não está no produto agora"
+        },
+        {
+          "canal": "email",
+          "escolhido": false,
+          "motivo": "canal de reserva; a criticidade pediu o canal mais pessoal"
+        }
+      ],
+      "mensagem": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+      "candidatas": [
+        {
+          "oferta": "desconto_20",
+          "oferta_label": "20% de desconto por 3 meses",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.682,
+          "p_amostrado": 0.5745,
+          "eprofit_amostrado": 850.48,
+          "escolhida": true,
+          "origem_texto": "template",
+          "motivo": "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+        },
+        {
+          "oferta": "desconto_10",
+          "oferta_label": "10% de desconto por 3 meses",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos 10% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.455,
+          "p_amostrado": 0.421,
+          "eprofit_amostrado": 665.08,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 2)"
+        },
+        {
+          "oferta": "pausa_1_mes",
+          "oferta_label": "pausar a assinatura por 1 mês sem custo",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos pausar a assinatura por 1 mês sem custo — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.409,
+          "p_amostrado": 0.3375,
+          "eprofit_amostrado": 306.15,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 3)"
+        }
+      ],
+      "envio": {
+        "simulado": true,
+        "registrado": true,
+        "ciclo_id": 2
+      }
+    },
+    {
+      "customer_id_externo": "cli-0301",
+      "criticality": "alto",
+      "risk_score": 0.88,
+      "mrr": 450.0,
+      "billing_profile": "PJ",
+      "offer_type": "pausa_1_mes",
+      "offer_label": "pausar a assinatura por 1 mês sem custo",
+      "channel": "popup",
+      "canais_considerados": [
+        {
+          "canal": "whatsapp",
+          "escolhido": false,
+          "motivo": "sem telefone utilizável no evento"
+        },
+        {
+          "canal": "popup",
+          "escolhido": true,
+          "motivo": "cliente está no produto agora: a intervenção mais barata e imediata"
+        },
+        {
+          "canal": "email",
+          "escolhido": false,
+          "motivo": "canal de reserva; o cliente estava no produto"
+        }
+      ],
+      "mensagem": "Antes de você ir, que tal pausar a assinatura por 1 mês sem custo? Estamos aqui para ajudar.",
+      "candidatas": [
+        {
+          "oferta": "pausa_1_mes",
+          "oferta_label": "pausar a assinatura por 1 mês sem custo",
+          "texto": "Antes de você ir, que tal pausar a assinatura por 1 mês sem custo? Estamos aqui para ajudar.",
+          "p_sucesso": 0.636,
+          "p_amostrado": 0.7736,
+          "eprofit_amostrado": 1638.66,
+          "escolhida": true,
+          "origem_texto": "template",
+          "motivo": "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+        },
+        {
+          "oferta": "desconto_20",
+          "oferta_label": "20% de desconto por 3 meses",
+          "texto": "Antes de você ir, que tal 20% de desconto por 3 meses? Estamos aqui para ajudar.",
+          "p_sucesso": 0.529,
+          "p_amostrado": 0.598,
+          "eprofit_amostrado": 1344.67,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 2)"
+        },
+        {
+          "oferta": "pix_boleto_flash",
+          "oferta_label": "trocar para pagamento via Pix ou boleto em 1 clique",
+          "texto": "Antes de você ir, que tal trocar para pagamento via Pix ou boleto em 1 clique? Estamos aqui para ajudar.",
+          "p_sucesso": 0.333,
+          "p_amostrado": 0.2407,
+          "eprofit_amostrado": 647.9,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 3)"
+        }
+      ],
+      "envio": {
+        "simulado": true,
+        "registrado": true,
+        "ciclo_id": 3
+      }
+    },
+    {
+      "customer_id_externo": "cli-0126",
+      "criticality": "critico",
+      "risk_score": 0.07,
+      "mrr": 2450.0,
+      "billing_profile": "PJ",
+      "offer_type": "desconto_20",
+      "offer_label": "20% de desconto por 3 meses",
+      "channel": "email",
+      "canais_considerados": [
+        {
+          "canal": "whatsapp",
+          "escolhido": false,
+          "motivo": "sem telefone utilizável no evento"
+        },
+        {
+          "canal": "popup",
+          "escolhido": false,
+          "motivo": "cliente não está no produto agora"
+        },
+        {
+          "canal": "email",
+          "escolhido": true,
+          "motivo": "sem telefone utilizável, sem histórico e fora do produto: canal de reserva"
+        }
+      ],
+      "mensagem": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+      "candidatas": [
+        {
+          "oferta": "desconto_20",
+          "oferta_label": "20% de desconto por 3 meses",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.529,
+          "p_amostrado": 0.6895,
+          "eprofit_amostrado": 8665.97,
+          "escolhida": true,
+          "origem_texto": "template",
+          "motivo": "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+        },
+        {
+          "oferta": "pausa_1_mes",
+          "oferta_label": "pausar a assinatura por 1 mês sem custo",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos pausar a assinatura por 1 mês sem custo — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.636,
+          "p_amostrado": 0.6339,
+          "eprofit_amostrado": 6868.78,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 2)"
+        },
+        {
+          "oferta": "pix_boleto_flash",
+          "oferta_label": "trocar para pagamento via Pix ou boleto em 1 clique",
+          "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos trocar para pagamento via Pix ou boleto em 1 clique — responda aqui e a gente resolve junto.",
+          "p_sucesso": 0.333,
+          "p_amostrado": 0.3662,
+          "eprofit_amostrado": 5381.22,
+          "escolhida": false,
+          "origem_texto": "template",
+          "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 3)"
+        }
+      ],
+      "envio": {
+        "simulado": true,
+        "registrado": true,
+        "ciclo_id": 4
+      }
+    }
+  ],
+  "pulados": [
+    {
+      "customer_id_externo": "cli-0999",
+      "motivo": "cadastro_invalido",
+      "detalhe": "mrr 'abc' não é um número válido"
+    },
+    {
+      "customer_id_externo": "cli-0003",
+      "criticality": "padrao",
+      "motivo": "abaixo_do_criterio",
+      "detalhe": "criticidade 'padrao': fora do critério de inclusão (critico ou alto)"
+    },
+    {
+      "customer_id_externo": "cli-0216",
+      "criticality": "dado_insuficiente",
+      "motivo": "dado_insuficiente",
+      "detalhe": "sem dado de atividade (days_since_last e features_used_30d ausentes): impossível avaliar risco — cliente não contatado"
+    }
+  ],
+  "gerado_em": "2026-09-13T23:30:41+00:00"
+}

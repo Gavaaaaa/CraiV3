@@ -18,11 +18,16 @@ pasta guarda o que o dashboard vai consumir, independente de stack:
 | `modelos_status.json` | `GET /modelos/status` | os quatro modelos, três ativos e o de risco voluntário com `origem_da_decisao: "regras"` |
 | `modelos_retreinar.json` | `POST /modelos/retreinar` | um retreino que **não** promoveu o candidato, com as duas AUCs e o motivo |
 | `resultado.json` | `GET /resultado` | o fechamento de um mês com `simulado: true`, o `aviso` para a tela e a memória de cálculo |
+| `evento_risco.json` | `POST /simulate/painel/evento-risco` | um evento crítico **com telefone**: canal `whatsapp` escolhido, `canais_considerados` com o motivo de cada descarte (pop-up preterido pela criticidade, e-mail como reserva) e as **três `candidatas`** do bandit com `p_sucesso`, uma `escolhida`, todas `origem_texto: "template"` porque a fixture foi gerada com a Claude API desligada |
+| `disparo_lote.json` | `POST /simulate/painel/disparo-lote` | um lote de 6 linhas com os casos que a tela precisa desenhar: crítico por risco com telefone (`whatsapp`), **crítico por valor** (`cli-0126`, MRR R$ 2.450), alto no site (`popup`), e os três tipos de pulo — `abaixo_do_criterio` (`cli-0003`), `dado_insuficiente` (`cli-0216`) e `cadastro_invalido` (`cli-0999`, MRR "abc"). `simulado: true` com `aviso` |
 
-Os números e as frases de `importar.json` e `insights.json` foram produzidos
-pelo motor real (`importacao.importar`, `batch_scoring.pontuar_cliente`), não
-digitados. Os três últimos são a especificação de endpoints que ainda não
-existem; os valores são plausíveis, tirados das rodadas de treino documentadas.
+Os números e as frases de `importar.json`, `insights.json`,
+`evento_risco.json` e `disparo_lote.json` foram produzidos pelo motor real
+(`importacao.importar`, `batch_scoring.pontuar_cliente`, as rotas
+`/simulate/painel/*` com bancos isolados), não digitados. `modelos_status`,
+`modelos_retreinar` e `resultado` são a especificação de endpoints que ainda
+não existem; os valores são plausíveis, tirados das rodadas de treino
+documentadas.
 
 ## A regra da variável única
 
@@ -37,6 +42,10 @@ Nada mais muda entre os dois modos: mesmo caminho de código, mesmo parser,
 mesma tela. Se uma tela funciona com a fixture e quebra com a API, a diferença
 é o contrato, e o contrato é que se corrige.
 
-Duas invariantes que a tela precisa respeitar, e que as fixtures exercitam:
-`risk_score: null` não é zero (não ordene, não some, não desenhe barra), e
-`simulado: true` em `/resultado` obriga a exibir o `aviso`.
+Invariantes que a tela precisa respeitar, e que as fixtures exercitam:
+`risk_score: null` não é zero (não ordene, não some, não desenhe barra);
+`simulado: true` em `/resultado` e em `/simulate/painel/disparo-lote` obriga a
+exibir o `aviso`; em `candidatas`, `origem_texto: "template"` é mostrado como
+template, nunca como "gerado"; e nenhuma candidata nem canal escolhido é
+humano (a tela não precisa de botão "falar com atendente", porque ele não
+existe no produto).

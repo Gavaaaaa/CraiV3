@@ -1,0 +1,62 @@
+{
+  "risk_score": 0.9,
+  "criticality": "critico",
+  "profile": "CLT",
+  "offer_type": "desconto_20",
+  "offer_label": "Oferta: desconto de 20%",
+  "channel": "whatsapp",
+  "canais_considerados": [
+    {
+      "canal": "whatsapp",
+      "escolhido": true,
+      "motivo": "telefone presente e criticidade 'critico': o canal mais pessoal"
+    },
+    {
+      "canal": "popup",
+      "escolhido": false,
+      "motivo": "cliente está no site, mas a criticidade pediu o canal mais pessoal"
+    },
+    {
+      "canal": "email",
+      "escolhido": false,
+      "motivo": "canal de reserva; a criticidade pediu o canal mais pessoal"
+    }
+  ],
+  "message": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+  "candidatas": [
+    {
+      "oferta": "desconto_20",
+      "oferta_label": "20% de desconto por 3 meses",
+      "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos 20% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+      "p_sucesso": 0.682,
+      "p_amostrado": 0.5451,
+      "eprofit_amostrado": 3204.96,
+      "escolhida": true,
+      "origem_texto": "template",
+      "motivo": "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+    },
+    {
+      "oferta": "desconto_10",
+      "oferta_label": "10% de desconto por 3 meses",
+      "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos 10% de desconto por 3 meses — responda aqui e a gente resolve junto.",
+      "p_sucesso": 0.455,
+      "p_amostrado": 0.4247,
+      "eprofit_amostrado": 2697.59,
+      "escolhida": false,
+      "origem_texto": "template",
+      "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 2)"
+    },
+    {
+      "oferta": "pix_boleto_flash",
+      "oferta_label": "trocar para pagamento via Pix ou boleto em 1 clique",
+      "texto": "Sua conta é importante para a gente e não queremos te perder. Preparamos trocar para pagamento via Pix ou boleto em 1 clique — responda aqui e a gente resolve junto.",
+      "p_sucesso": 0.25,
+      "p_amostrado": 0.2153,
+      "eprofit_amostrado": 1548.2,
+      "escolhida": false,
+      "origem_texto": "template",
+      "motivo": "e-Profit amostrado abaixo da escolhida nesta rodada (posição 3)"
+    }
+  ],
+  "abordado": true
+}

@@ -49,7 +49,7 @@ from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
-from ..churn_voluntary import clientes_importados, importacao, insights_unificados
+from ..churn_voluntary import clientes_importados, disparo_lote, importacao, insights_unificados
 from ..integrations import email_sender
 from ..accounts import get_conta, get_tenant_id
 from ..integrations.payment_gateway import (
@@ -1687,7 +1687,8 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
         "profile_type": None, "retry_count": max(0, min(3, payload.tentativas_usadas)),
         "next_retry_at": None, "retry_exhausted": False, "recovered": False,
         "pix_retry_schedule": None, "dunning_sent": False, "channel": None,
-        "metodo_pagamento": None, "message_sent": None,
+        "canais_considerados": None, "metodo_pagamento": None,
+        "message_sent": None,
     }
     final = await crai_agent.ainvoke(inicial, {"configurable": {"thread_id": id_rec}})
 
@@ -1730,6 +1731,8 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
         "shap": shap, "plano": plano,
         "raciocinio": racio if isinstance(racio, list) else ([racio] if racio else []),
         "mensagem": final.get("message_sent"),
+        "channel": final.get("channel"),
+        "canais_considerados": final.get("canais_considerados") or [],
     })
 
 
@@ -1739,6 +1742,12 @@ class PainelEvento(BaseModel):
     features_used_30d: float = 2
     mrr: float = 1200
     billing_profile: str = "CLT"
+    # Os dois dados que decidem o canal. Antes a rota fixava `on_site_now`
+    # em True e não mandava telefone — e o canal saía sempre "popup", o que
+    # fazia o painel parecer que a escolha não existia. O padrão continua
+    # sendo "no site, sem telefone" para quem não enviar nada.
+    phone: str | None = None
+    on_site_now: bool = True
 
 
 @app.post("/simulate/painel/evento-risco")
@@ -1755,14 +1764,18 @@ async def painel_evento_risco(payload: PainelEvento):
              "features_used_30d": _contador_de_simulacao(payload.features_used_30d,
                                                          "features_used_30d"),
              "mrr": payload.mrr, "billing_profile": payload.billing_profile,
-             "on_site_now": True}
+             "on_site_now": payload.on_site_now}
+    if payload.phone:
+        props["phone"] = payload.phone
     inicial: ChurnVoluntaryState = {
         "tenant_id": TENANT_PAINEL, "user_id": f"user:{user_id}",
         "event": payload.event, "props": props, "risk_score": 0.0,
         "profile": "CLT", "criticality": "padrao", "offer_type": None,
-        "channel": None, "on_site_now": True, "prior_channel_success": None,
-        "message": None, "offer_sent": False, "accepted": None,
-        "retained": False, "is_critical": False,
+        "ofertas_consideradas": None, "channel": None,
+        "on_site_now": payload.on_site_now, "prior_channel_success": None,
+        "canais_considerados": None, "message": None, "candidatas": None,
+        "offer_sent": False, "accepted": None, "retained": False,
+        "is_critical": False,
     }
     final = await agente_do_modo().ainvoke(
         inicial, {"configurable": {"thread_id": f"{TENANT_PAINEL}:{user_id}"}})
@@ -1774,9 +1787,46 @@ async def painel_evento_risco(payload: PainelEvento):
         "offer_type": oferta,
         "offer_label": OFERTA_LEGIVEL.get(oferta or "", "--"),
         "channel": final.get("channel"),
+        "canais_considerados": final.get("canais_considerados") or [],
         "message": final.get("message"),
+        "candidatas": final.get("candidatas") or [],
         "abordado": oferta is not None,
     })
+
+
+class PainelDisparoLote(BaseModel):
+    # Lista solta de propósito (`dict`, não modelo): uma linha torta vira um
+    # item de `pulados` com motivo, e não um 422 que derruba o lote inteiro —
+    # o mesmo contrato do `/clientes/importar`. Sem `clientes`, o lote é a
+    # base importada do tenant do painel.
+    clientes: list[dict] | None = None
+    limite: int | None = None
+
+
+@app.post("/simulate/painel/disparo-lote")
+async def painel_disparo_lote(payload: PainelDisparoLote = None):
+    """Trata todos os clientes que precisam: candidatas, escolha, canal e
+    registro do envio (simulado), em lote.
+
+    Mesmo padrão das outras rotas do painel: sem JWT, bloqueada fora de
+    `ENV=development|demo`. O que entra, o que é pulado e por quê está em
+    `churn_voluntary/disparo_lote.py`.
+    """
+    _require_simulation_env()
+    payload = payload or PainelDisparoLote()
+    if payload.limite is not None and payload.limite < 1:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "limite_invalido", "detalhe": "limite precisa ser inteiro >= 1"})
+    try:
+        relatorio = await disparo_lote.disparar(payload.clientes, TENANT_PAINEL,
+                                                limite=payload.limite)
+    except disparo_lote.LoteGrandeDemais as e:
+        raise HTTPException(status_code=413, detail={
+            "motivo": "lote_grande_demais", "detalhe": str(e)})
+    except clientes_importados.ConfiguracaoAusente as e:
+        raise HTTPException(status_code=500, detail={
+            "motivo": "base_nao_configurada", "detalhe": str(e)})
+    return JSONResponse(relatorio)
 
 
 @app.post("/simulate/painel/importar")
