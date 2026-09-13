@@ -63,6 +63,11 @@ Thumbs.db
 # Relatorios locais de acompanhamento (nao fazem parte do codigo)
 relatorio_*.txt
 
+# Saida de execucao do `train_all --saida-json` (rodada_baixa.json, rodada_alta.json).
+# Quando uma rodada merecer ser publicada, ela vai para docs/evidencia/treino/
+# com nome que diga a maquina e o build, ao lado da publicada — nunca por cima.
+app/rodada_*.json
+
 # Artefatos gerados ao rodar o relatorio.py / painel (scripts/painel.py, api/painel.py):
 # banco SQLite local e HTML de saida sao estado de execucao, regenerados a
 # cada rodada — nunca versionar.

@@ -79,5 +79,21 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   Customer Churn (e-commerce, licença não declarada no Kaggle, uso acadêmico
   apenas, `PROVENIENCIA.json`).
 
+**Reprodutibilidade da amostra real (achado de 12/09/2026, pendência):**
+
+- `python -m crai.scripts.preparar_amostra_real` se declara determinístico
+  ("mesma seed, mesmas 300 linhas, mesmo SHA-256"), mas, executado em
+  12/09/2026 nesta máquina, produziu uma amostra Olist com SHA-256
+  `d800c60f…`, diferente do `39485c22…` registrado no `calibracao.json`
+  versionado e na evidência publicada. A causa **não foi investigada**; fica
+  como pendência para depois da apresentação, porque contradiz a afirmação
+  "tudo reproduzível" do repositório de dados.
+- Na mesma execução a API do BACEN respondeu (na execução que gerou a
+  evidência ela estava fora do ar e o script usou o valor declarado no
+  `DATA_CARD`), e a média da série 21084 saiu 3,9163 em vez de 3,92, o que
+  mudou `error_code_probs` na terceira casa. O `calibracao.json` versionado
+  foi mantido como referência: é o que produziu a evidência publicada, e os
+  modelos em disco foram retreinados a partir dele.
+
 O que a beta prova: o pipeline aprende, explica e decide sobre um sinal; o que
 ela não prova: que a previsão de recuperação vale em produção.

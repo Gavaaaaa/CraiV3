@@ -1,0 +1,50 @@
+{
+  "tenant_id": "empresa-exemplo",
+  "mes": "2026-08",
+  "moeda": "BRL",
+  "simulado": true,
+  "aviso": "Os valores de recuperação desta fase vêm do gateway de pagamento SIMULADO da CRAI. A interface deve exibir este aviso ao usuário.",
+  "mrr_recuperado": 18420.0,
+  "mrr_salvo": 9310.0,
+  "ganho_incremental": 27730.0,
+  "fatura": {
+    "success_fee_pct_recuperacao": 0.15,
+    "success_fee_pct_retencao": 0.15,
+    "fee_recuperacao": 2763.0,
+    "fee_retencao": 1396.5,
+    "total": 4159.5,
+    "vencimento": "2026-09-10"
+  },
+  "memoria_de_calculo": {
+    "involuntario": {
+      "ciclos": 214,
+      "recuperados": 131,
+      "taxa_recuperacao": 0.6121,
+      "volume_total": 31280.0,
+      "mrr_recuperado": 18420.0,
+      "custo_total": 47.35,
+      "custo_medio_por_recuperacao": 0.3615,
+      "fonte": "dunning/recovery_log.py::metricas(tenant_id, desde)"
+    },
+    "voluntario": {
+      "ciclos": 96,
+      "ofertas_enviadas": 96,
+      "aceitas": 37,
+      "taxa_aceite": 0.3854,
+      "mrr_salvo": 9310.0,
+      "criterio_de_salvo": "oferta aceita (accepted = 1) em ciclos_retencao no mês",
+      "fonte": "churn_voluntary/retention_log.py"
+    },
+    "formulas": {
+      "ganho_incremental": "mrr_recuperado + mrr_salvo",
+      "fee_recuperacao": "mrr_recuperado x success_fee_pct_recuperacao",
+      "fee_retencao": "mrr_salvo x success_fee_pct_retencao",
+      "total": "fee_recuperacao + fee_retencao"
+    },
+    "parametros": {
+      "CRAI_SUCCESS_FEE_PCT": 0.15,
+      "origem": "crai/config.py::success_fee_pct() - valor pendente de decisão (ver DECISOES.md)"
+    }
+  },
+  "gerado_em": "2026-09-12T14:30:00+00:00"
+}

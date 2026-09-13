@@ -1,0 +1,21 @@
+{
+  "importados": 497,
+  "rejeitados": [
+    {
+      "linha": 17,
+      "motivo": "mrr 'abc' não é um número válido"
+    },
+    {
+      "linha": 203,
+      "motivo": "billing_profile 'MEI' não é um dos perfis aceitos (CLT, PJ, freelancer)"
+    },
+    {
+      "linha": 444,
+      "motivo": "customer_id_externo vazio"
+    }
+  ],
+  "colunas_nao_encontradas": [
+    "email"
+  ],
+  "linhas_sem_dado_comportamental": 12
+}

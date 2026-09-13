@@ -1,0 +1,17 @@
+{
+  "tenant_id": "empresa-exemplo",
+  "modelo": "voluntary_risk",
+  "promovido": false,
+  "auc_candidato": 0.7133,
+  "auc_campeao": 0.7405,
+  "motivo": "candidato (AUC 0,7133) não supera o campeão em uso (regras fixas, AUC 0,7405 contra o mesmo rótulo); o scorer continua nas regras",
+  "n_amostras": 2000,
+  "fonte_dos_dados": "sintetico_calibrado",
+  "duracao_s": 4.8,
+  "iniciado_em": "2026-09-12T14:29:55+00:00",
+  "concluido_em": "2026-09-12T14:30:00+00:00",
+  "artefatos": {
+    "candidato": "models/voluntary_risk_candidato.joblib",
+    "meta": "models/voluntary_risk_candidato_meta.json"
+  }
+}

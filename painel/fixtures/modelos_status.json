@@ -1,0 +1,68 @@
+{
+  "tenant_id": "empresa-exemplo",
+  "consultado_em": "2026-09-12T14:30:00+00:00",
+  "modelos": [
+    {
+      "nome": "failure_classifier",
+      "descricao": "classifica a falha de cobrança e estima a probabilidade de recuperação (churn involuntário)",
+      "ativo": true,
+      "algoritmo": "XGBClassifier (0,7) + RandomForestClassifier (0,3)",
+      "treinado_em": "2026-09-12T15:41:07",
+      "n_amostras": 3000,
+      "metrica_principal": "auc",
+      "valor": 0.6695,
+      "fonte_dos_dados": "sintetico_calibrado",
+      "origem_da_decisao": "modelo",
+      "observacao": null
+    },
+    {
+      "nome": "anomaly_detector",
+      "descricao": "detecta padrão anômalo de comportamento antes da falha (churn involuntário)",
+      "ativo": true,
+      "algoritmo": "autoencoder denso 12-32-16-4-16-32-12 (PyTorch)",
+      "treinado_em": "2026-09-12T15:42:19",
+      "n_amostras": 5500,
+      "metrica_principal": "roc_auc",
+      "valor": 0.9137,
+      "fonte_dos_dados": "sintetico_calibrado",
+      "origem_da_decisao": "modelo",
+      "observacao": null
+    },
+    {
+      "nome": "payday_predictor",
+      "descricao": "prevê o dia de pagamento do cliente para agendar a retentativa (churn involuntário)",
+      "ativo": true,
+      "algoritmo": "LSTM (PyTorch) + Prophet, ensemble",
+      "treinado_em": "2026-09-12T15:44:52",
+      "n_amostras": 600,
+      "metrica_principal": "roc_auc_ensemble",
+      "valor": 0.8412,
+      "fonte_dos_dados": "sintetico_calibrado",
+      "origem_da_decisao": "modelo",
+      "observacao": null
+    },
+    {
+      "nome": "voluntary_risk",
+      "descricao": "risco de churn voluntário a partir de inatividade, uso e MRR",
+      "ativo": false,
+      "algoritmo": "GradientBoostingClassifier(n_estimators=150, max_depth=3)",
+      "treinado_em": "2026-09-12T15:45:10",
+      "n_amostras": 2000,
+      "metrica_principal": "auc_vs_rotulo",
+      "valor": 0.7133,
+      "fonte_dos_dados": "sintetico_calibrado",
+      "origem_da_decisao": "regras",
+      "observacao": "candidato treinado e NÃO promovido: AUC 0,7133 abaixo do teto das regras (0,7405). O risco em produção vem das regras."
+    }
+  ],
+  "versoes_bibliotecas": {
+    "python": "3.11.9",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "prophet": "1.4.0",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "shap": "0.46.0"
+  }
+}
