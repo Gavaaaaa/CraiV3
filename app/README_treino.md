@@ -4,6 +4,8 @@
 >
 > Fonte dos parametros: **`sintetico_calibrado`** · calibracao gerada em `2026-09-11T21:31:34+00:00` · versoes gravadas nos `meta.json`: scikit-learn 1.5.2, xgboost 2.1.1, torch 2.13.0+cu130, prophet 1.4.0.
 
+> **Rodada que este documento descreve:** as metricas das secoes 3, 4.2, 4.3 e 6 sao das rodadas gravadas em `docs/evidencia/treino/rodada_baixa.json` (classificador treinado em 11/09/2026 21:40) e `rodada_alta.json` (classificador treinado em 11/09/2026 21:41), com Python 3.11.15. Elas NAO descrevem os artefatos atuais de `models/`, que podem vir de um treino posterior: o estado atual esta em `models/train_metrics.json` e `models/*_meta.json`, declarado em `README.md` (secao 4.6) e em `docs/LIMITACOES.md`.
+
 ## 0. Declaracao, antes de qualquer numero
 
 **Isto NAO e treino com dado real de churn observado.** Nenhum dos quatro modelos abaixo viu um rotulo real de "esta cobranca foi recuperada" ou "este cliente cancelou" — esse dado nao existe publicamente, e dentro da CRAI ainda nao foi acumulado. O que este trabalho entrega, e so isso:
@@ -107,6 +109,8 @@ Resumo: 1 ancorada em dado real, 1 proxy FRACO de coluna real, 5 100% sintetica,
 
 ## 3. Mecanismo de retreino — duas rodadas por modelo, lado a lado
 
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
+
 Comandos exatos (de `app/`), com os artefatos sobrescritos em `models/` a cada rodada e a verificacao `load()` apos cada `train()`:
 
 ```
@@ -121,6 +125,8 @@ python -m crai.scripts.train_all --fonte sintetico_calibrado \
 Rodada 1: 69.4 s · rodada 2: 131.6 s (CPU). Logs completos em `docs/evidencia/treino/log_rodada_*.txt`.
 
 ### 3.1 FailureClassifier (XGBoost 0,7 + RandomForest 0,3)
+
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
 
 | Metrica | n = 3000 | n = 6000 | delta |
 |---|---|---|---|
@@ -137,9 +143,11 @@ Rodada 1: 69.4 s · rodada 2: 131.6 s (CPU). Logs completos em `docs/evidencia/t
 
 Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 
-**Leia com cuidado.** Com o dobro de volume a AUC do holdout ficou estatisticamente no mesmo lugar (a diferenca esta dentro do erro-padrao de um holdout de 600-1.200 linhas, ~0,02). Dois pontos nao provam tendencia; a curva de volume com 3 seeds (3.5) prova. E a AUC esta **abaixo do piso 0,70** do gate G3 do `sprints.md` — ver 4.3, porque isso e esperado e esta declarado, nao escondido.
+**Leia com cuidado.** Com o dobro de volume a AUC do holdout ficou estatisticamente no mesmo lugar (a diferenca esta dentro do erro-padrao de um holdout de 600-1.200 linhas, ~0,02). Dois pontos nao provam tendencia; a curva de volume com 3 seeds (3.5) prova. E a AUC esta **abaixo do piso 0,70** do gate G3 do `sprints.md` (gate de sprint; o gate executavel mudou em 14/09/2026 — ver 4.3), porque isso e esperado e esta declarado, nao escondido.
 
 ### 3.2 AnomalyDetector (autoencoder 12-4-12, treinado so em saudaveis)
+
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
 
 | Metrica | n = 5500 | n = 11000 | delta |
 |---|---|---|---|
@@ -157,6 +165,8 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 
 ### 3.3 PaydayInference (LSTM 0,6 + Prophet 0,4)
 
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
+
 | Metrica | n = 600 | n = 1200 | delta |
 |---|---|---|---|
 | ROC-AUC diario — LSTM | 0,9546 | 0,9616 | +0,0070 |
@@ -173,6 +183,8 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 
 ### 3.4 risk_scorer voluntario — candidato (GradientBoosting sobre `FEATURES_DE_RISCO`)
 
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
+
 | Metrica | n = 2000 | n = 4000 | delta |
 |---|---|---|---|
 | AUC vs rotulo ruidoso | 0,7133 | 0,7517 | +0,0384 |
@@ -187,6 +199,8 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 O candidato **nao esta ativo**: o treino grava `voluntary_risk_candidato.joblib`, que `carregar_modelo()` nao le. Promover ao nome que o scorer carrega (`voluntary_risk.joblib`) e um passo explicito — `VoluntaryRiskModel.ativar()` ou `train_all --ativar-voluntario` — porque a partir dai o pipeline voluntario passa a decidir pelo modelo e nao pelas regras. Como o rotulo do candidato SAO as regras com ruido, ele nao sabe nada que as regras nao saibam (`corr_vs_regra` ~0,97): prova o encaixe, nao melhora a decisao. `tests/test_train_fonte.py::TestVoluntarioCandidato` trava os dois lados (sem ativar = regras identicas; ativado = modelo decide).
 
 ### 3.5 Curva de volume — o mecanismo responde a mais dado (3 seeds do gerador)
+
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
 
 Mesmo `train(fonte="sintetico_calibrado")`, em 4 volumes, com 3 seeds diferentes do gerador em cada volume (`python -m crai.scripts.sanity_check_fora_do_dominio`). E a prova que dois pontos nao dao: a media sobe e a variancia entre seeds cai.
 
@@ -227,6 +241,8 @@ Cada decisao esta comentada no codigo, no ponto exato (`synthetic_data.py`, bloc
 
 ### 4.2 Checagem fora do dominio (Etapa C) — a queda esperada, registrada como saiu
 
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
+
 `python -m crai.scripts.sanity_check_fora_do_dominio` — so inferencia, nada e treinado com dado real. Resultado completo em `docs/evidencia/treino/fora_do_dominio.json`.
 
 | Modelo | Em dominio (sintetico calibrado, holdout novo) | Fora do dominio (dado real) | Rotulo real | Leitura |
@@ -241,18 +257,24 @@ Cada decisao esta comentada no codigo, no ponto exato (`synthetic_data.py`, bloc
 
 ### 4.3 A AUC do classificador ficou abaixo do piso 0,70 do gate G3
 
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
+
 Medido: 0,6695 (n=3000) e 0,6669 (n=6000) com fonte calibrada; com a fonte default nos MESMOS volumes, 0,680 e 0,676. O 0,7029 citado no `README.md` (secao 4.6) foi medido com n=15.000 na fonte default. Duas causas, as duas declaradas:
 
 - **Volume.** O piso 0,70 so aparece perto de 15.000 linhas (curva 3.5: 0,696 em 12.000). Os volumes 3.000 -> 6.000 sao os pedidos para a prova de retreino, nao os do gate.
 - **Calibracao do valor.** O `DATA_CARD.md` (2.3 e 7) previa: com a fatura calibrada na Olist (mediana ~R$ 100), o termo `- clip((valor - 500)/5000, 0, 0,15)` do modelo causal fica ~0 em quase todas as linhas — o sinal do valor desaparece e a AUC cai. Um parametro medido e declarado vale mais que um inventado que parecia certo.
 
-Consequencia pratica que precisa ficar escrita: `tests/test_metricas_declaradas.py` exige que a AUC do `train_metrics.json` presente em `models/` esteja em [0,70; 0,92] **e** seja citada na linha 4.6 do `README.md`. Com os artefatos desta rodada em `models/`, esses dois testes reprovam — e e o comportamento correto do gate de honestidade, nao um defeito deste trabalho. Num clone limpo (`models/` esta no `.gitignore`) eles pulam e a suite fica verde. A linha 4.6 do `README.md` nao foi alterada aqui de proposito; atualiza-la e decisao de quem mantem o README.
+Consequencia pratica que precisa ficar escrita: na data desta rodada, `tests/test_metricas_declaradas.py` exigia que a AUC do `train_metrics.json` presente em `models/` estivesse em [0,70; 0,92] **e** fosse citada na linha 4.6 do `README.md`; com os artefatos desta rodada em `models/`, esses dois testes reprovavam — e era o comportamento correto do gate de honestidade, nao um defeito deste trabalho. Num clone limpo (`models/` esta no `.gitignore`) eles pulam e a suite fica verde.
+
+**Desde 14/09/2026 o teste exige outra coisa:** teto 0,92 como gate anti-vazamento; piso 0,60 como gate de sanidade contra degradacao catastrofica (0,70 estava dentro do erro padrao da medida, ~0,006 com 8.000 linhas de teste, e nao distinguia aprovado de reprovado); e o criterio operacional — zero recuperaveis perdidos no `recall_operacional` e recall acima de 0,90 no limiar em uso — como gate do produto (`test_o_criterio_operacional_e_satisfeito`). O 0,70 deste titulo continua sendo o gate G3 de sprint aprovado em `docs/historico/APROVACAO_SPRINT3.md`, verdadeiro como historia. A decisao esta registrada em `docs/LIMITACOES.md`, e a linha 4.6 do `README.md` foi atualizada na mesma data.
 
 ## 5. O que JA aprende com dado real hoje: `offer_bandit.py`
 
 `crai/churn_voluntary/offer_bandit.py` (Modulo 4, Thompson Sampling) nao depende de nada sintetico: cada par (perfil, oferta) mantem um posterior Beta(alfa, beta) sobre a taxa de aceite, e **cada aceite/recusa REAL** que chega pelo webhook `/webhooks/retention-outcome` atualiza o posterior (`record_outcome`, chamado em `voluntary_agent.py` depois de `registrar_desfecho`), persistido em `models/bandit_state.json`, isolado por `tenant_id`. E aprendizado online com o desfecho observado — a prova positiva, separada, de que a arquitetura ja fecha o ciclo com dado real onde o dado real existe. O rotulo ali e **aceitacao de oferta**, nao churn; isso esta declarado em `churn_voluntary/README_treino.md`.
 
 ## 6. Versionamento — o artefato recarrega de forma previsivel
+
+> **Rodada descrita:** `rodada_baixa.json` (11/09/2026 21:40) e `rodada_alta.json` (11/09/2026 21:41), Python 3.11.15. Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e `docs/LIMITACOES.md`.
 
 - `requirements.txt` fixa versao **exata** (`==`) de `scikit-learn`, `xgboost`, `torch` e `prophet` (antes: `torch>=2.3`, `prophet>=1.1`). `tests/test_train_fonte.py::TestVersionamento` reprova se voltar a faixa.
 - Cada `meta.json` grava as versoes usadas NAQUELE treino (`calibracao.versoes_bibliotecas()`): python 3.11.15, scikit-learn 1.5.2, xgboost 2.1.1, torch 2.13.0+cu130, numpy 1.26.4, pandas 2.2.3, joblib 1.4.2, shap 0.46.0, prophet 1.4.0.

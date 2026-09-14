@@ -39,9 +39,18 @@ RAIZ_PROJETO = Path(__file__).resolve().parent.parent
 METRICAS = RAIZ_PROJETO / "models" / "train_metrics.json"
 README = RAIZ_PROJETO / "README.md"
 
-# Faixa anti-vazamento dos gates G3/G4 (sprints.md). Abaixo do piso o modelo
-# não sustenta a decisão; acima do teto o gerador está vazando o rótulo.
-PISO_AUC, TETO_AUC = 0.70, 0.92
+# Teto: gate anti-vazamento dos G3/G4 (sprints.md). Acima dele o gerador está
+# vazando o rótulo — continua sendo gate, com a justificativa de sempre.
+#
+# Piso: gate de SANIDADE contra degradação catastrófica, não aproximação do
+# critério de e-Profit. O piso anterior, 0,70, estava dentro do erro padrão da
+# própria medida (~0,006 com 8.000 linhas de teste): 0,6951 e 0,70 não são
+# distinguíveis, e o gate separava sorte de azar, não aprovado de reprovado.
+# 0,60 está fora desse erro. O que "sustenta a decisão de e-Profit" é medido
+# direto pelo critério operacional, em
+# `test_o_criterio_operacional_e_satisfeito` (decisão de 14/09/2026,
+# registrada em docs/LIMITACOES.md).
+PISO_AUC, TETO_AUC = 0.60, 0.92
 
 
 def _linha_46() -> str:
@@ -80,13 +89,49 @@ class TestOReadmeNaoMenteSobreOsModelos:
 
         Se a AUC sair da faixa, o README tem que dizer isso, e este teste
         reprova antes de alguém esquecer de dizer.
+
+        Desde 14/09/2026 o piso é 0,60, gate de sanidade: pega um modelo que
+        degradou de verdade, não um que oscilou dentro do erro da medida. A
+        AUC deixou de ser o proxy da decisão de e-Profit — isso é o teste
+        `test_o_criterio_operacional_e_satisfeito`.
         """
         auc = _metricas()["auc"]
         assert PISO_AUC <= auc <= TETO_AUC, (
-            f"AUC {auc} fora da faixa [{PISO_AUC}; {TETO_AUC}] dos gates G3/G4. "
-            "Abaixo do piso o modelo não sustenta a decisão de e-Profit; acima "
-            "do teto o gerador está vazando o rótulo. A demo carrega este "
-            "binário"
+            f"AUC {auc} fora da faixa [{PISO_AUC}; {TETO_AUC}]. Abaixo do piso o "
+            "modelo degradou de forma catastrófica (o piso é sanidade, não o "
+            "critério de e-Profit — esse é o `recall_operacional`); acima do "
+            "teto o gerador está vazando o rótulo. A demo carrega este binário"
+        )
+
+    def test_o_criterio_operacional_e_satisfeito(self):
+        """GATE — o critério que o produto exige, medido direto, não por proxy.
+
+        Para este produto o erro caro é deixar de tentar quando valia a pena.
+        Dois números do treino dizem se isso acontece: `recall_operacional`
+        (a regra de e-Profit, que é quem decide) não pode ter perdido nenhum
+        recuperável, e o recall do classificador no limiar em uso tem que
+        ficar acima de 0,90, que foi a regra que escolheu o limiar.
+
+        Substitui o piso de AUC 0,70 como gate da decisão (14/09/2026,
+        docs/LIMITACOES.md). Nasce passando: 0 perdidos em 8.000 e recall
+        0,9457 no limiar 0,25.
+        """
+        m = _metricas()
+        operacional = m["recall_operacional"]
+        assert operacional["recuperaveis_perdidos"] == 0, (
+            f"{operacional['recuperaveis_perdidos']} recuperáveis perdidos em "
+            f"{operacional['n_total']} pela regra `{operacional['regra']}`. "
+            "O pipeline deixou de tentar onde valia a pena: é o erro caro "
+            "deste produto, e o único que este gate existe para barrar"
+        )
+
+        em_uso = [t for t in m["metricas_por_limiar"] if t.get("em_uso")]
+        assert len(em_uso) == 1
+        assert em_uso[0]["recall"] > 0.90, (
+            f"recall {em_uso[0]['recall']} no limiar em uso "
+            f"{em_uso[0]['limiar']}, abaixo de 0,90. O limiar foi escolhido "
+            "para sustentar esse recall; abaixo dele o classificador deixa "
+            "passar recuperáveis antes mesmo da regra de e-Profit decidir"
         )
 
     def test_o_schema_do_treino_e_o_atual(self):

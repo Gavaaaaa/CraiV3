@@ -161,6 +161,7 @@ class VoluntaryRiskModel:
             "n_amostras": metrics["n_amostras"],
             "auc_vs_rotulo": metrics["auc_vs_rotulo"],
             "corr_vs_regra": metrics["corr_vs_regra"],
+            "auc_regra_vs_rotulo": metrics["auc_regra_vs_rotulo"],
             "rotulo": "Bernoulli(regras fixas do risk_scorer + ruido) — NAO e churn observado",
             "proveniencia": metrics["proveniencia"],
             "versoes": metrics["versoes"],

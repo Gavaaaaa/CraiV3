@@ -249,6 +249,14 @@ def generate_dataset(
     # some sem motivo). A magnitude (2%) é deliberadamente pequena: o objetivo
     # é impedir que o modelo decore a regra, não afogar o sinal — cada ponto
     # de exceção custa AUC, e o gate G3 exige AUC >= 0,70.
+    #
+    # Esse 0,70 é o gate G3 de sprint (`docs/planos/sprints.md`). O gate
+    # executável mudou em 14/09/2026: `tests/test_metricas_declaradas.py` usa
+    # teto 0,92 como gate anti-vazamento, piso 0,60 como sanidade e o critério
+    # operacional (zero recuperáveis perdidos, recall > 0,90 no limiar em uso)
+    # como gate do produto — 0,70 estava dentro do erro padrão da medida. O
+    # ruído acima não mudou e continua sendo a razão de o teto existir: é ele
+    # que mantém a AUC longe de ~0,99. Decisão em `docs/LIMITACOES.md`.
     if P["p_excecao_rotulo"] > 0:
         excecao = rng.random(n_samples) < P["p_excecao_rotulo"]
         recovered[excecao] = rng.integers(0, 2, size=int(excecao.sum()))

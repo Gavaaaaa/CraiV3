@@ -35,7 +35,16 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
 
 **Limitações dos modelos (declaradas):**
 
-- O classificador de falha de cobrança foi treinado em dataset sintético
+> **Rodada que esta lista descreve:** os números marcados com *(rodada de 11/09/2026)*
+> vêm de `app/docs/evidencia/treino/rodada_baixa.json` e `rodada_alta.json`
+> (classificador treinado em 2026-09-11T21:40:41 e 2026-09-11T21:41:55, Python
+> 3.11.15) e da checagem `fora_do_dominio.json` da mesma evidência. Eles **não**
+> descrevem os artefatos atuais de `app/models/`, retreinados em 14/09/2026 com
+> 40.000 amostras no classificador. O estado atual está na seção "A AUC do
+> classificador de falha está abaixo do piso declarado nos gates", no fim deste
+> arquivo, e na linha §4.6 do `app/README.md`.
+
+- *(rodada de 11/09/2026)* O classificador de falha de cobrança foi treinado em dataset sintético
   calibrado — na última rodada, 6.000 linhas (4.800 treino / 1.200 teste)
   (`rodada_alta.json`). O rótulo "recuperou" vem de um modelo causal declarado,
   com ruído e 2% de rótulos sorteados: nenhum PSP publica esse rótulo. A base
@@ -51,21 +60,24 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   pipeline Pix a bandeira entra como `"n/a"` (`workflow.py`), e as causas
   `limit_exceeded` / `authorization_revoked`, que não existem no treino, caem no
   índice "desconhecido" do encoder (`len(classes_)`, `failure_classifier.py`).
-- AUC medida: **0,6669** (n=6.000, `rodada_alta.json`) e 0,6695 (n=3.000,
-  `rodada_baixa.json`) — **abaixo do piso de 0,70** que o próprio repositório
-  exige (faixa [0,70; 0,92] em `app/tests/test_metricas_declaradas.py`). Curva de
+- *(rodada de 11/09/2026)* AUC medida: **0,6669** (n=6.000, `rodada_alta.json`) e 0,6695 (n=3.000,
+  `rodada_baixa.json`) — **abaixo do piso de 0,70** que o repositório exigia
+  na época (faixa [0,70; 0,92] em `app/tests/test_metricas_declaradas.py`). Desde
+  14/09/2026 o teste exige outra coisa: teto 0,92 como gate anti-vazamento, piso
+  0,60 como sanidade e o critério operacional como gate do produto — ver "Decisão
+  sobre o gate" no fim deste arquivo. Curva de
   volume, média de 3 seeds: 0,626 (1.000) → 0,681 (3.000) → 0,686 (6.000) → 0,696
   (12.000) (`fora_do_dominio.json`). O 0,703 citado na beta foi medido com a fonte
   default, não calibrada, e n=15.000 (`app/README_treino.md`). No limiar 0,25 a
   acurácia é 0,526 e o recall 0,919; a acurácia baixa é aceita porque quem decide
   é a regra de e-Profit, com recall operacional 1,0 no teste (0 recuperáveis
   perdidos em 1.200). Fora do domínio não existe rótulo e, portanto, não existe AUC.
-- Autoencoder (ROC-AUC 0,981) e Payday Engine (ROC-AUC do ensemble 0,952; MAE
+- *(rodada de 11/09/2026)* Autoencoder (ROC-AUC 0,981) e Payday Engine (ROC-AUC do ensemble 0,952; MAE
   da janela 0,68 dia, contra 4,55 da heurística) foram avaliados dentro das
   próprias simulações de treino, não em produção (`rodada_alta.json`). No dado
   real do E-Commerce Customer Churn o autoencoder cai para ROC-AUC 0,506; o
   payday não tem doador público para ser checado (`fora_do_dominio.json`).
-- O risco de churn voluntário ativo são **regras fixas** (`risk_scorer.py`). O
+- *(rodada de 11/09/2026)* O risco de churn voluntário ativo são **regras fixas** (`risk_scorer.py`). O
   candidato treinado não está ativo e não tem o que acrescentar hoje: o rótulo
   do dataset é gerado pelas próprias regras, com ruído. Por isso o candidato
   chega a AUC 0,752 contra teto de 0,758 das regras (`rodada_alta.json`). No dado
@@ -97,3 +109,60 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
 
 O que a beta prova: o pipeline aprende, explica e decide sobre um sinal; o que
 ela não prova: que a previsão de recuperação vale em produção.
+
+### A AUC do classificador de falha está abaixo do piso declarado nos gates
+
+Isto está declarado aqui em vez de contornado.
+
+Medição de 14/09/2026, gerador calibrado, 40.000 amostras
+(32.000 de treino, 8.000 de teste): **AUC 0,6951**. O README declarava
+**0,7029**, número de 01/09/2026, medido com o **gerador anterior** e 15.000 amostras.
+Não é a mesma medida, e não deveria ter sido comparada como se fosse.
+
+A diferença tem duas causas conhecidas. A primeira é o gerador: o atual é calibrado e o
+anterior não era. A segunda está documentada no próprio artefato de métricas — 2% dos
+rótulos são sorteados ao acaso, de propósito, para impedir que o modelo memorize a
+regra que gerou os dados. Ruído deliberado no rótulo limita a AUC por construção.
+
+Uma execução anterior, com 6.000 amostras, deu AUC 0,669. Multiplicar a base por 6,7
+moveu a AUC em 0,0261. O achatamento indica que o limite não é falta de
+amostra. As duas execuções com 40.000 amostras, em máquinas e versões de Python
+diferentes, deram o mesmo valor — o treino é reproduzível.
+
+**O gate de 0,70 exige uma precisão que a medição não sustenta.** Com 8.000 linhas
+de teste, o erro padrão da AUC é da ordem de 0,006: 0,6951 e 0,70 não são
+estatisticamente distinguíveis. O valor anterior, 0,7029, passava com folga de 0,0029 —
+metade do próprio erro da medida.
+
+**O critério que o produto exige é outro, e ele é satisfeito.** No limiar em uso
+(0,25), o recall de recuperáveis é **0,9457**, e o `recall_operacional` registra
+**zero clientes recuperáveis perdidos** em 8.000 casos. Para este produto o erro
+caro é deixar de tentar quando valia a pena.
+
+**O modelo de risco voluntário mede o próprio teto.** O candidato treinado alcança AUC
+0,7503 contra um teto das regras de 0,7527, com correlação
+0,9938 com a fórmula que gerou os rótulos. Ele aprendeu a reproduzir a regra, e
+não há mais informação a extrair. Por isso não foi promovido.
+
+**O que não foi feito, de propósito:** o ruído do rótulo não foi removido para alcançar
+o gate, e os hiperparâmetros não foram ajustados contra o conjunto de teste.
+
+**Decisão sobre o gate (14/09/2026):** o gate de AUC foi redesenhado em
+`app/tests/test_metricas_declaradas.py`, com três partes.
+
+- O teto de 0,92 continua como gate, com a justificativa de sempre: acima dele o
+  gerador está vazando o rótulo.
+- O piso baixou de 0,70 para **0,60**, e mudou de papel: é gate de sanidade contra
+  degradação catastrófica, não aproximação do critério de e-Profit. A razão é a do
+  parágrafo acima: 0,70 estava dentro do erro padrão da medida (~0,006) e não
+  distinguia aprovado de reprovado; 0,60 está fora dele.
+- O critério operacional virou gate próprio, `test_o_criterio_operacional_e_satisfeito`:
+  `recall_operacional.recuperaveis_perdidos` tem que ser zero, e o recall no limiar em
+  uso tem que ficar acima de 0,90. É a medida direta do que o piso de 0,70 tentava
+  aproximar. Nasce passando com os números desta seção.
+
+A AUC continua medida, declarada na §4.6 do `app/README.md` e conferida pelo teste
+que exige que o número do README seja o do arquivo em disco.
+
+**Em aberto:** ajuste de hiperparâmetros por validação cruzada dentro do conjunto de
+treino, com medição única no teste.

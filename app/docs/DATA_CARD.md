@@ -254,6 +254,17 @@ não sabem, o modelo não aprende nada. Se souber *exatamente* o que as features
 sabem, sem ruído, o modelo decora a regra. O gate **G3 mede as duas falhas**
 (AUC obrigatoriamente dentro de **[0,70 ; 0,92]**).
 
+> **Nota de 14/09/2026:** o [0,70 ; 0,92] acima é o gate G3 de sprint
+> (`docs/planos/sprints.md`, aprovado em `docs/historico/APROVACAO_SPRINT3.md`) e
+> continua verdadeiro como história. O gate executável, em
+> `tests/test_metricas_declaradas.py`, mudou nessa data: teto 0,92 como gate
+> anti-vazamento, piso 0,60 como sanidade e o critério operacional (zero
+> recuperáveis perdidos, recall acima de 0,90 no limiar em uso) como gate do
+> produto — porque 0,70 estava dentro do erro padrão da medida (~0,006 com 8.000
+> linhas de teste). O ruído do rótulo desta seção não mudou: é ele que mantém a
+> AUC longe do teto, e é a razão de o teto existir. Decisão registrada em
+> `docs/LIMITACOES.md`.
+
 ---
 
 ## 7. O modelo causal do rótulo — cada coeficiente e sua hipótese

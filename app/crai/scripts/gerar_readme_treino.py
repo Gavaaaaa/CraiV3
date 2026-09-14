@@ -100,6 +100,20 @@ def gerar() -> str:
     versoes = alta["classifier"]["versoes"]
     curva = fora.get("curva_de_volume")
 
+    # Marcação de rodada: as métricas deste documento vêm dos JSONs de evidência,
+    # não dos artefatos atuais de `models/`. Sem isso o leitor compara o número
+    # daqui com o `train_metrics.json` em disco como se fossem a mesma rodada.
+    def _quando(iso: str) -> str:
+        d, h = iso.split("T")
+        a, m, dia = d.split("-")
+        return f"{dia}/{m}/{a} {h[:5]}"
+    quando_baixa = _quando(baixa["classifier"]["treinado_em"])
+    quando_alta = _quando(alta["classifier"]["treinado_em"])
+    marca_rodada = (f"> **Rodada descrita:** `rodada_baixa.json` ({quando_baixa}) e "
+                    f"`rodada_alta.json` ({quando_alta}), Python {versoes['python']}. "
+                    "Nao e o estado atual de `models/`: ver `README.md` (secao 4.6) e "
+                    "`docs/LIMITACOES.md`.\n")
+
     fe = cal["fontes"]
     an_fd = fora["anomaly"]["fora_do_dominio"]
     an_ed = fora["anomaly"]["em_dominio"]
@@ -118,6 +132,14 @@ def gerar() -> str:
       f"`{cal['gerado_em']}` · versoes gravadas nos `meta.json`: scikit-learn "
       f"{versoes['scikit-learn']}, xgboost {versoes['xgboost']}, torch {versoes['torch']}, "
       f"prophet {versoes['prophet']}.\n")
+
+    w(f"> **Rodada que este documento descreve:** as metricas das secoes 3, 4.2, 4.3 e 6 "
+      f"sao das rodadas gravadas em `docs/evidencia/treino/rodada_baixa.json` (classificador "
+      f"treinado em {quando_baixa}) e `rodada_alta.json` (classificador treinado em "
+      f"{quando_alta}), com Python {versoes['python']}. Elas NAO descrevem os artefatos "
+      "atuais de `models/`, que podem vir de um treino posterior: o estado atual esta em "
+      "`models/train_metrics.json` e `models/*_meta.json`, declarado em `README.md` "
+      "(secao 4.6) e em `docs/LIMITACOES.md`.\n")
 
     w("## 0. Declaracao, antes de qualquer numero\n")
     w("**Isto NAO e treino com dado real de churn observado.** Nenhum dos quatro modelos "
@@ -171,6 +193,7 @@ def gerar() -> str:
         w(tabela_features(cal, modelo))
 
     w("## 3. Mecanismo de retreino — duas rodadas por modelo, lado a lado\n")
+    w(marca_rodada)
     w("Comandos exatos (de `app/`), com os artefatos sobrescritos em `models/` a cada rodada "
       "e a verificacao `load()` apos cada `train()`:\n")
     w("```\npython -m crai.scripts.train_all --fonte sintetico_calibrado \\\n"
@@ -183,6 +206,7 @@ def gerar() -> str:
       "`docs/evidencia/treino/log_rodada_*.txt`.\n")
 
     w("### 3.1 FailureClassifier (XGBoost 0,7 + RandomForest 0,3)\n")
+    w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "classifier", [
         ("AUC-ROC (holdout 20%)", "auc"), ("Acuracia @ limiar 0,25", "accuracy"),
         ("Precisao (recuperado)", "precision_recovered"), ("Recall (recuperado) @ 0,25", "recall_recovered"),
@@ -194,16 +218,19 @@ def gerar() -> str:
     w("**Leia com cuidado.** Com o dobro de volume a AUC do holdout ficou estatisticamente no "
       "mesmo lugar (a diferenca esta dentro do erro-padrao de um holdout de 600-1.200 linhas, "
       "~0,02). Dois pontos nao provam tendencia; a curva de volume com 3 seeds (3.5) prova. "
-      "E a AUC esta **abaixo do piso 0,70** do gate G3 do `sprints.md` — ver 4.3, porque isso "
-      "e esperado e esta declarado, nao escondido.\n")
+      "E a AUC esta **abaixo do piso 0,70** do gate G3 do `sprints.md` (gate de sprint; o gate "
+      "executavel mudou em 14/09/2026 — ver 4.3), porque isso e esperado e esta declarado, "
+      "nao escondido.\n")
 
     w("### 3.2 AnomalyDetector (autoencoder 12-4-12, treinado so em saudaveis)\n")
+    w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "anomaly", [
         ("ROC-AUC (saudaveis held-out + anomalos)", "roc_auc"), ("Average precision", "average_precision"),
         ("Precisao @ p95", "precision"), ("Recall @ p95", "recall"), ("F1", "f1"),
         ("Threshold (p95 do erro saudavel)", "threshold"), ("Separacao anomalo/saudavel", "separation_ratio"),
         ("Epocas", "epochs_trained"), ("Saudaveis no treino", "n_train_healthy")]))
     w("### 3.3 PaydayInference (LSTM 0,6 + Prophet 0,4)\n")
+    w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "payday", [
         ("ROC-AUC diario — LSTM", "roc_auc_lstm"), ("ROC-AUC diario — Prophet", "roc_auc_prophet"),
         ("ROC-AUC diario — ensemble", "roc_auc_ensemble"), ("MAE da janela otima (dias) — ensemble", "mae_dias_ensemble"),
@@ -211,6 +238,7 @@ def gerar() -> str:
         ("Acerto exato", "hit_exato_ensemble"), ("Acerto +-1 dia", "hit_1d_ensemble"),
         ("Janelas de treino", "n_janelas_treino"), ("Clientes de teste", "n_clientes_teste")]))
     w("### 3.4 risk_scorer voluntario — candidato (GradientBoosting sobre `FEATURES_DE_RISCO`)\n")
+    w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "voluntario", [
         ("AUC vs rotulo ruidoso", "auc_vs_rotulo"), ("AUC das PROPRIAS REGRAS vs rotulo (teto)", "auc_regra_vs_rotulo"),
         ("Brier", "brier"), ("MAE entre p(modelo) e regra", "mae_vs_regra"),
@@ -226,6 +254,7 @@ def gerar() -> str:
 
     if curva:
         w("### 3.5 Curva de volume — o mecanismo responde a mais dado (3 seeds do gerador)\n")
+        w(marca_rodada)
         w("Mesmo `train(fonte=\"sintetico_calibrado\")`, em 4 volumes, com 3 seeds diferentes do "
           "gerador em cada volume (`python -m crai.scripts.sanity_check_fora_do_dominio`). "
           "E a prova que dois pontos nao dao: a media sobe e a variancia entre seeds cai.\n")
@@ -256,6 +285,7 @@ def gerar() -> str:
       "verifica que os mecanismos de fato alteram o rotulo sem alterar as features.\n")
 
     w("### 4.2 Checagem fora do dominio (Etapa C) — a queda esperada, registrada como saiu\n")
+    w(marca_rodada)
     w("`python -m crai.scripts.sanity_check_fora_do_dominio` — so inferencia, nada e treinado "
       "com dado real. Resultado completo em `docs/evidencia/treino/fora_do_dominio.json`.\n")
     w("| Modelo | Em dominio (sintetico calibrado, holdout novo) | Fora do dominio (dado real) | Rotulo real | Leitura |")
@@ -273,6 +303,7 @@ def gerar() -> str:
       "numeros subirem.\n")
 
     w("### 4.3 A AUC do classificador ficou abaixo do piso 0,70 do gate G3\n")
+    w(marca_rodada)
     w(f"Medido: {_f(baixa['classifier']['auc'])} (n=3000) e {_f(alta['classifier']['auc'])} "
       "(n=6000) com fonte calibrada; com a fonte default nos MESMOS volumes, 0,680 e 0,676. "
       "O 0,7029 citado no `README.md` (secao 4.6) foi medido com n=15.000 na fonte default. "
@@ -284,13 +315,21 @@ def gerar() -> str:
       "Olist (mediana ~R$ 100), o termo `- clip((valor - 500)/5000, 0, 0,15)` do modelo causal "
       "fica ~0 em quase todas as linhas — o sinal do valor desaparece e a AUC cai. Um parametro "
       "medido e declarado vale mais que um inventado que parecia certo.\n\n"
-      "Consequencia pratica que precisa ficar escrita: `tests/test_metricas_declaradas.py` "
-      "exige que a AUC do `train_metrics.json` presente em `models/` esteja em [0,70; 0,92] "
-      "**e** seja citada na linha 4.6 do `README.md`. Com os artefatos desta rodada em "
-      "`models/`, esses dois testes reprovam — e e o comportamento correto do gate de "
-      "honestidade, nao um defeito deste trabalho. Num clone limpo (`models/` esta no "
-      "`.gitignore`) eles pulam e a suite fica verde. A linha 4.6 do `README.md` nao foi "
-      "alterada aqui de proposito; atualiza-la e decisao de quem mantem o README.\n")
+      "Consequencia pratica que precisa ficar escrita: na data desta rodada, "
+      "`tests/test_metricas_declaradas.py` exigia que a AUC do `train_metrics.json` presente "
+      "em `models/` estivesse em [0,70; 0,92] **e** fosse citada na linha 4.6 do `README.md`; "
+      "com os artefatos desta rodada em `models/`, esses dois testes reprovavam — e era o "
+      "comportamento correto do gate de honestidade, nao um defeito deste trabalho. Num clone "
+      "limpo (`models/` esta no `.gitignore`) eles pulam e a suite fica verde.\n\n"
+      "**Desde 14/09/2026 o teste exige outra coisa:** teto 0,92 como gate anti-vazamento; "
+      "piso 0,60 como gate de sanidade contra degradacao catastrofica (0,70 estava dentro do "
+      "erro padrao da medida, ~0,006 com 8.000 linhas de teste, e nao distinguia aprovado de "
+      "reprovado); e o criterio operacional — zero recuperaveis perdidos no "
+      "`recall_operacional` e recall acima de 0,90 no limiar em uso — como gate do produto "
+      "(`test_o_criterio_operacional_e_satisfeito`). O 0,70 deste titulo continua sendo o "
+      "gate G3 de sprint aprovado em `docs/historico/APROVACAO_SPRINT3.md`, verdadeiro como "
+      "historia. A decisao esta registrada em `docs/LIMITACOES.md`, e a linha 4.6 do "
+      "`README.md` foi atualizada na mesma data.\n")
 
     w("## 5. O que JA aprende com dado real hoje: `offer_bandit.py`\n")
     w("`crai/churn_voluntary/offer_bandit.py` (Modulo 4, Thompson Sampling) nao depende de "
@@ -304,6 +343,7 @@ def gerar() -> str:
       "churn; isso esta declarado em `churn_voluntary/README_treino.md`.\n")
 
     w("## 6. Versionamento — o artefato recarrega de forma previsivel\n")
+    w(marca_rodada)
     w("- `requirements.txt` fixa versao **exata** (`==`) de `scikit-learn`, `xgboost`, "
       "`torch` e `prophet` (antes: `torch>=2.3`, `prophet>=1.1`). "
       "`tests/test_train_fonte.py::TestVersionamento` reprova se voltar a faixa.\n"
