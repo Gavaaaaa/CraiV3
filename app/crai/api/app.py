@@ -49,7 +49,8 @@ from ..dunning import recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
-from ..churn_voluntary import clientes_importados, disparo_lote, importacao, insights_unificados
+from ..churn_voluntary import (clientes_importados, disparo_lote, importacao,
+                               insights_unificados, retention_log)
 from ..integrations import email_sender
 from ..accounts import get_conta, get_tenant_id
 from ..integrations.payment_gateway import (
@@ -1556,8 +1557,6 @@ def _build_fake_stripe_event(p: SimulatePayment) -> dict:
 # tests/test_supabase_auth.py garante que so aquelas duas exigem o JWT.
 # ---------------------------------------------------------------------------
 
-from .painel import PAGINA_PAINEL                                # noqa: E402
-from fastapi.responses import HTMLResponse                       # noqa: E402
 
 # CONVENIENCIA DE DESENVOLVIMENTO, e so dela: em ENV=development|demo, se
 # NENHUM destino de base foi declarado, aponta para um SQLite local. Sem isto,
@@ -1633,11 +1632,38 @@ OFERTA_LEGIVEL = {"desconto_10": "Oferta: desconto de 10%",
                   "pix_boleto_flash": "Oferta: Pix / Boleto Flash"}
 
 
-@app.get("/painel", response_class=HTMLResponse)
-async def painel_de_avaliacao():
-    """A pagina do painel. Restrita a ENV=development|demo, como /simulate/*."""
-    _require_simulation_env()
-    return HTMLResponse(PAGINA_PAINEL)
+
+
+# O painel novo mora em `painel/` na raiz do repositorio (index.html,
+# estilo.css, idioma.js, api.js, render.js, img/, e as fixtures e os CSVs de
+# exemplo que a tela consome). E servido como estatico em /painel/v2 enquanto a
+# pagina antiga em GET /painel continua no ar; quando ela for aposentada, este
+# mount passa para /painel. Um mount nao passa pelas dependencies de rota, entao
+# a trava de ambiente entra no proprio ASGI: fora de ENV=development|demo, 403
+# com o mesmo detalhe de `_require_simulation_env()`.
+from fastapi.staticfiles import StaticFiles                      # noqa: E402
+
+PASTA_PAINEL = Path(__file__).resolve().parents[3] / "painel"
+
+
+class _EstaticosDoPainel(StaticFiles):
+    """StaticFiles atras de `_require_simulation_env()`."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            try:
+                _require_simulation_env()
+            except HTTPException as e:
+                resposta = JSONResponse({"detail": e.detail},
+                                        status_code=e.status_code)
+                await resposta(scope, receive, send)
+                return
+        await super().__call__(scope, receive, send)
+
+
+app.mount("/painel/v2",
+          _EstaticosDoPainel(directory=PASTA_PAINEL, html=True),
+          name="painel_v2")
 
 
 @app.get("/simulate/painel/ambiente")
@@ -1657,6 +1683,19 @@ class PainelCobranca(BaseModel):
     valor: float = 299.90
     codigo_falha: str = "AM04"
     tentativas_usadas: int = 0
+    # Identificador ESTAVEL do cliente de exemplo, opcional.
+    #
+    # Sem ele, `customer_id` era o id da recorrencia -- novo a cada chamada. E
+    # `perfil_provider.get_perfil` deriva o perfil do pagador de
+    # `seed_por_cliente(customer_id)`, um md5 estavel: cliente novo a cada
+    # clique significava historico de pagamento, tempo de casa e falhas em 90
+    # dias DIFERENTES para a mesma cobranca. Com este campo, o mesmo cliente
+    # devolve sempre o mesmo perfil -- que e a reprodutibilidade que o provedor
+    # sempre prometeu, e que a demonstracao precisa.
+    #
+    # Nao mexe na janela do BACEN: `id_recorrencia` e `thread_id` continuam
+    # unicos por chamada, entao cada cobranca comeca com o contador limpo.
+    cliente: str | None = None
 
 
 @app.post("/simulate/painel/cobranca-falhada")
@@ -1671,12 +1710,16 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
     _require_simulation_env()
     valor = _valor_de_simulacao(payload.valor, "valor")
     id_rec = f"RN_painel_{int(datetime.now(timezone.utc).timestamp())}"
+    # So letras, digitos, hifen e sublinhado, no maximo 48 caracteres: o valor
+    # vem do navegador e vira chave de perfil e de log.
+    apelido = re.sub(r"[^A-Za-z0-9_-]", "", (payload.cliente or ""))[:48]
+    id_cliente = f"CLI_painel_{apelido}" if apelido else id_rec
     evento = {"e2e_id": f"E60701190{id_rec}", "valor": valor,
               "status": "cobranca_falhada", "ispb_pagador": "60701190",
               "id_recorrencia": id_rec, "codigo_falha": payload.codigo_falha}
     inicial: AgentState = {
         "payment_event": evento, "payment_method": "pix_automatico",
-        "tenant_id": TENANT_PAINEL, "customer_id": id_rec,
+        "tenant_id": TENANT_PAINEL, "customer_id": id_cliente,
         "invoice_id": evento["e2e_id"], "amount": valor, "features": None,
         "failure_cause": None, "recovery_score": None, "p_recovery": None,
         "eprofit": None, "recommend_action": None, "ltv_estimated": None,
@@ -1836,6 +1879,15 @@ async def painel_importar(arquivo: UploadFile = File(None)):
     A rota autenticada continua sendo `/clientes/importar`; esta existe para o
     painel exercitar o mesmo codigo quando o projeto Supabase ainda nao foi
     criado. Sem arquivo, usa a base de exemplo.
+
+    SUBSTITUI, nao acumula: como tudo aqui vai para o mesmo `TENANT_PAINEL`,
+    a base anterior e apagada antes de importar, e os ciclos de retencao do
+    tenant tambem. Sem a primeira limpeza as bases de exemplo se somavam
+    (diario + mensal + saudavel = 1.496 clientes) e a "base saudavel" saia
+    com dezenas de criticos; sem a segunda, a segunda rodada do disparo em
+    lote devolvia todo mundo como `ciclo_aberto` e nao tratava ninguem. So
+    aqui: em `/clientes/importar` o upsert acumular e o ciclo aberto valer
+    sao o comportamento correto.
     """
     _require_simulation_env()
     if arquivo is not None and arquivo.filename:
@@ -1843,6 +1895,8 @@ async def painel_importar(arquivo: UploadFile = File(None)):
     else:
         nome, conteudo = "base_exemplo.csv", BASE_EXEMPLO_PAINEL.encode("utf-8")
     try:
+        clientes_importados.apagar_tenant(TENANT_PAINEL)
+        retention_log.apagar_tenant(TENANT_PAINEL)
         relatorio = importacao.importar(TENANT_PAINEL, nome, conteudo)
     except importacao.ArquivoInvalido as e:
         raise HTTPException(status_code=e.status,

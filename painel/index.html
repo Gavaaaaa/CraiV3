@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel CRAI</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+
+<header class="topo">
+  <div class="topo-in">
+    <div class="marca">
+      <img class="logo a" src="img/logo-claro.png" alt="CRAI" width="440" height="143">
+      <img class="logo b" src="img/logo-escuro.png" alt="CRAI" width="440" height="143">
+      <span class="marca-tag" data-i18n="marca_tag"></span>
+    </div>
+    <div class="topo-dir">
+      <span class="demo-selo"><b></b><span data-i18n="selo_demo"></span></span>
+      <div class="idioma" role="group" aria-label="Idioma / Language">
+        <button type="button" data-idioma="pt" aria-pressed="true">PT</button>
+        <button type="button" data-idioma="en" aria-pressed="false">EN</button>
+      </div>
+      <button type="button" class="icone" id="tema" aria-label="Tema / Theme">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <circle cx="8" cy="8" r="3.1"></circle>
+          <path d="M8 1.1v1.7M8 13.2v1.7M1.1 8h1.7M13.2 8h1.7M3.1 3.1l1.2 1.2M11.7 11.7l1.2 1.2M12.9 3.1l-1.2 1.2M4.3 11.7l-1.2 1.2"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<nav class="abas" aria-label="Seções">
+  <div class="abas-in" role="tablist">
+    <button type="button" class="aba" role="tab" aria-selected="true" data-tela="cobrar"><span data-i18n="aba_cobrar"></span></button>
+    <button type="button" class="aba" role="tab" aria-selected="false" data-tela="recuperar"><span data-i18n="aba_recuperar"></span></button>
+    <button type="button" class="aba" role="tab" aria-selected="false" data-tela="risco"><span data-i18n="aba_risco"></span></button>
+    <button type="button" class="aba" role="tab" aria-selected="false" data-tela="mensagens"><span data-i18n="aba_mensagens"></span></button>
+    <button type="button" class="aba" role="tab" aria-selected="false" data-tela="visao"><span data-i18n="aba_visao"></span><span class="ponto" id="pontoVisao" hidden></span></button>
+  </div>
+</nav>
+
+<main class="palco">
+
+<!-- ═══ COBRANÇAS ═══ -->
+<section class="tela on" data-tela="cobrar" role="tabpanel">
+  <div class="cab"><h1 data-i18n="cobrar_t"></h1><p data-i18n="cobrar_s"></p></div>
+  <div class="painel pad">
+    <h3 data-i18n="forma_pagamento"></h3>
+    <div class="metodos" id="metodos"></div>
+    <div class="campos">
+      <div class="campo"><label for="selCliente" data-i18n="cliente_cobranca"></label><select id="selCliente"></select></div>
+      <div class="campo"><label for="inpValor" data-i18n="valor_fatura"></label><input type="text" id="inpValor" value="R$ 489,00" inputmode="decimal"></div>
+    </div>
+    <button type="button" class="btn p g" id="btnCobrar">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3.5v9l8-4.5-8-4.5z"/></svg>
+      <span data-i18n="enviar_cobranca"></span>
+    </button>
+    <div id="areaResultado"></div>
+  </div>
+  <p class="rodape" data-i18n="cobrar_rodape"></p>
+</section>
+
+<!-- ═══ RECUPERAÇÃO ═══ -->
+<section class="tela" data-tela="recuperar" role="tabpanel">
+  <div class="cab"><h1 data-i18n="recup_t"></h1><p data-i18n="recup_s"></p></div>
+  <div id="recupCorpo"></div>
+  <p class="rodape" data-i18n="recup_rodape"></p>
+</section>
+
+<!-- ═══ CLIENTES EM RISCO ═══ -->
+<section class="tela" data-tela="risco" role="tabpanel">
+  <div class="cab"><h1 data-i18n="risco_t"></h1><p data-i18n="risco_s"></p></div>
+  <div id="zonaEnvio">
+    <div class="painel pad">
+      <div class="solta" id="solta" tabindex="0" role="button">
+        <div class="ic">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 16V4M12 4 7.5 8.5M12 4l4.5 4.5"/><path d="M3.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5V15"/>
+          </svg>
+        </div>
+        <div class="t" data-i18n="solta_t"></div>
+        <div class="d" data-i18n="solta_d"></div>
+        <input type="file" id="arquivo" accept=".csv,text/csv" hidden>
+      </div>
+      <h3 style="margin-top:26px" data-i18n="ou_exemplo"></h3>
+      <div class="exemplos" id="exemplos"></div>
+    </div>
+  </div>
+  <div id="zonaAnalise" hidden></div>
+  <div id="zonaResultado" hidden></div>
+  <p class="rodape" data-i18n="risco_rodape"></p>
+</section>
+
+<!-- ═══ MENSAGENS ═══ -->
+<section class="tela" data-tela="mensagens" role="tabpanel">
+  <div class="cab"><h1 data-i18n="msg_t"></h1><p data-i18n="msg_s"></p></div>
+  <div class="modo-msg">
+    <button type="button" class="btn p" id="modoUm" aria-pressed="true"><span data-i18n="modo_um"></span></button>
+    <button type="button" class="btn" id="modoTodos" aria-pressed="false">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8.5 6 12.5 14 3.5"/></svg>
+      <span data-i18n="modo_todos"></span>
+    </button>
+  </div>
+  <div id="msgUm">
+    <div class="painel pad" style="margin-bottom:18px">
+      <div class="campo" style="max-width:440px"><label for="selMsgCliente" data-i18n="cliente"></label><select id="selMsgCliente"></select></div>
+    </div>
+    <div id="msgDetalhe"></div>
+  </div>
+  <div id="msgTodos" hidden></div>
+  <p class="rodape" data-i18n="msg_rodape"></p>
+</section>
+
+<!-- ═══ VISÃO GERAL ═══ -->
+<section class="tela" data-tela="visao" role="tabpanel">
+  <div class="cab"><h1 data-i18n="visao_t"></h1><p data-i18n="visao_s"></p></div>
+  <div id="visaoCorpo"></div>
+</section>
+
+</main>
+
+<script src="idioma.js"></script>
+<script src="api.js"></script>
+<script src="render.js"></script>
+</body>
+</html>

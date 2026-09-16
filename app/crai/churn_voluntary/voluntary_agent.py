@@ -375,6 +375,8 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
             "oferta_label": label,
             "texto": texto_vencedora if vencedora else _fallback_de_retencao(criticality, label),
             "p_sucesso": linha.get("p_estimado"),
+            "alpha": linha.get("alpha"),          # posterior de onde saiu p_sucesso
+            "beta": linha.get("beta"),            # (None no caminho sem rodada)
             "p_amostrado": linha.get("p_amostrado"),
             "eprofit_amostrado": linha.get("eprofit_amostrado"),
             "escolhida": vencedora,

@@ -300,6 +300,8 @@ class OfferBandit:
                                número que decidiu)
             p_estimado         a média do posterior — a probabilidade de aceite
                                que o bandit aprendeu até aqui
+            alpha, beta        os parâmetros do posterior Beta de onde saiu
+                               `p_estimado` (informativos, para o painel)
             eprofit_amostrado  p_amostrado * LTV_retido - custo (o critério)
             custo              custo da oferta em R$ para este MRR
 
@@ -326,6 +328,11 @@ class OfferBandit:
                 "offer": o,
                 "p_amostrado": round(p, 4),
                 "p_estimado": round(s["alpha"] / (s["alpha"] + s["beta"]), 3),
+                # Os dois parâmetros do posterior, só para o painel mostrar que
+                # `p_estimado` foi aprendido (alpha/(alpha+beta)) e com que
+                # peso. Informativos: não entram na ordenação nem na escolha.
+                "alpha": round(float(s["alpha"]), 3),
+                "beta": round(float(s["beta"]), 3),
                 "eprofit_amostrado": round(p * ltv_retido - custo, 2),
                 "custo": round(custo, 2),
                 "_criterio": p * ltv_retido - custo,

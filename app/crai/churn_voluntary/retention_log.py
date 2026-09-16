@@ -270,6 +270,24 @@ def registrar_desfecho(tenant_id: str, user_id: str, offer_type: str,
         return False
 
 
+def apagar_tenant(tenant_id: str) -> int:
+    """Apaga TODOS os ciclos deste tenant. Devolve quantos saíram.
+
+    Existe para a rota de demonstração `/simulate/painel/importar`: ela já
+    apaga a base importada do tenant fixo do painel antes de importar, e sem
+    apagar os ciclos junto a segunda rodada do disparo em lote devolvia todo
+    mundo como `ciclo_aberto` e não tratava ninguém. A rota autenticada
+    `/clientes/importar` NÃO chama isto: ciclo aberto lá é histórico real.
+
+    Ao contrário do registro (best effort), aqui uma falha LEVANTA: uma
+    limpeza que falha em silêncio deixaria a demonstração exatamente no
+    estado que ela veio evitar. O filtro por tenant é obrigatório.
+    """
+    with _conectar() as conn:
+        cur = conn.execute("DELETE FROM ciclos_retencao WHERE tenant_id = ?", (tenant_id,))
+        return int(cur.rowcount)
+
+
 def ultimo_ciclo_por_cliente(tenant_id: str) -> list[dict]:
     """A linha MAIS RECENTE de cada cliente deste tenant — o "estado atual" do SDK.
 

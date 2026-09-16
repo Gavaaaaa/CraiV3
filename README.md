@@ -20,17 +20,30 @@ cd app
 pip install -r requirements.txt
 ```
 
-Crie `app/.env` com uma linha, `ENV=development`. A lista completa de variáveis
-está em [`docs/CONFIGURACAO.md`](docs/CONFIGURACAO.md). Sem `ENV=development`, os
-endpoints de simulação respondem 403.
+Crie `.env` na raiz do repositório com uma linha, `ENV=development`. A lista
+completa de variáveis está em [`docs/CONFIGURACAO.md`](docs/CONFIGURACAO.md).
+**Sem `ENV=development` ou `ENV=demo`, o painel e os endpoints de simulação
+respondem 403** — é a mesma trava para os dois.
 
 ```bash
 uvicorn crai.api.app:app --reload
 ```
 
-- **Painel de avaliação:** http://localhost:8000/painel. Cada ação chama a API
-  real. Em desenvolvimento, a base de clientes vai para um SQLite local.
+- **Painel:** http://localhost:8000/painel/v2/ — a barra final importa. As cinco
+  abas chamam a API real: a planilha vai para `POST /simulate/painel/importar`, o
+  ranking vem de `GET /simulate/painel/insights`, a cobrança recusada roda o grafo
+  do churn involuntário e o disparo em lote roda o do voluntário. Nada é calculado
+  no navegador.
 - **Documentação da API:** http://localhost:8000/docs.
+
+Em desenvolvimento a base de clientes vai para um SQLite local, e a importação pelo
+painel **substitui** a base do tenant de demonstração a cada envio, em vez de somar —
+sem isso, enviar duas planilhas de exemplo seguidas empilharia as duas.
+
+Os modelos treinados ficam em `app/models/` e não são versionados. Sem eles a API
+responde por heurística, e é assim que se percebe: as barras de explicação (SHAP) da
+aba Recuperação vêm vazias. Com os modelos no lugar, elas trazem a contribuição de
+cada fator.
 
 Testes, sempre a partir de `app/`:
 
@@ -56,7 +69,7 @@ Antes do primeiro commit, ative o hook que bloqueia segredos:
 | Pasta | O que tem |
 |---|---|
 | `app/` | O sistema: pacote `crai/` (API, agentes, modelos, integrações), `tests/`, `docs/DATA_CARD.md` e as evidências de treino. |
-| `painel/` | Reservada para o dashboard, ainda não construído. Hoje só tem uma base de exemplo de 500 clientes. |
+| `painel/` | O dashboard, servido como estático em `/painel/v2`: `index.html`, `estilo.css`, `idioma.js` (PT/EN), `api.js` (as chamadas à API) e `render.js` (o desenho). Mais `exemplos/` com bases de clientes em CSV e `fixtures/` com uma resposta de exemplo por endpoint. |
 | `docs/` | Limitações, configuração, estrutura, registro da migração, planos e histórico. |
 | `scripts/` | O hook de pre-commit. |
 

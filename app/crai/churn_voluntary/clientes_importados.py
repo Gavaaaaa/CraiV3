@@ -205,6 +205,26 @@ def gravar(tenant_id: str, clientes: list[dict]) -> int:
     return len(clientes)
 
 
+def apagar_tenant(tenant_id: str) -> int:
+    """Apaga TODOS os clientes importados deste tenant. Devolve quantos saíram.
+
+    Existe para a rota de demonstração `/simulate/painel/importar`, que grava
+    sempre no mesmo tenant fixo: sem isto, cada base de exemplo enviada se
+    somava à anterior (diário + mensal + saudável = 1.496 clientes, e a base
+    saudável saía com dezenas de críticos). A rota autenticada
+    `/clientes/importar` NÃO chama isto: lá o upsert acumular é o
+    comportamento correto — a planilha nova atualiza, não substitui.
+
+    Mesmo SQL em Postgres e SQLite, como o resto do módulo. O filtro por
+    tenant é obrigatório: não há apagar sem ele, de propósito.
+    """
+    with _conectar() as conn:
+        antes = conn.executar(
+            f"SELECT COUNT(*) AS n FROM {TABELA} WHERE tenant_id = ?", (tenant_id,))
+        conn.executar(f"DELETE FROM {TABELA} WHERE tenant_id = ?", (tenant_id,))
+    return int(antes[0]["n"]) if antes else 0
+
+
 # ── Leitura ───────────────────────────────────────────────────────────────
 
 def listar(tenant_id: str) -> list[dict]:
