@@ -35,6 +35,7 @@ from xgboost import XGBClassifier
 from ..config import CANAIS_HUMANOS, CUSTOS_PADRAO, custo_intervencao, custos_por_canal
 from . import calibracao
 from .calibracao import conferir_meta
+from .split import conferir_sem_vazamento, split_por_cliente
 from .synthetic_data import SEED, generate_dataset
 
 logger = logging.getLogger(__name__)
@@ -137,14 +138,33 @@ def escolher_limiar(metricas_por_limiar: list[dict],
     return max(aprovados) if aprovados else None
 
 # ── Features categóricas e numéricas ─────────────────────────────────────
-CATEGORICAL_FEATURES = ["gateway_error_code", "card_brand"]
 NUMERICAL_FEATURES = [
     "tenure_months", "day_of_month", "invoice_amount", "avg_ticket",
     "payment_history_score", "failure_count_90d", "hour_of_day",
     "day_of_week", "attempt_count",
 ]
+# Base v1 (14/09/2026): `card_brand`. Base v2 (Bloco B, 20/09/2026):
+# `card_brand` sai — é "n/a" em 100% das linhas em produção (a CRAI só opera
+# Pix Automático e boleto), e uma feature constante ao servir não pode ajudar
+# e pode atrapalhar — e entra `metodo_pagamento` (pix_automatico / boleto,
+# atributo do cliente). Continuam 11 features. O caminho v1 é byte-idêntico:
+# mesma lista, mesma ordem, mesmo encoder.
+CATEGORICAL_FEATURES = ["gateway_error_code", "card_brand"]              # base v1
+CATEGORICAL_FEATURES_V2 = ["gateway_error_code", "metodo_pagamento"]     # base v2
 # LTV não entra como feature de treino (usada apenas no cálculo do e-Profit)
 ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+ALL_FEATURES_V2 = NUMERICAL_FEATURES + CATEGORICAL_FEATURES_V2
+# Toda coluna que recebe LabelEncoder, em qualquer base.
+FEATURES_CATEGORICAS = frozenset(CATEGORICAL_FEATURES) | frozenset(CATEGORICAL_FEATURES_V2)
+
+
+def features_da_base(df: "pd.DataFrame") -> list:
+    """`ALL_FEATURES_V2` se a base tem `metodo_pagamento` e não tem `card_brand`
+    (visão v2), senão `ALL_FEATURES` (base v1). O artefato grava a lista usada
+    (`feature_names.joblib`), e é ela — não a constante — que `predict` usa."""
+    if "metodo_pagamento" in df.columns and "card_brand" not in df.columns:
+        return list(ALL_FEATURES_V2)
+    return list(ALL_FEATURES)
 
 # ── Mapa de códigos Stripe para códigos internos ────────────────────────
 STRIPE_CODE_MAP = {
@@ -199,12 +219,14 @@ class FailureClassifier:
     # ══════════════════════════════════════════════════════════════════════
 
     def train(self, n_samples: int = 3000, test_size: float = 0.2,
-              fonte: str = "sintetico", seed: int = SEED) -> dict:
+              fonte: str = "sintetico", seed: int = SEED,
+              dados: "pd.DataFrame | None" = None, groups=None,
+              features: "list | None" = None) -> dict:
         """
         Treina o ensemble em dataset sintético e retorna métricas.
 
         Args:
-            n_samples: Tamanho do dataset sintético
+            n_samples: Tamanho do dataset sintético (ignorado se `dados` vier)
             test_size: Fração para teste
             fonte: "sintetico" (default — o gerador de sempre, saída idêntica
                    à de antes deste parâmetro existir) ou "sintetico_calibrado"
@@ -213,6 +235,26 @@ class FailureClassifier:
                   modelos continuam com random_state=42 — o parâmetro existe
                   para a curva de volume (`scripts/sanity_check_fora_do_dominio`)
                   medir variância entre datasets, não para mudar o default.
+            dados: dataset JÁ GERADO (mesmas colunas de `generate_dataset`),
+                   por exemplo lido de `data/v2/classificador.parquet` pelo
+                   `train_all`. Quando vem, nada é gerado aqui e `n_samples`
+                   passa a ser `len(dados)`; `fonte` e `seed` continuam
+                   descrevendo a base (quem gerou o parquet gravou os dois no
+                   MANIFESTO.json) e o split/modelos seguem com random_state=42.
+            groups: identificador de CLIENTE por linha (`df["customer_id"]`).
+                   Quando vem, o holdout é sorteado por cliente
+                   (`GroupShuffleSplit(test_size, random_state=42)`, ver
+                   `crai/ml/split.py`) e nenhum cliente fica nos dois lados —
+                   obrigatório em bases com várias cobranças por cliente (v2),
+                   onde o split por linha deixaria `payment_history_score`,
+                   `avg_ticket` e `tenure_months` virarem identificador. Sem
+                   `groups`, o split por linha de sempre (base v1: uma linha
+                   por cobrança, sem cliente).
+            features: lista de features a usar. Default: `features_da_base(df)`
+                   — `ALL_FEATURES` na v1, `ALL_FEATURES_V2` na v2 (sem
+                   `card_brand`, com `metodo_pagamento`). A lista usada vai
+                   para `feature_names.joblib` e para o meta.json; `predict`
+                   e `explain` leem a lista do artefato carregado.
 
         Returns:
             Dicionário com métricas de treino (AUC, report, e-Profit médio),
@@ -221,19 +263,43 @@ class FailureClassifier:
             bibliotecas usadas neste treino.
         """
         calibracao.validar_fonte(fonte)
-        print(f"[CLASSIFIER] Gerando dataset sintético (fonte={fonte})...")
-        df = generate_dataset(n_samples=n_samples, seed=seed, fonte=fonte)
+        if dados is not None:
+            print(f"[CLASSIFIER] Usando dataset fornecido ({len(dados)} linhas, fonte={fonte})...")
+            df = dados.reset_index(drop=True)
+            n_samples = len(df)
+        else:
+            print(f"[CLASSIFIER] Gerando dataset sintético (fonte={fonte})...")
+            df = generate_dataset(n_samples=n_samples, seed=seed, fonte=fonte)
 
         # Separar LTV antes de preparar features (não entra no treino)
         ltv_series = df["ltv_estimated"].copy()
 
-        # Preparar features
-        X, y = self._prepare_features(df)
-        self.feature_names = ALL_FEATURES.copy()
+        # Preparar features — a lista vem da base (v1 × v2), e é gravada no artefato
+        self.feature_names = list(features) if features is not None else features_da_base(df)
+        X, y = self._prepare_features(df, self.feature_names)
 
-        X_train, X_test, y_train, y_test, ltv_train, ltv_test = train_test_split(
-            X, y, ltv_series.values, test_size=test_size, random_state=42, stratify=y
-        )
+        y = np.asarray(y)
+        ltv = np.asarray(ltv_series.values)
+        if groups is not None:
+            groups = np.asarray(groups)
+            if len(groups) != len(X):
+                raise ValueError(f"groups tem {len(groups)} valores para {len(X)} linhas")
+            idx_tr, idx_te = split_por_cliente(groups, test_size=test_size, seed=42)
+            conferir_sem_vazamento(groups, idx_tr, idx_te)
+            X_train, X_test = X[idx_tr], X[idx_te]
+            y_train, y_test = y[idx_tr], y[idx_te]
+            ltv_train, ltv_test = ltv[idx_tr], ltv[idx_te]
+            self._grupos_split = {"treino": set(groups[idx_tr].tolist()),
+                                  "teste": set(groups[idx_te].tolist())}
+            split_info = {"split": "por_cliente",
+                          "n_clientes_treino": len(self._grupos_split["treino"]),
+                          "n_clientes_teste": len(self._grupos_split["teste"])}
+        else:
+            X_train, X_test, y_train, y_test, ltv_train, ltv_test = train_test_split(
+                X, y, ltv, test_size=test_size, random_state=42, stratify=y
+            )
+            self._grupos_split = None
+            split_info = {"split": "por_linha"}
 
         # Treinar XGBoost
         print("[CLASSIFIER] Treinando XGBoost...")
@@ -264,6 +330,10 @@ class FailureClassifier:
         metrics["n_amostras"] = int(n_samples)
         metrics["n_treino"] = int(len(X_train))
         metrics["n_teste"] = int(len(X_test))
+        metrics["origem_dados"] = "dataframe_fornecido" if dados is not None else "gerador_em_memoria"
+        metrics["features_usadas"] = list(self.feature_names)
+        metrics["n_features"] = len(self.feature_names)
+        metrics.update(split_info)
         metrics["proveniencia"] = calibracao.resumo_proveniencia("FailureClassifier", fonte)
         metrics["versoes"] = calibracao.versoes_bibliotecas()
         metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
@@ -298,11 +368,23 @@ class FailureClassifier:
 
         return metrics
 
-    def _prepare_features(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-        """Codifica categóricas e retorna X, y."""
+    def _prepare_features(self, df: pd.DataFrame,
+                          features: "list | None" = None) -> tuple[np.ndarray, np.ndarray]:
+        """Codifica categóricas e retorna X, y.
+
+        `features` é a lista da base (default: a do objeto, ou `ALL_FEATURES`);
+        as categóricas são as dela que estão em `FEATURES_CATEGORICAS`, na
+        ordem da lista — na v1 isso é exatamente `CATEGORICAL_FEATURES`.
+        """
+        if features is None:
+            features = self.feature_names or ALL_FEATURES
+        categoricas = [c for c in features if c in FEATURES_CATEGORICAS]
+        faltando = [c for c in features if c not in df.columns]
+        if faltando:
+            raise ValueError(f"base sem as colunas {faltando} exigidas por features={list(features)}")
         df_encoded = df.copy()
 
-        for col in CATEGORICAL_FEATURES:
+        for col in categoricas:
             if col not in self.label_encoders:
                 le = LabelEncoder()
                 df_encoded[col] = le.fit_transform(df[col].astype(str))
@@ -316,7 +398,7 @@ class FailureClassifier:
                     )
                 )
 
-        X = df_encoded[ALL_FEATURES].values.astype(float)
+        X = df_encoded[list(features)].values.astype(float)
         y = df["recovered"].values
         return X, y
 
@@ -474,11 +556,17 @@ class FailureClassifier:
         return pd.DataFrame(results)
 
     def _preprocess_single(self, features: dict) -> np.ndarray:
-        """Converte dicionário de features para array numpy."""
+        """Converte dicionário de features para array numpy.
+
+        A lista é a do ARTEFATO carregado (`self.feature_names`), não a
+        constante do módulo: um modelo v2 não tem `card_brand` e tem
+        `metodo_pagamento`, e é o artefato quem sabe com que features foi
+        treinado. Sem artefato (objeto recém-criado), cai em `ALL_FEATURES`.
+        """
         row = []
-        for col in ALL_FEATURES:
+        for col in (self.feature_names or ALL_FEATURES):
             val = features.get(col, 0)
-            if col in CATEGORICAL_FEATURES:
+            if col in FEATURES_CATEGORICAS:
                 le = self.label_encoders.get(col)
                 if le is not None:
                     val_str = str(val)
@@ -612,6 +700,7 @@ class FailureClassifier:
             "day_of_week": "Dia da semana",
             "attempt_count": "Tentativas anteriores",
             "card_brand": "Bandeira do cartão",
+            "metodo_pagamento": "Método de pagamento",
         }
 
         parts = []
@@ -649,7 +738,7 @@ class FailureClassifier:
             "input_features": {
                 k: (float(v) if isinstance(v, (np.integer, np.floating)) else v)
                 for k, v in features.items()
-                if k in ALL_FEATURES + ["ltv_estimated"]
+                if k in list(self.feature_names or ALL_FEATURES) + ["ltv_estimated"]
             },
             "output": {
                 "recovery_score": result["recovery_score"],

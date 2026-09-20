@@ -1,0 +1,86 @@
+{
+  "window": 30,
+  "horizon": 14,
+  "hidden_size": 64,
+  "peso_lstm": 0.6,
+  "limiar": 0.5,
+  "epochs_treinadas": 40,
+  "melhor_val_loss": 0.209225,
+  "n_clientes_treino": 2400,
+  "n_janelas_treino": 40800,
+  "roc_auc_ensemble": 0.9641,
+  "mae_dias_ensemble": 0.628,
+  "seed": 42,
+  "modelo": "PaydayInference",
+  "algoritmo": "LSTM seq2vec (PyTorch) 0,6 + Prophet por perfil 0,4",
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 3000,
+  "proveniencia": {
+    "modelo": "PaydayInference",
+    "fonte": "sintetico_calibrado",
+    "n_features": 5,
+    "por_status": {
+      "ancorada": 0,
+      "proxy_fraco": 0,
+      "sintetica_sem_doador": 5
+    },
+    "ancoradas_em_real": [],
+    "proxy_fraco": [],
+    "sinteticas_puras": [
+      "balance_norm",
+      "has_liquidity (rotulo)",
+      "day_of_month (sin/cos)",
+      "weekday",
+      "profile (CLT/PJ/freelancer)"
+    ],
+    "features": [
+      {
+        "feature": "balance_norm",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador publico para saldo diario de cliente: perfis CLT/PJ/freelancer, ancoras de payday e gasto diario continuam inventados (DATA_CARD 6: 'nao calibravel')"
+      },
+      {
+        "feature": "has_liquidity (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "saldo >= 1 mensalidade; 10% das entradas chegam 1-5 dias depois: a LSTM nao pode aprender so o calendario; 2% dos dias com gasto extra de 0,5-1,5 mensalidade"
+      },
+      {
+        "feature": "day_of_month (sin/cos)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "calendario"
+      },
+      {
+        "feature": "weekday",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "calendario"
+      },
+      {
+        "feature": "profile (CLT/PJ/freelancer)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix 50/30/20 a mao"
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "treinado_em": "2026-09-14T17:36:01"
+}

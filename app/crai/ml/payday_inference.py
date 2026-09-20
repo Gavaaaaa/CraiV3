@@ -20,7 +20,7 @@ from sklearn.metrics import roc_auc_score
 
 from . import calibracao
 from .calibracao import conferir_meta
-from .synthetic_data import generate_liquidity_series, seed_por_cliente
+from .synthetic_data import end_date_por_semente, generate_liquidity_series, seed_por_cliente
 
 try:
     import torch
@@ -103,6 +103,8 @@ class PaydayInference:
         patience: int = 6,
         seed: int = 42,
         fonte: str = "sintetico",
+        end_date=None,
+        dados: "pd.DataFrame | None" = None,
     ) -> dict:
         """
         Treina a LSTM de liquidez + os Prophets por perfil e retorna métricas.
@@ -125,6 +127,14 @@ class PaydayInference:
             fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
                    (mesmas séries + choques anti-circularidade; não há doador
                    real para saldo diário — ver calibracao.json)
+            end_date: último dia das séries geradas. None (default) usa
+                   `end_date_por_semente(seed)` — fixo, sem relógio; para a
+                   seed 42 é 2026-09-14, o fim da base do treino de 14/09/2026.
+                   Antes o gerador usava `date.today()` e a base mudava por dia.
+            dados: séries JÁ GERADAS (colunas de `generate_liquidity_series`),
+                   por exemplo `data/v2/liquidez.parquet` lido pelo `train_all`.
+                   Quando vem, `n_samples`, `n_days` e `end_date` são lidos da
+                   própria base, não dos argumentos.
 
         Returns:
             Dicionário com métricas (ROC-AUC diário, MAE da janela ótima vs heurística),
@@ -140,9 +150,20 @@ class PaydayInference:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        print(f"[PAYDAY] Gerando séries de liquidez sintéticas (fonte={fonte})...")
-        df = generate_liquidity_series(n_customers=n_samples, n_days=n_days, seed=seed,
-                                       fonte=fonte)
+        if dados is not None:
+            df = dados.reset_index(drop=True)
+            df["date"] = pd.to_datetime(df["date"])
+            n_samples = int(df["customer_id"].nunique())
+            n_days = int(df.groupby("customer_id")["date"].size().max())
+            end_date = df["date"].max()
+            print(f"[PAYDAY] Usando séries fornecidas ({n_samples} clientes x {n_days} dias, "
+                  f"fim {end_date.date()}, fonte={fonte})...")
+        else:
+            end_date = pd.Timestamp(end_date) if end_date is not None else end_date_por_semente(seed)
+            print(f"[PAYDAY] Gerando séries de liquidez sintéticas (fonte={fonte}, "
+                  f"fim {end_date.date()})...")
+            df = generate_liquidity_series(n_customers=n_samples, n_days=n_days, seed=seed,
+                                           end_date=end_date, fonte=fonte)
 
         rng = np.random.default_rng(seed)
         clientes = np.sort(df["customer_id"].unique())
@@ -185,6 +206,9 @@ class PaydayInference:
         metrics["n_janelas_treino"] = int(len(X_tr))
         metrics["fonte_usada"] = fonte
         metrics["n_amostras"] = int(n_samples)
+        metrics["n_days"] = int(n_days)
+        metrics["end_date"] = str(pd.Timestamp(end_date).date())
+        metrics["origem_dados"] = "dataframe_fornecido" if dados is not None else "gerador_em_memoria"
         metrics["proveniencia"] = calibracao.resumo_proveniencia("PaydayInference", fonte)
         metrics["versoes"] = calibracao.versoes_bibliotecas()
         metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
@@ -464,6 +488,7 @@ class PaydayInference:
             "roc_auc_ensemble": metrics["roc_auc_ensemble"],
             "mae_dias_ensemble": metrics["mae_dias_ensemble"],
             "seed": seed,
+            "end_date": metrics["end_date"],
             "modelo": "PaydayInference",
             "algoritmo": "LSTM seq2vec (PyTorch) 0,6 + Prophet por perfil 0,4",
             "fonte_usada": metrics["fonte_usada"],

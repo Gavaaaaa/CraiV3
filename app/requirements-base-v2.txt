@@ -1,0 +1,25 @@
+# CRAI — requirements-base-v2.txt
+#
+# As versoes sob as quais a base v2 (app/data/v2/, MANIFESTO.json de
+# 20/09/2026) e reproduzivel BYTE A BYTE: `python -m crai.scripts.gerar_bases_v2
+# --seed 42` com estas versoes devolve os cinco sha256 do manifesto.
+#
+# Com as versoes de app/requirements.txt (numpy 1.26.4, pandas 2.2.3, Python
+# 3.12.10) o script roda e produz as MESMAS cinco tabelas, linha a linha
+# (conferido com assert_frame_equal em 20/09/2026), mas os bytes do parquet —
+# e portanto os sha256 — sao outros: o pacote (pandas 3) grava os inteiros
+# como int64 e as datas como datetime64[us]; aqui (pandas 2.2.3) saem int32 e
+# datetime64[ns]. Mesmos valores, outros bytes. A base do pacote e a base; a checagem
+# que vale e a de INTEGRIDADE (sha256 dos arquivos recebidos contra o
+# manifesto), que `train_all --base v2` faz antes de treinar.
+#
+# Nao instale este arquivo por cima de app/requirements.txt: numpy 2.x e
+# pandas 3.x nao sao as versoes gravadas nos artefatos de app/models/.
+# Use um ambiente separado (Python 3.11):
+#   python3.11 -m venv .venv-base-v2 && .venv-base-v2/bin/pip install -r requirements-base-v2.txt
+# Python 3.11.15
+numpy==2.4.4
+pandas==3.0.2
+pyarrow==25.0.1
+scikit-learn==1.8.0
+xgboost==3.2.0

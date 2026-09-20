@@ -30,7 +30,6 @@ cancelamento (ver `churn_voluntary/README_treino.md`).
 """
 
 import hashlib
-from datetime import date
 from typing import Optional, Union
 
 import numpy as np
@@ -41,6 +40,26 @@ import pandas as pd
 
 # Seed global para reprodutibilidade
 SEED = 42
+
+# Último dia da série de liquidez (Módulo 3), derivado da semente.
+#
+# Antes, `generate_liquidity_series(end_date=None)` usava `date.today()`: a
+# mesma semente produzia uma base diferente a cada dia, porque os dias da
+# semana e os dias úteis de cada data mudam. A base do treino de 14/09/2026
+# terminava em 2026-09-14 (o dia em que rodou). A âncora abaixo é 42 dias
+# antes disso, de modo que a semente padrão (42) reproduz exatamente aquela
+# base, e cada outra semente ganha um fim de série próprio, fixo.
+ANCORA_END_DATE = pd.Timestamp("2026-08-03")
+
+
+def end_date_por_semente(seed: int) -> pd.Timestamp:
+    """Último dia da série de liquidez para uma semente: âncora + (seed mod 366) dias.
+
+    `end_date_por_semente(42) == 2026-09-14`, o fim da base do treino de
+    14/09/2026. Determinístico e sem relógio: `date.today()` não entra em
+    nenhum gerador deste módulo.
+    """
+    return ANCORA_END_DATE + pd.Timedelta(days=int(seed) % 366)
 
 
 def _parametros(fonte: str, parametros: Optional[dict], bloco: str) -> dict:
@@ -516,7 +535,8 @@ def generate_liquidity_series(
     n_customers: int = 600,
     n_days: int = 180,
     seed: Optional[int] = SEED,
-    end_date: Optional[Union[str, pd.Timestamp]] = None,
+    *,
+    end_date: Union[str, pd.Timestamp],
     fonte: str = "sintetico",
     parametros: Optional[dict] = None,
 ) -> pd.DataFrame:
@@ -527,10 +547,15 @@ def generate_liquidity_series(
     - PJ         (~30%): notas pagas em torno dos dias 10, 15 e 30
     - freelancer (~20%): entradas irregulares (projetos), alta variância
 
-    A série termina em `end_date` (default: hoje) para que o prior sazonal do
-    Prophet fique alinhado ao presente — a inferência prevê os 14 dias
-    seguintes ao dia de hoje. Em produção essas séries viriam do histórico de
-    transações do gateway / open finance.
+    A série termina em `end_date`, que é OBRIGATÓRIO (só nome, sem default).
+    Até 19/09/2026 o default era `date.today()`, e a base de treino dependia do
+    dia em que o treino rodou — mesma semente, série diferente a cada dia. Para
+    o fim de série canônico de uma semente use `end_date_por_semente(seed)`
+    (a de 42 é 2026-09-14, a base do treino de 14/09/2026). A inferência
+    (`predict_next_window`) continua ancorada em hoje: o Prophet extrapola a
+    sazonalidade mensal para datas futuras, e a LSTM só vê a janela recente.
+    Em produção essas séries viriam do histórico de transações do gateway /
+    open finance.
 
     NÃO existe doador público para saldo diário de cliente — nenhuma das
     colunas deste gerador é calibrada em dado real, e o calibracao.json diz
@@ -541,7 +566,7 @@ def generate_liquidity_series(
         n_customers: Número de clientes simulados
         n_days: Dias de histórico por cliente
         seed: Seed para reprodutibilidade (default 42)
-        end_date: Último dia da série (default: hoje)
+        end_date: Último dia da série (obrigatório; ver `end_date_por_semente`)
         fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
         parametros: bloco `liquidity` de parâmetros, se quiser injetar um
 
@@ -553,7 +578,11 @@ def generate_liquidity_series(
     P = _parametros(fonte, parametros, "liquidity")
     rng = np.random.default_rng(seed)
 
-    fim = pd.Timestamp(end_date) if end_date is not None else pd.Timestamp(date.today())
+    if end_date is None:
+        raise ValueError(
+            "generate_liquidity_series exige end_date: a série não pode depender "
+            "do dia em que roda. Use end_date_por_semente(seed) para o fim canônico.")
+    fim = pd.Timestamp(end_date)
     dates = pd.date_range(end=fim, periods=n_days, freq="D")
     bday_idx = _business_day_index(dates)
 
@@ -816,7 +845,7 @@ if __name__ == "__main__":
     ].mean().round(2))
 
     # ── Módulo 3: séries de liquidez ─────────────────────────────────────
-    liq = generate_liquidity_series(200, 180)
+    liq = generate_liquidity_series(200, 180, end_date=end_date_por_semente(SEED))
     print(f"\nSeries de liquidez geradas: {liq.shape}")
     for p in LIQUIDITY_PROFILES:
         sub = liq[liq.profile == p]

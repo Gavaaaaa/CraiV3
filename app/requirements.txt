@@ -33,6 +33,14 @@ numpy==1.26.4
 pandas==2.2.3
 shap==0.46.0
 joblib==1.4.2
+# Parquet das bases de treino persistidas (crai/scripts/gerar_bases.py, lidas
+# pelo train_all). Versao exata: os bytes do parquet — e portanto o sha256 do
+# MANIFESTO.json — dependem dela.
+pyarrow==25.0.1
+# A base v2 (app/data/v2/) foi gerada com numpy 2.4.4 / pandas 3.0.2 / Python
+# 3.11; com as versoes deste arquivo o gerador produz as mesmas tabelas, mas
+# outros bytes de parquet (outros sha256). As versoes que reproduzem os sha256
+# do MANIFESTO.json estao em requirements-base-v2.txt (ambiente separado).
 
 # torch e prophet sao usados no treino dos Modulos 2 e 3 (autoencoder e LSTM).
 # Sem eles, os dois modulos caem no fallback heuristico e o resto roda normal.

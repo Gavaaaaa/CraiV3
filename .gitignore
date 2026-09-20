@@ -16,6 +16,10 @@ app/models/*
 !app/models/calibracao.json
 
 # Dados
+# Bases sinteticas de treino persistidas por `python -m crai.scripts.gerar_bases`
+# (parquet + MANIFESTO.json em app/data/v2/). Regeneraveis por semente, byte a
+# byte; o manifesto e que fica auditavel no relatorio, nao o arquivo.
+app/data/
 # Fonte A (Olist) e CC BY-NC-SA: fica fora do git e e regenerada de forma
 # deterministica por `python -m crai.scripts.preparar_amostra_real`.
 app/data/real/

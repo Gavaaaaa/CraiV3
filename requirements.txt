@@ -1,0 +1,8 @@
+# CRAI v3 — requirements.txt (raiz)
+#
+# A lista real, com versoes exatas, mora em app/requirements.txt (e o pacote
+# roda a partir de app/: `cd app && uvicorn ...`). Este arquivo existe para o
+# portao "clone limpo, pip install -r requirements.txt, uvicorn, navegador"
+# funcionar a partir da raiz do clone, sem ter que saber onde a lista esta.
+# O pip resolve o -r em relacao a este arquivo.
+-r app/requirements.txt

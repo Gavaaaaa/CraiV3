@@ -1,0 +1,149 @@
+{
+  "modelo": "FailureClassifier",
+  "algoritmo": "XGBClassifier (0,7) + RandomForestClassifier (0,3)",
+  "features": [
+    "tenure_months",
+    "day_of_month",
+    "invoice_amount",
+    "avg_ticket",
+    "payment_history_score",
+    "failure_count_90d",
+    "hour_of_day",
+    "day_of_week",
+    "attempt_count",
+    "gateway_error_code",
+    "card_brand"
+  ],
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 40000,
+  "n_treino": 32000,
+  "n_teste": 8000,
+  "auc": 0.6951,
+  "limiar_classificacao": 0.25,
+  "proveniencia": {
+    "modelo": "FailureClassifier",
+    "fonte": "sintetico_calibrado",
+    "n_features": 12,
+    "por_status": {
+      "ancorada": 2,
+      "proxy_fraco": 4,
+      "sintetica_sem_doador": 6
+    },
+    "ancoradas_em_real": [
+      "day_of_month",
+      "invoice_amount"
+    ],
+    "proxy_fraco": [
+      "avg_ticket",
+      "gateway_error_code",
+      "hour_of_day",
+      "day_of_week"
+    ],
+    "sinteticas_puras": [
+      "tenure_months",
+      "card_brand",
+      "payment_history_score",
+      "failure_count_90d",
+      "attempt_count",
+      "recovered (rotulo)"
+    ],
+    "features": [
+      {
+        "feature": "tenure_months",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mistura exponencial+uniforme a mao"
+      },
+      {
+        "feature": "day_of_month",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.day",
+        "nota": "histograma empirico do dia de order_purchase_timestamp, suavizacao 0,5 por dia"
+      },
+      {
+        "feature": "invoice_amount",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "MLE de log(payment_value) nas 300 reais (Fonte A). Mediana ~R$ 100: ticket de e-commerce, nao de SaaS B2B (DATA_CARD 2.3)."
+      },
+      {
+        "feature": "avg_ticket",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "derivada de invoice_amount x U(0,85; 1,15); a relacao ticket/fatura e inventada"
+      },
+      {
+        "feature": "gateway_error_code",
+        "status": "proxy_fraco",
+        "fonte": "B: BACEN SGS 21084",
+        "coluna": "serie 21084 (inadimplencia PF)",
+        "nota": "fatia de insufficient_funds x 1.482 (ultimo/media da SGS 21084: 5.81/3.92, origem: DECLARADO no DATA_CARD 3 — API e cache indisponiveis nesta execucao); demais codigos renormalizados. Hipotese declarada no DATA_CARD 3."
+      },
+      {
+        "feature": "card_brand",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix de bandeiras a mao"
+      },
+      {
+        "feature": "payment_history_score",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) + tenure, a mao"
+      },
+      {
+        "feature": "failure_count_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(1,5) a mao"
+      },
+      {
+        "feature": "hour_of_day",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.hour",
+        "nota": "histograma empirico da hora de compra (proxy: hora de compra em e-commerce, nao hora de cobranca de assinatura)"
+      },
+      {
+        "feature": "day_of_week",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.dayofweek",
+        "nota": "histograma empirico do dia da semana da compra (proxy)"
+      },
+      {
+        "feature": "attempt_count",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix 45/30/15/10 a mao"
+      },
+      {
+        "feature": "recovered (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "modelo causal declarado (DATA_CARD 7) + N(0, 0,05) + Bernoulli + 2% das linhas com rotulo sorteado ao acaso, ignorando a regra. Pequeno de proposito: cada ponto custa AUC e o gate G3 exige AUC >= 0,70; o objetivo e impedir que o modelo decore a formula, nao apagar o sinal"
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "treinado_em": "2026-09-14T17:31:07"
+}

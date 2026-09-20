@@ -1,0 +1,250 @@
+{
+  "auc": 0.6951,
+  "limiar_classificacao": 0.25,
+  "accuracy": 0.5407,
+  "precision_recovered": 0.4941,
+  "recall_recovered": 0.9457,
+  "f1_recovered": 0.6491,
+  "confusion_matrix": [
+    [
+      928,
+      3479
+    ],
+    [
+      195,
+      3398
+    ]
+  ],
+  "metricas_por_limiar": [
+    {
+      "limiar": 0.5,
+      "acuracia": 0.644,
+      "precisao": 0.6077,
+      "recall": 0.585,
+      "f2": 0.5894,
+      "recuperaveis_perdidos": 1491,
+      "em_uso": false
+    },
+    {
+      "limiar": 0.4,
+      "acuracia": 0.6165,
+      "precisao": 0.5517,
+      "recall": 0.7798,
+      "f2": 0.7203,
+      "recuperaveis_perdidos": 791,
+      "em_uso": false
+    },
+    {
+      "limiar": 0.35,
+      "acuracia": 0.5969,
+      "precisao": 0.5322,
+      "recall": 0.8461,
+      "f2": 0.7568,
+      "recuperaveis_perdidos": 553,
+      "em_uso": false
+    },
+    {
+      "limiar": 0.3,
+      "acuracia": 0.5743,
+      "precisao": 0.5148,
+      "recall": 0.9026,
+      "f2": 0.7844,
+      "recuperaveis_perdidos": 350,
+      "em_uso": false
+    },
+    {
+      "limiar": 0.25,
+      "acuracia": 0.5407,
+      "precisao": 0.4941,
+      "recall": 0.9457,
+      "f2": 0.7996,
+      "recuperaveis_perdidos": 195,
+      "em_uso": true
+    },
+    {
+      "limiar": 0.2,
+      "acuracia": 0.5065,
+      "precisao": 0.476,
+      "recall": 0.9786,
+      "f2": 0.8079,
+      "recuperaveis_perdidos": 77,
+      "em_uso": false
+    },
+    {
+      "limiar": 0.15,
+      "acuracia": 0.4731,
+      "precisao": 0.46,
+      "recall": 0.995,
+      "f2": 0.8072,
+      "recuperaveis_perdidos": 18,
+      "em_uso": false
+    }
+  ],
+  "recall_operacional": {
+    "regra": "e-Profit <= 0 ou recovery_score < 5 (route_after_diagnosis)",
+    "clientes_abandonados": 0,
+    "n_total": 8000,
+    "recuperaveis_perdidos": 0,
+    "recall": 1.0
+  },
+  "avg_eprofit": 134.44,
+  "n_positive_eprofit": 8000,
+  "n_total_test": 8000,
+  "classification_report": {
+    "0": {
+      "precision": 0.8263579697239537,
+      "recall": 0.21057408668028138,
+      "f1-score": 0.335623869801085,
+      "support": 4407.0
+    },
+    "1": {
+      "precision": 0.4941108041297077,
+      "recall": 0.9457278040634567,
+      "f1-score": 0.6490926456542503,
+      "support": 3593.0
+    },
+    "accuracy": 0.54075,
+    "macro avg": {
+      "precision": 0.6602343869268307,
+      "recall": 0.5781509453718691,
+      "f1-score": 0.4923582577276676,
+      "support": 8000.0
+    },
+    "weighted avg": {
+      "precision": 0.6771374614764379,
+      "recall": 0.54075,
+      "f1-score": 0.47641053375613784,
+      "support": 8000.0
+    }
+  },
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 40000,
+  "n_treino": 32000,
+  "n_teste": 8000,
+  "proveniencia": {
+    "modelo": "FailureClassifier",
+    "fonte": "sintetico_calibrado",
+    "n_features": 12,
+    "por_status": {
+      "ancorada": 2,
+      "proxy_fraco": 4,
+      "sintetica_sem_doador": 6
+    },
+    "ancoradas_em_real": [
+      "day_of_month",
+      "invoice_amount"
+    ],
+    "proxy_fraco": [
+      "avg_ticket",
+      "gateway_error_code",
+      "hour_of_day",
+      "day_of_week"
+    ],
+    "sinteticas_puras": [
+      "tenure_months",
+      "card_brand",
+      "payment_history_score",
+      "failure_count_90d",
+      "attempt_count",
+      "recovered (rotulo)"
+    ],
+    "features": [
+      {
+        "feature": "tenure_months",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mistura exponencial+uniforme a mao"
+      },
+      {
+        "feature": "day_of_month",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.day",
+        "nota": "histograma empirico do dia de order_purchase_timestamp, suavizacao 0,5 por dia"
+      },
+      {
+        "feature": "invoice_amount",
+        "status": "ancorada",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "MLE de log(payment_value) nas 300 reais (Fonte A). Mediana ~R$ 100: ticket de e-commerce, nao de SaaS B2B (DATA_CARD 2.3)."
+      },
+      {
+        "feature": "avg_ticket",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "payment_value",
+        "nota": "derivada de invoice_amount x U(0,85; 1,15); a relacao ticket/fatura e inventada"
+      },
+      {
+        "feature": "gateway_error_code",
+        "status": "proxy_fraco",
+        "fonte": "B: BACEN SGS 21084",
+        "coluna": "serie 21084 (inadimplencia PF)",
+        "nota": "fatia de insufficient_funds x 1.482 (ultimo/media da SGS 21084: 5.81/3.92, origem: DECLARADO no DATA_CARD 3 — API e cache indisponiveis nesta execucao); demais codigos renormalizados. Hipotese declarada no DATA_CARD 3."
+      },
+      {
+        "feature": "card_brand",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix de bandeiras a mao"
+      },
+      {
+        "feature": "payment_history_score",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) + tenure, a mao"
+      },
+      {
+        "feature": "failure_count_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(1,5) a mao"
+      },
+      {
+        "feature": "hour_of_day",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.hour",
+        "nota": "histograma empirico da hora de compra (proxy: hora de compra em e-commerce, nao hora de cobranca de assinatura)"
+      },
+      {
+        "feature": "day_of_week",
+        "status": "proxy_fraco",
+        "fonte": "A: Olist (300 transacoes)",
+        "coluna": "order_purchase_timestamp.dayofweek",
+        "nota": "histograma empirico do dia da semana da compra (proxy)"
+      },
+      {
+        "feature": "attempt_count",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "mix 45/30/15/10 a mao"
+      },
+      {
+        "feature": "recovered (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "modelo causal declarado (DATA_CARD 7) + N(0, 0,05) + Bernoulli + 2% das linhas com rotulo sorteado ao acaso, ignorando a regra. Pequeno de proposito: cada ponto custa AUC e o gate G3 exige AUC >= 0,70; o objetivo e impedir que o modelo decore a formula, nao apagar o sinal"
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "treinado_em": "2026-09-14T17:31:07"
+}

@@ -1,0 +1,165 @@
+{
+  "features": [
+    "tenure_days",
+    "mrr_brl",
+    "seats",
+    "logins_7d",
+    "logins_30d",
+    "feature_adoption",
+    "avg_session_min",
+    "api_calls_7d",
+    "days_since_last_login",
+    "tickets_30d",
+    "failed_pay_90d",
+    "nps_last"
+  ],
+  "input_dim": 12,
+  "bottleneck": 4,
+  "threshold": 0.6686679601669311,
+  "threshold_percentil": 95.0,
+  "epochs_treinadas": 100,
+  "melhor_val_loss": 0.232986,
+  "n_treino_saudaveis": 19337,
+  "n_val_saudaveis": 3413,
+  "n_anomalos_avaliacao": 2250,
+  "roc_auc": 0.9886,
+  "seed": 42,
+  "modelo": "AnomalyDetector",
+  "algoritmo": "autoencoder denso 12-32-16-4-16-32-12 (PyTorch)",
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 25000,
+  "proveniencia": {
+    "modelo": "AnomalyDetector",
+    "fonte": "sintetico_calibrado",
+    "n_features": 13,
+    "por_status": {
+      "ancorada": 1,
+      "proxy_fraco": 3,
+      "sintetica_sem_doador": 9
+    },
+    "ancoradas_em_real": [
+      "days_since_last_login"
+    ],
+    "proxy_fraco": [
+      "avg_session_min",
+      "tickets_30d",
+      "nps_last"
+    ],
+    "sinteticas_puras": [
+      "tenure_days",
+      "mrr_brl",
+      "seats",
+      "logins_7d",
+      "logins_30d",
+      "feature_adoption",
+      "api_calls_7d",
+      "failed_pay_90d",
+      "is_anomalous (rotulo)"
+    ],
+    "features": [
+      {
+        "feature": "tenure_days",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "gamma(2,5; 180) a mao"
+      },
+      {
+        "feature": "mrr_brl",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal(8,5; 0,7) a mao"
+      },
+      {
+        "feature": "seats",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(15) a mao"
+      },
+      {
+        "feature": "logins_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "fracao de logins_30d a mao"
+      },
+      {
+        "feature": "logins_30d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "normal(seats x 18 / x 5) a mao"
+      },
+      {
+        "feature": "feature_adoption",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) / beta(2,5) a mao"
+      },
+      {
+        "feature": "avg_session_min",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "HourSpendOnApp",
+        "nota": "proxy fraco: HourSpendOnApp e horas/dia no app, nao minutos por sessao. Calibrado SO o coeficiente de variacao (0.2462); a escala (22 / 6 min) continua inventada."
+      },
+      {
+        "feature": "api_calls_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal a mao"
+      },
+      {
+        "feature": "days_since_last_login",
+        "status": "ancorada",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "DaySinceLastOrder",
+        "nota": "saudavel: media de DaySinceLastOrder (4.543 dias, n=5323) como scale da exponencial. Anomalo: saudavel + 7.5 dias (o deslocamento que o gerador default ja tinha). O corte por Churn do doador NAO foi usado para separar as populacoes: nele quem cancela tem MENOS dias desde o ultimo pedido, o inverso da hipotese do gerador — declarado, nao escondido."
+      },
+      {
+        "feature": "tickets_30d",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "Complain",
+        "nota": "proxy fraco: Complain e um flag 0/1, nao contagem de tickets. lambda da Poisson = P(Complain) por populacao do doador (Churn=0: 0.2341; Churn=1: 0.5359) — unica feature em que a direcao do doador coincide com a do gerador."
+      },
+      {
+        "feature": "failed_pay_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "binomial(3; 0,05 / 0,35) a mao"
+      },
+      {
+        "feature": "nps_last",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "SatisfactionScore",
+        "nota": "proxy fraco: SatisfactionScore 1-5 reescalado x2 para 0-10 (saudavel: media 6.134, sd 2.760). Anomalo: media x 0.6707 (razao do gerador default). No doador quem cancela e MAIS satisfeito em media — direcao inversa, nao usada."
+      },
+      {
+        "feature": "is_anomalous (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "populacao de origem; 15% dos anomalos recebem 3 das 8 features comportamentais da distribuicao saudavel (churn silencioso); 5% dos saudaveis recebem 2 features da distribuicao anomala (degradacao passageira)"
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "treinado_em": "2026-09-14T17:31:47"
+}

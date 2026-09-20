@@ -1,0 +1,105 @@
+{
+  "modelo": "risk_scorer_voluntario",
+  "features": [
+    "days_since_last",
+    "features_used_30d",
+    "mrr",
+    "evento_cancelamento",
+    "evento_downgrade",
+    "evento_sessao"
+  ],
+  "algoritmo": "GradientBoostingClassifier(n_estimators=150, max_depth=3)",
+  "treinado_em": "2026-09-14T17:36:04",
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 30000,
+  "auc_vs_rotulo": 0.7503,
+  "corr_vs_regra": 0.9938,
+  "auc_regra_vs_rotulo": 0.7527,
+  "rotulo": "Bernoulli(regras fixas do risk_scorer + ruido) — NAO e churn observado",
+  "proveniencia": {
+    "modelo": "risk_scorer_voluntario",
+    "fonte": "sintetico_calibrado",
+    "n_features": 7,
+    "por_status": {
+      "ancorada": 1,
+      "proxy_fraco": 1,
+      "sintetica_sem_doador": 5
+    },
+    "ancoradas_em_real": [
+      "days_since_last"
+    ],
+    "proxy_fraco": [
+      "features_used_30d"
+    ],
+    "sinteticas_puras": [
+      "mrr",
+      "evento_cancelamento",
+      "evento_downgrade",
+      "evento_sessao",
+      "churn (rotulo)"
+    ],
+    "features": [
+      {
+        "feature": "days_since_last",
+        "status": "ancorada",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "DaySinceLastOrder",
+        "nota": "histograma empirico de DaySinceLastOrder (n=5323, 0-46 dias) — mesma unidade da feature"
+      },
+      {
+        "feature": "features_used_30d",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "OrderCount",
+        "nota": "proxy fraco: OrderCount (pedidos acumulados, n=5372) no lugar de features distintas usadas em 30 dias"
+      },
+      {
+        "feature": "mrr",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: lognormal inventada (mean 7,5 / sigma 0,8, R$ 99-50.000)"
+      },
+      {
+        "feature": "evento_cancelamento",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "evento_downgrade",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "evento_sessao",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "sem doador: 85% Session Started / 10% Downgrade / 5% Cancellation"
+      },
+      {
+        "feature": "churn (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "churn = Bernoulli(regras fixas do risk_scorer + N(0, 0,08)), com 3% de excecoes ao acaso. Nao e churn observado: e o que as regras dizem, com ruido suficiente para o modelo nao decorar a formula."
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "seed": 42
+}

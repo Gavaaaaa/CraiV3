@@ -19,6 +19,7 @@ para que a suíte não sobrescreva os modelos de produção em crai/models/.
 import json
 from datetime import datetime, timedelta
 
+import pandas as pd
 import pytest
 
 from crai.ml import payday_inference as payday_module
@@ -30,7 +31,16 @@ from crai.ml.payday_inference import (
     WINDOW,
     PaydayInference,
 )
-from crai.ml.synthetic_data import LIQUIDITY_PROFILES, generate_liquidity_series
+from crai.ml.synthetic_data import (
+    LIQUIDITY_PROFILES,
+    end_date_por_semente,
+    generate_liquidity_series,
+)
+
+# Fim de série canônico da seed 42 (2026-09-14, a base do treino de 14/09/2026).
+# `end_date` é obrigatório desde 19/09/2026: a série não pode depender do dia
+# em que o teste roda.
+END_DATE = end_date_por_semente(42)
 
 requer_modelos = pytest.mark.skipif(
     not (TORCH_AVAILABLE and PROPHET_AVAILABLE),
@@ -47,7 +57,7 @@ class TestLiquiditySeries:
 
     def test_generate_correct_shape(self):
         """Uma linha por (cliente, dia), com todas as colunas da featurização."""
-        df = generate_liquidity_series(n_customers=20, n_days=90)
+        df = generate_liquidity_series(n_customers=20, n_days=90, end_date=END_DATE)
         assert len(df) == 20 * 90
         for col in ["customer_id", "profile", "date", "day_of_month",
                     "weekday", "balance_norm", "has_liquidity"]:
@@ -55,25 +65,38 @@ class TestLiquiditySeries:
 
     def test_profiles_are_valid(self):
         """Todos os perfis pertencem aos 3 perfis de recebimento modelados."""
-        df = generate_liquidity_series(n_customers=50, n_days=60)
+        df = generate_liquidity_series(n_customers=50, n_days=60, end_date=END_DATE)
         assert set(df["profile"].unique()).issubset(set(LIQUIDITY_PROFILES))
 
-    def test_series_ends_today(self):
-        """A série termina hoje — o prior sazonal precisa estar alinhado ao presente."""
-        df = generate_liquidity_series(n_customers=5, n_days=60)
-        assert df["date"].max().date() == datetime.now().date()
+    def test_series_ends_on_end_date(self):
+        """A série termina em `end_date`, nunca em `date.today()`.
+
+        Até 19/09/2026 o default era hoje, e a base de treino mudava conforme o
+        dia em que o treino rodou. Agora `end_date` é obrigatório e o fim
+        canônico de uma semente vem de `end_date_por_semente`.
+        """
+        df = generate_liquidity_series(n_customers=5, n_days=60, end_date=END_DATE)
+        assert df["date"].max() == END_DATE
+        assert END_DATE == pd.Timestamp("2026-09-14")
+
+    def test_end_date_e_obrigatorio(self):
+        """Sem `end_date` o gerador não roda — nem com None."""
+        with pytest.raises(TypeError):
+            generate_liquidity_series(n_customers=5, n_days=60)
+        with pytest.raises(ValueError, match="end_date"):
+            generate_liquidity_series(n_customers=5, n_days=60, end_date=None)
 
     def test_has_liquidity_is_binary(self):
         """O rótulo de liquidez é 0/1 e coerente com o saldo."""
-        df = generate_liquidity_series(n_customers=20, n_days=60)
+        df = generate_liquidity_series(n_customers=20, n_days=60, end_date=END_DATE)
         assert set(df["has_liquidity"].unique()).issubset({0, 1})
         assert (df.loc[df["has_liquidity"] == 1, "balance_norm"] >= 1.0).all()
         assert (df.loc[df["has_liquidity"] == 0, "balance_norm"] < 1.0).all()
 
     def test_reproducibility_with_seed(self):
         """Seed fixa gera séries idênticas."""
-        df1 = generate_liquidity_series(n_customers=10, n_days=60, seed=42)
-        df2 = generate_liquidity_series(n_customers=10, n_days=60, seed=42)
+        df1 = generate_liquidity_series(n_customers=10, n_days=60, seed=42, end_date=END_DATE)
+        df2 = generate_liquidity_series(n_customers=10, n_days=60, seed=42, end_date=END_DATE)
         assert df1.equals(df2)
 
     def test_clt_tem_ancora_mensal_mais_forte(self):
@@ -83,7 +106,7 @@ class TestLiquiditySeries:
         pela dispersão da taxa de liquidez ao longo dos dias do mês. Salário
         (CLT) e notas fiscais (PJ) criam picos; projetos avulsos, não.
         """
-        df = generate_liquidity_series(n_customers=200, n_days=150)
+        df = generate_liquidity_series(n_customers=200, n_days=150, end_date=END_DATE)
         dispersao = {
             perfil: df[df["profile"] == perfil]
             .groupby("day_of_month")["has_liquidity"].mean().std()
@@ -229,7 +252,7 @@ class TestJanelasDeslizantes:
 
     def test_window_shape(self):
         """Cada janela tem 30 dias × 5 features e prevê 14 dias."""
-        df = generate_liquidity_series(n_customers=1, n_days=120)
+        df = generate_liquidity_series(n_customers=1, n_days=120, end_date=END_DATE)
         X, y, idx = PaydayInference._janelas_do_cliente(df.sort_values("date"), passo=7)
         assert X.shape[1:] == (WINDOW, 5)
         assert y.shape[1] == HORIZON
@@ -237,7 +260,7 @@ class TestJanelasDeslizantes:
 
     def test_no_window_when_series_too_short(self):
         """Série menor que WINDOW+HORIZON não gera janela nenhuma."""
-        df = generate_liquidity_series(n_customers=1, n_days=WINDOW + HORIZON - 1)
+        df = generate_liquidity_series(n_customers=1, n_days=WINDOW + HORIZON - 1, end_date=END_DATE)
         X, y, _ = PaydayInference._janelas_do_cliente(df.sort_values("date"))
         assert len(X) == 0
         assert len(y) == 0

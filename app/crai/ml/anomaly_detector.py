@@ -43,6 +43,35 @@ except ImportError:  # pragma: no cover
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 MODELS_DIR = BASE_DIR / "models"
 
+# ── Limiar de anomalia ───────────────────────────────────────────────────
+# O limiar é um percentil do erro de reconstrução dos SAUDÁVEIS de validação:
+# tudo acima dele é anômalo. O percentil certo depende da base, porque depende
+# de quanto as duas populações se separam no erro.
+#
+# Base v1 (14/09/2026): p95. As duas populações tinham perfis de conta
+# diferentes e se separavam ~6x no erro; em p95 o detector media recall 0,97
+# e precisão 0,93 — o percentil nem era uma escolha.
+THRESHOLD_PERCENTIL_V1 = 95.0
+# Base v2 (Bloco B, medido em 20/09/2026): p83. Na v2 o perfil de conta vem
+# da mesma população para os dois grupos, a anomalia está só no
+# comportamento, a separação cai para ~3,5x e p95 deixa o recall em 0,35
+# (precisão 0,82) — dois terços dos anômalos passam. A curva precisão x
+# recall x F1 varrida em `curva_limiar` (p75..p97, gravada em
+# models/v2/curva_limiar_anomalia.json) dá, na base v2 de 120.000 clientes:
+#   p75  rec 0,848  prec 0,690  F1 0,761  (melhor F1, mas marca 49% da avaliação)
+#   p83  rec 0,706  prec 0,731  F1 0,719
+#   p85  rec 0,657  prec 0,742  F1 0,697
+#   p90  rec 0,518  prec 0,772  F1 0,620
+#   p95  rec 0,351  prec 0,821  F1 0,492
+# CRITÉRIO: o MAIOR percentil cujo recall fica acima de 0,70 (`escolher_percentil`,
+# recall_minimo=0,70). Maior percentil = limiar mais alto = menos falsos
+# positivos; o piso de recall impede o detector de "acertar" ficando calado.
+# O critério era uma sugestão a confirmar com a curva; a curva confirmou que
+# ele é alcançável, e p83 é o ponto. Ver RELATORIO_B.md §5.
+THRESHOLD_PERCENTIL_V2 = 83.0
+RECALL_MINIMO_LIMIAR_V2 = 0.70
+PERCENTIS_CURVA_LIMIAR = tuple(range(75, 98))       # 75, 76, ..., 97
+
 
 if TORCH_AVAILABLE:
     class BehaviorAutoencoder(nn.Module):
@@ -98,9 +127,10 @@ class AnomalyDetector:
         lr: float = 1e-3,
         bottleneck: int = 4,
         patience: int = 10,
-        threshold_percentile: float = 95.0,
+        threshold_percentile: float = THRESHOLD_PERCENTIL_V1,
         seed: int = 42,
         fonte: str = "sintetico",
+        dados: "pd.DataFrame | None" = None,
     ) -> dict:
         """
         Treina o autoencoder em dataset comportamental sintético e retorna métricas.
@@ -121,9 +151,16 @@ class AnomalyDetector:
             bottleneck: Dimensão do gargalo do autoencoder
             patience: Épocas sem melhora antes do early stopping
             threshold_percentile: Percentil do erro dos saudáveis que vira threshold
+                   (default `THRESHOLD_PERCENTIL_V1`; a base v2 usa o ponto
+                   escolhido pela curva — ver as constantes no topo do módulo)
             seed: Seed para reprodutibilidade
             fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
                    (parâmetros medidos em doadores reais + exceções ao rótulo)
+            dados: dataset JÁ GERADO (colunas de `generate_behavioral_dataset`),
+                   por exemplo `data/v2/comportamental.parquet` lido pelo
+                   `train_all`. Quando vem, `n_samples` e `anomaly_rate` são
+                   ignorados (a base já tem o tamanho e a taxa que tem) e
+                   `n_samples` passa a ser `len(dados)`.
 
         Returns:
             Dicionário com métricas de treino (ROC-AUC, precision/recall, threshold),
@@ -139,10 +176,15 @@ class AnomalyDetector:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        print(f"[ANOMALY] Gerando dataset comportamental sintético (fonte={fonte})...")
-        df = generate_behavioral_dataset(
-            n_samples=n_samples, anomaly_rate=anomaly_rate, seed=seed, fonte=fonte
-        )
+        if dados is not None:
+            print(f"[ANOMALY] Usando dataset fornecido ({len(dados)} clientes, fonte={fonte})...")
+            df = dados.reset_index(drop=True)
+            n_samples = len(df)
+        else:
+            print(f"[ANOMALY] Gerando dataset comportamental sintético (fonte={fonte})...")
+            df = generate_behavioral_dataset(
+                n_samples=n_samples, anomaly_rate=anomaly_rate, seed=seed, fonte=fonte
+            )
         self.features = list(BEHAVIORAL_FEATURES)
         self._fonte = fonte
 
@@ -174,9 +216,15 @@ class AnomalyDetector:
         self.threshold = float(np.percentile(erros_val, threshold_percentile))
 
         metrics = self._evaluate(X_val_s, X_anomalous, threshold_percentile, historico)
+        # Curva precisão x recall x F1 por percentil, sempre calculada: é o que
+        # permite escolher (e auditar) o limiar de uma base nova sem retreinar.
+        erros_anom = self._reconstruction_error(
+            self.scaler.transform(X_anomalous).astype(np.float32))
+        metrics["curva_limiar"] = self.curva_limiar(erros_val, erros_anom)
         metrics["n_train_healthy"] = int(len(X_train))
         metrics["fonte_usada"] = fonte
         metrics["n_amostras"] = int(n_samples)
+        metrics["origem_dados"] = "dataframe_fornecido" if dados is not None else "gerador_em_memoria"
         metrics["proveniencia"] = calibracao.resumo_proveniencia("AnomalyDetector", fonte)
         metrics["versoes"] = calibracao.versoes_bibliotecas()
         metrics["treinado_em"] = datetime.now().isoformat(timespec="seconds")
@@ -304,6 +352,48 @@ class AnomalyDetector:
             "n_val_healthy": int(len(X_val_s)),
             "n_anomalous": int(len(X_anomalous)),
         }
+
+    @staticmethod
+    def curva_limiar(erros_saudaveis: np.ndarray, erros_anomalos: np.ndarray,
+                     percentis=PERCENTIS_CURVA_LIMIAR) -> list:
+        """Precisão, recall e F1 do detector para cada percentil candidato a limiar.
+
+        Para cada `p`, o limiar é `percentile(erros_saudaveis, p)` — exatamente
+        como o treino calcula o seu — e as previsões são `erro > limiar` sobre
+        saudáveis de validação + anômalos. Devolve uma lista de dicionários
+        (`percentil`, `threshold`, `precision`, `recall`, `f1`, `taxa_flag`),
+        pronta para virar `curva_limiar_anomalia.json`.
+        """
+        erros = np.concatenate([erros_saudaveis, erros_anomalos])
+        y = np.concatenate([np.zeros(len(erros_saudaveis), dtype=int),
+                            np.ones(len(erros_anomalos), dtype=int)])
+        curva = []
+        for p in percentis:
+            limiar = float(np.percentile(erros_saudaveis, p))
+            preds = erros > limiar
+            tp = int((preds & (y == 1)).sum())
+            fp = int((preds & (y == 0)).sum())
+            fn = int((~preds & (y == 1)).sum())
+            precision = tp / (tp + fp) if (tp + fp) else 0.0
+            recall = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+            curva.append({"percentil": float(p), "threshold": round(limiar, 6),
+                          "precision": round(precision, 4), "recall": round(recall, 4),
+                          "f1": round(f1, 4), "taxa_flag": round(float(preds.mean()), 4)})
+        return curva
+
+    @staticmethod
+    def escolher_percentil(curva: list, recall_minimo: float = 0.70) -> dict:
+        """O MAIOR percentil da curva cujo recall fica acima de `recall_minimo`.
+
+        Maior percentil = limiar mais alto = menos falsos positivos; o piso de
+        recall é o que impede o detector de "acertar" ficando calado. Se nenhum
+        ponto atinge o piso, devolve o de maior recall (e o chamador decide).
+        """
+        acima = [c for c in curva if c["recall"] >= recall_minimo]
+        if acima:
+            return max(acima, key=lambda c: c["percentil"])
+        return max(curva, key=lambda c: c["recall"])
 
     # ── Persistência do modelo treinado ──────────────────────────────────
     def _save_models(self, bottleneck: int, seed: int, metrics: dict):

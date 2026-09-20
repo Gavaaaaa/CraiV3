@@ -1,0 +1,94 @@
+{
+  "classificador": [
+    {
+      "rodada": "v1 (40k)",
+      "linhas": 40000,
+      "features": 11,
+      "split": "linha",
+      "treino": 32000,
+      "teste": 8000,
+      "taxa_recuperacao": 0.4491,
+      "auc": 0.694,
+      "brier": 0.2193,
+      "recall_no_limiar_0.25": 0.9374
+    },
+    {
+      "rodada": "v1 (120k)",
+      "linhas": 120000,
+      "features": 11,
+      "split": "linha",
+      "treino": 96000,
+      "teste": 24000,
+      "taxa_recuperacao": 0.4471,
+      "auc": 0.7054,
+      "brier": 0.2158,
+      "recall_no_limiar_0.25": 0.9489
+    },
+    {
+      "rodada": "v2 (120k)",
+      "linhas": 120000,
+      "features": 11,
+      "split": "linha",
+      "treino": 96000,
+      "teste": 24000,
+      "taxa_recuperacao": 0.3959,
+      "auc": 0.7094,
+      "brier": 0.2085,
+      "recall_no_limiar_0.25": 0.9127
+    },
+    {
+      "rodada": "v2 (120k)",
+      "linhas": 120000,
+      "features": 11,
+      "split": "cliente",
+      "treino": 95911,
+      "teste": 24089,
+      "taxa_recuperacao": 0.3959,
+      "auc": 0.7095,
+      "brier": 0.21,
+      "recall_no_limiar_0.25": 0.9109
+    }
+  ],
+  "voluntario": [
+    {
+      "rodada": "v1 (20k)",
+      "linhas": 20000,
+      "features": 6,
+      "split": "linha",
+      "taxa_churn": 0.3483,
+      "auc_modelo": 0.7503,
+      "auc_regra": 0.7535,
+      "brier": 0.1812
+    },
+    {
+      "rodada": "v1 (120k)",
+      "linhas": 120000,
+      "features": 6,
+      "split": "linha",
+      "taxa_churn": 0.348,
+      "auc_modelo": 0.7469,
+      "auc_regra": 0.7477,
+      "brier": 0.1817
+    },
+    {
+      "rodada": "v2 (120k)",
+      "linhas": 120000,
+      "features": 6,
+      "split": "linha",
+      "taxa_churn": 0.256,
+      "auc_modelo": 0.8279,
+      "auc_regra": 0.8281,
+      "brier": 0.1249
+    },
+    {
+      "rodada": "v2 (120k)",
+      "linhas": 120000,
+      "features": 6,
+      "split": "cliente",
+      "taxa_churn": 0.256,
+      "auc_modelo": 0.8287,
+      "auc_regra": 0.8295,
+      "brier": 0.1248
+    }
+  ]
+}

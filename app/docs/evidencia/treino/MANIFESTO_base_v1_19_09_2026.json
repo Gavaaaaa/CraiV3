@@ -1,0 +1,181 @@
+{
+  "versao_formato": 1,
+  "gerado_por": "crai.scripts.gerar_bases",
+  "semente": 42,
+  "fonte": "sintetico_calibrado",
+  "end_date_liquidez": "2026-09-14",
+  "versoes": {
+    "python": "3.12.10",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "pyarrow": "25.0.1"
+  },
+  "arquivos": {
+    "classificador.parquet": {
+      "base": "classificador",
+      "semente": 42,
+      "gerador": "generate_dataset",
+      "parametros": {
+        "n_samples": 40000,
+        "seed": 42,
+        "fonte": "sintetico_calibrado"
+      },
+      "linhas": 40000,
+      "colunas": 13,
+      "lista_colunas": [
+        "tenure_months",
+        "day_of_month",
+        "invoice_amount",
+        "avg_ticket",
+        "gateway_error_code",
+        "card_brand",
+        "payment_history_score",
+        "failure_count_90d",
+        "hour_of_day",
+        "day_of_week",
+        "attempt_count",
+        "ltv_estimated",
+        "recovered"
+      ],
+      "dtypes": {
+        "tenure_months": "int32",
+        "day_of_month": "int32",
+        "invoice_amount": "float64",
+        "avg_ticket": "float64",
+        "gateway_error_code": "object",
+        "card_brand": "object",
+        "payment_history_score": "float64",
+        "failure_count_90d": "int64",
+        "hour_of_day": "int32",
+        "day_of_week": "int64",
+        "attempt_count": "int32",
+        "ltv_estimated": "float64",
+        "recovered": "int32"
+      },
+      "bytes": 788356,
+      "sha256": "a4d8e85d3d1ac4eb3708a1191ec680df1809309175da64ca8ba92bbb7e3df6c2"
+    },
+    "comportamental.parquet": {
+      "base": "comportamental",
+      "semente": 42,
+      "gerador": "generate_behavioral_dataset",
+      "parametros": {
+        "n_samples": 25000,
+        "anomaly_rate": 0.09,
+        "seed": 42,
+        "fonte": "sintetico_calibrado"
+      },
+      "linhas": 25000,
+      "colunas": 14,
+      "lista_colunas": [
+        "customer_id",
+        "tenure_days",
+        "mrr_brl",
+        "seats",
+        "logins_7d",
+        "logins_30d",
+        "feature_adoption",
+        "avg_session_min",
+        "api_calls_7d",
+        "days_since_last_login",
+        "tickets_30d",
+        "failed_pay_90d",
+        "nps_last",
+        "is_anomalous"
+      ],
+      "dtypes": {
+        "customer_id": "object",
+        "tenure_days": "int32",
+        "mrr_brl": "float64",
+        "seats": "int64",
+        "logins_7d": "int32",
+        "logins_30d": "int32",
+        "feature_adoption": "float64",
+        "avg_session_min": "float64",
+        "api_calls_7d": "int32",
+        "days_since_last_login": "int32",
+        "tickets_30d": "int64",
+        "failed_pay_90d": "int64",
+        "nps_last": "float64",
+        "is_anomalous": "int64"
+      },
+      "bytes": 664993,
+      "sha256": "52f4ccb7afc41751031532cd1dcd2d87b7317f3c37c10687349ab79b518128f3"
+    },
+    "liquidez.parquet": {
+      "base": "liquidez",
+      "semente": 42,
+      "gerador": "generate_liquidity_series",
+      "parametros": {
+        "n_customers": 3000,
+        "n_days": 180,
+        "seed": 42,
+        "end_date": "2026-09-14",
+        "fonte": "sintetico_calibrado"
+      },
+      "linhas": 540000,
+      "colunas": 8,
+      "lista_colunas": [
+        "customer_id",
+        "profile",
+        "date",
+        "day_of_month",
+        "weekday",
+        "bday_idx",
+        "balance_norm",
+        "has_liquidity"
+      ],
+      "dtypes": {
+        "customer_id": "object",
+        "profile": "object",
+        "date": "datetime64[ns]",
+        "day_of_month": "int32",
+        "weekday": "int32",
+        "bday_idx": "int32",
+        "balance_norm": "float64",
+        "has_liquidity": "int32"
+      },
+      "bytes": 1756957,
+      "sha256": "ee76a6a12e878ab4f805206df6da75d2ec225ee2d1efb2a7197ebe0c0b191209"
+    },
+    "voluntario.parquet": {
+      "base": "voluntario",
+      "semente": 42,
+      "gerador": "generate_voluntary_dataset",
+      "parametros": {
+        "n_samples": 30000,
+        "seed": 42,
+        "fonte": "sintetico_calibrado"
+      },
+      "linhas": 30000,
+      "colunas": 9,
+      "lista_colunas": [
+        "days_since_last",
+        "features_used_30d",
+        "mrr",
+        "evento_cancelamento",
+        "evento_downgrade",
+        "evento_sessao",
+        "event",
+        "risk_regra",
+        "churn"
+      ],
+      "dtypes": {
+        "days_since_last": "float64",
+        "features_used_30d": "float64",
+        "mrr": "float64",
+        "evento_cancelamento": "float64",
+        "evento_downgrade": "float64",
+        "evento_sessao": "float64",
+        "event": "object",
+        "risk_regra": "float64",
+        "churn": "int32"
+      },
+      "bytes": 300760,
+      "sha256": "4291987f6e69b8e4120256105255300c74b882ac57a41448f39841fefe6c217a"
+    }
+  }
+}

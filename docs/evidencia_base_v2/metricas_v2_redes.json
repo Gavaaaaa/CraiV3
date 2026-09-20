@@ -1,0 +1,48 @@
+{
+  "anomaly_v1_120k": {
+    "roc_auc": 0.9723,
+    "average_precision": 0.9507,
+    "precision": 0.916,
+    "recall": 0.8266,
+    "f1": 0.869,
+    "threshold": 0.568474,
+    "threshold_percentile": 95.0,
+    "mean_error_healthy": 0.2034,
+    "mean_error_anomalous": 1.2235,
+    "separation_ratio": 6.01,
+    "epochs_trained": 100,
+    "best_val_loss": 0.203418,
+    "n_val_healthy": 16380,
+    "n_anomalous": 10800,
+    "n_train_healthy": 92820,
+    "fonte_usada": "sintetico_calibrado",
+    "n_amostras": 120000,
+    "treinado_em": "2026-09-20T02:36:46"
+  },
+  "anomaly_v2_120k": {
+    "roc_auc": 0.8684,
+    "average_precision": 0.7566,
+    "precision": 0.8101,
+    "recall": 0.3258,
+    "f1": 0.4647,
+    "threshold": 0.368895,
+    "threshold_percentile": 95.0,
+    "mean_error_healthy": 0.1118,
+    "mean_error_anomalous": 0.3632,
+    "separation_ratio": 3.25,
+    "epochs_trained": 60,
+    "best_val_loss": 0.111798,
+    "n_val_healthy": 16390,
+    "n_anomalous": 10738,
+    "n_train_healthy": 92872,
+    "fonte_usada": "sintetico_calibrado",
+    "n_amostras": 120000,
+    "treinado_em": "2026-09-20T02:38:04"
+  },
+  "payday_v1": {
+    "erro": "RuntimeError: torch e prophet são necessários para treinar o módulo de liquidez (pip install torch prophet)"
+  },
+  "payday_v2": {
+    "erro": "RuntimeError: torch e prophet são necessários para treinar o módulo de liquidez (pip install torch prophet)"
+  }
+}

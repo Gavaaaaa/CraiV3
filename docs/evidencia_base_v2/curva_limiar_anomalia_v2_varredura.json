@@ -1,0 +1,350 @@
+{
+  "roc_auc": 0.8694,
+  "average_precision": 0.7664,
+  "precision": 0.8214,
+  "recall": 0.3511,
+  "f1": 0.4919,
+  "threshold": 0.366947,
+  "threshold_percentile": 95.0,
+  "confusion_matrix": [
+    [
+      15570,
+      820
+    ],
+    [
+      6968,
+      3770
+    ]
+  ],
+  "mean_error_healthy": 0.1111,
+  "mean_error_anomalous": 0.3842,
+  "separation_ratio": 3.46,
+  "epochs_trained": 64,
+  "best_val_loss": 0.111065,
+  "n_val_healthy": 16390,
+  "n_anomalous": 10738,
+  "curva_limiar": [
+    {
+      "percentil": 75.0,
+      "threshold": 0.116752,
+      "precision": 0.6895,
+      "recall": 0.8476,
+      "f1": 0.7605,
+      "taxa_flag": 0.4866
+    },
+    {
+      "percentil": 76.0,
+      "threshold": 0.120804,
+      "precision": 0.695,
+      "recall": 0.8349,
+      "f1": 0.7586,
+      "taxa_flag": 0.4755
+    },
+    {
+      "percentil": 77.0,
+      "threshold": 0.124631,
+      "precision": 0.7005,
+      "recall": 0.8213,
+      "f1": 0.7561,
+      "taxa_flag": 0.4641
+    },
+    {
+      "percentil": 78.0,
+      "threshold": 0.128631,
+      "precision": 0.7066,
+      "recall": 0.8088,
+      "f1": 0.7543,
+      "taxa_flag": 0.4531
+    },
+    {
+      "percentil": 79.0,
+      "threshold": 0.133666,
+      "precision": 0.7116,
+      "recall": 0.7907,
+      "f1": 0.7491,
+      "taxa_flag": 0.4399
+    },
+    {
+      "percentil": 80.0,
+      "threshold": 0.138863,
+      "precision": 0.7164,
+      "recall": 0.771,
+      "f1": 0.7427,
+      "taxa_flag": 0.426
+    },
+    {
+      "percentil": 81.0,
+      "threshold": 0.144688,
+      "precision": 0.7208,
+      "recall": 0.7487,
+      "f1": 0.7345,
+      "taxa_flag": 0.4112
+    },
+    {
+      "percentil": 82.0,
+      "threshold": 0.150783,
+      "precision": 0.7263,
+      "recall": 0.7292,
+      "f1": 0.7277,
+      "taxa_flag": 0.3974
+    },
+    {
+      "percentil": 83.0,
+      "threshold": 0.15763,
+      "precision": 0.7313,
+      "recall": 0.7063,
+      "f1": 0.7186,
+      "taxa_flag": 0.3823
+    },
+    {
+      "percentil": 84.0,
+      "threshold": 0.16527,
+      "precision": 0.7361,
+      "recall": 0.6812,
+      "f1": 0.7076,
+      "taxa_flag": 0.3663
+    },
+    {
+      "percentil": 85.0,
+      "threshold": 0.173343,
+      "precision": 0.7416,
+      "recall": 0.6573,
+      "f1": 0.6969,
+      "taxa_flag": 0.3508
+    },
+    {
+      "percentil": 86.0,
+      "threshold": 0.183827,
+      "precision": 0.7464,
+      "recall": 0.6292,
+      "f1": 0.6828,
+      "taxa_flag": 0.3336
+    },
+    {
+      "percentil": 87.0,
+      "threshold": 0.193983,
+      "precision": 0.7525,
+      "recall": 0.6033,
+      "f1": 0.6697,
+      "taxa_flag": 0.3173
+    },
+    {
+      "percentil": 88.0,
+      "threshold": 0.205582,
+      "precision": 0.7583,
+      "recall": 0.5746,
+      "f1": 0.6538,
+      "taxa_flag": 0.2999
+    },
+    {
+      "percentil": 89.0,
+      "threshold": 0.218198,
+      "precision": 0.766,
+      "recall": 0.5497,
+      "f1": 0.6401,
+      "taxa_flag": 0.2841
+    },
+    {
+      "percentil": 90.0,
+      "threshold": 0.235084,
+      "precision": 0.7724,
+      "recall": 0.518,
+      "f1": 0.6201,
+      "taxa_flag": 0.2654
+    },
+    {
+      "percentil": 91.0,
+      "threshold": 0.254958,
+      "precision": 0.7794,
+      "recall": 0.4856,
+      "f1": 0.5983,
+      "taxa_flag": 0.2466
+    },
+    {
+      "percentil": 92.0,
+      "threshold": 0.27765,
+      "precision": 0.7877,
+      "recall": 0.4533,
+      "f1": 0.5755,
+      "taxa_flag": 0.2278
+    },
+    {
+      "percentil": 93.0,
+      "threshold": 0.303445,
+      "precision": 0.7967,
+      "recall": 0.4189,
+      "f1": 0.5491,
+      "taxa_flag": 0.2081
+    },
+    {
+      "percentil": 94.0,
+      "threshold": 0.331071,
+      "precision": 0.8097,
+      "recall": 0.3898,
+      "f1": 0.5263,
+      "taxa_flag": 0.1906
+    },
+    {
+      "percentil": 95.0,
+      "threshold": 0.366947,
+      "precision": 0.8214,
+      "recall": 0.3511,
+      "f1": 0.4919,
+      "taxa_flag": 0.1692
+    },
+    {
+      "percentil": 96.0,
+      "threshold": 0.414735,
+      "precision": 0.8322,
+      "recall": 0.3029,
+      "f1": 0.4442,
+      "taxa_flag": 0.1441
+    },
+    {
+      "percentil": 97.0,
+      "threshold": 0.479306,
+      "precision": 0.8407,
+      "recall": 0.2418,
+      "f1": 0.3755,
+      "taxa_flag": 0.1138
+    }
+  ],
+  "n_train_healthy": 92872,
+  "fonte_usada": "sintetico_calibrado",
+  "n_amostras": 120000,
+  "origem_dados": "dataframe_fornecido",
+  "proveniencia": {
+    "modelo": "AnomalyDetector",
+    "fonte": "sintetico_calibrado",
+    "n_features": 13,
+    "por_status": {
+      "ancorada": 1,
+      "proxy_fraco": 3,
+      "sintetica_sem_doador": 9
+    },
+    "ancoradas_em_real": [
+      "days_since_last_login"
+    ],
+    "proxy_fraco": [
+      "avg_session_min",
+      "tickets_30d",
+      "nps_last"
+    ],
+    "sinteticas_puras": [
+      "tenure_days",
+      "mrr_brl",
+      "seats",
+      "logins_7d",
+      "logins_30d",
+      "feature_adoption",
+      "api_calls_7d",
+      "failed_pay_90d",
+      "is_anomalous (rotulo)"
+    ],
+    "features": [
+      {
+        "feature": "tenure_days",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "gamma(2,5; 180) a mao"
+      },
+      {
+        "feature": "mrr_brl",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal(8,5; 0,7) a mao"
+      },
+      {
+        "feature": "seats",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "poisson(15) a mao"
+      },
+      {
+        "feature": "logins_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "fracao de logins_30d a mao"
+      },
+      {
+        "feature": "logins_30d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "normal(seats x 18 / x 5) a mao"
+      },
+      {
+        "feature": "feature_adoption",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "beta(5,2) / beta(2,5) a mao"
+      },
+      {
+        "feature": "avg_session_min",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "HourSpendOnApp",
+        "nota": "proxy fraco: HourSpendOnApp e horas/dia no app, nao minutos por sessao. Calibrado SO o coeficiente de variacao (0.2462); a escala (22 / 6 min) continua inventada."
+      },
+      {
+        "feature": "api_calls_7d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "lognormal a mao"
+      },
+      {
+        "feature": "days_since_last_login",
+        "status": "ancorada",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "DaySinceLastOrder",
+        "nota": "saudavel: media de DaySinceLastOrder (4.543 dias, n=5323) como scale da exponencial. Anomalo: saudavel + 7.5 dias (o deslocamento que o gerador default ja tinha). O corte por Churn do doador NAO foi usado para separar as populacoes: nele quem cancela tem MENOS dias desde o ultimo pedido, o inverso da hipotese do gerador — declarado, nao escondido."
+      },
+      {
+        "feature": "tickets_30d",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "Complain",
+        "nota": "proxy fraco: Complain e um flag 0/1, nao contagem de tickets. lambda da Poisson = P(Complain) por populacao do doador (Churn=0: 0.2341; Churn=1: 0.5359) — unica feature em que a direcao do doador coincide com a do gerador."
+      },
+      {
+        "feature": "failed_pay_90d",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "binomial(3; 0,05 / 0,35) a mao"
+      },
+      {
+        "feature": "nps_last",
+        "status": "proxy_fraco",
+        "fonte": "E: E-Commerce Customer Churn",
+        "coluna": "SatisfactionScore",
+        "nota": "proxy fraco: SatisfactionScore 1-5 reescalado x2 para 0-10 (saudavel: media 6.134, sd 2.760). Anomalo: media x 0.6707 (razao do gerador default). No doador quem cancela e MAIS satisfeito em media — direcao inversa, nao usada."
+      },
+      {
+        "feature": "is_anomalous (rotulo)",
+        "status": "sintetica_sem_doador",
+        "fonte": null,
+        "coluna": null,
+        "nota": "populacao de origem; 15% dos anomalos recebem 3 das 8 features comportamentais da distribuicao saudavel (churn silencioso); 5% dos saudaveis recebem 2 features da distribuicao anomala (degradacao passageira)"
+      }
+    ]
+  },
+  "versoes": {
+    "python": "3.12.10",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "treinado_em": "2026-09-20T00:31:58"
+}

@@ -52,6 +52,7 @@ from ..churn_voluntary.risk_scorer import (
 )
 from . import calibracao
 from .calibracao import conferir_meta
+from .split import conferir_sem_vazamento, split_por_cliente
 from .synthetic_data import VOLUNTARY_FEATURES, generate_voluntary_dataset
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -80,15 +81,25 @@ class VoluntaryRiskModel:
         test_size: float = 0.2,
         seed: int = 42,
         fonte: str = "sintetico",
+        dados: "pd.DataFrame | None" = None,
+        groups=None,
     ) -> dict:
         """
         Treina o candidato e devolve métricas.
 
         Args:
-            n_samples: Número de eventos sintéticos
+            n_samples: Número de eventos sintéticos (ignorado se `dados` vier)
             test_size: Fração para teste
             seed: Seed para reprodutibilidade
             fonte: "sintetico" ou "sintetico_calibrado"
+            dados: eventos JÁ GERADOS (colunas de `generate_voluntary_dataset`),
+                   por exemplo `data/v2/voluntario.parquet` lido pelo
+                   `train_all`. Quando vem, `n_samples` passa a ser `len(dados)`.
+            groups: identificador de CLIENTE por evento (`df["customer_id"]`).
+                   Quando vem, o holdout é por cliente (`GroupShuffleSplit`,
+                   ver `crai/ml/split.py`): a base v2 tem vários eventos por
+                   cliente e o split por linha poria o mesmo cliente nos dois
+                   lados. Sem `groups`, o split por linha de sempre (v1).
 
         Returns:
             AUC contra o rótulo ruidoso, Brier, e a fidelidade às regras
@@ -102,14 +113,34 @@ class VoluntaryRiskModel:
                 "VOLUNTARY_FEATURES (gerador) e FEATURES_DE_RISCO (scorer) divergem: "
                 f"{VOLUNTARY_FEATURES} != {FEATURES_DE_RISCO}. A ordem é o contrato.")
 
-        print(f"[RISK-VOL] Gerando dataset de risco voluntario (fonte={fonte})...")
-        df = generate_voluntary_dataset(n_samples=n_samples, seed=seed, fonte=fonte)
+        if dados is not None:
+            print(f"[RISK-VOL] Usando dataset fornecido ({len(dados)} eventos, fonte={fonte})...")
+            df = dados.reset_index(drop=True)
+            n_samples = len(df)
+        else:
+            print(f"[RISK-VOL] Gerando dataset de risco voluntario (fonte={fonte})...")
+            df = generate_voluntary_dataset(n_samples=n_samples, seed=seed, fonte=fonte)
         X = df[self.features].to_numpy(dtype=float)
         y = df["churn"].to_numpy(dtype=int)
         regra = df["risk_regra"].to_numpy(dtype=float)
 
-        X_tr, X_te, y_tr, y_te, _, regra_te = train_test_split(
-            X, y, regra, test_size=test_size, random_state=seed, stratify=y)
+        if groups is not None:
+            groups = np.asarray(groups)
+            if len(groups) != len(X):
+                raise ValueError(f"groups tem {len(groups)} valores para {len(X)} linhas")
+            idx_tr, idx_te = split_por_cliente(groups, test_size=test_size, seed=seed)
+            conferir_sem_vazamento(groups, idx_tr, idx_te)
+            X_tr, X_te, y_tr, y_te, regra_te = X[idx_tr], X[idx_te], y[idx_tr], y[idx_te], regra[idx_te]
+            self._grupos_split = {"treino": set(groups[idx_tr].tolist()),
+                                  "teste": set(groups[idx_te].tolist())}
+            split_info = {"split": "por_cliente",
+                          "n_clientes_treino": len(self._grupos_split["treino"]),
+                          "n_clientes_teste": len(self._grupos_split["teste"])}
+        else:
+            X_tr, X_te, y_tr, y_te, _, regra_te = train_test_split(
+                X, y, regra, test_size=test_size, random_state=seed, stratify=y)
+            self._grupos_split = None
+            split_info = {"split": "por_linha"}
 
         print(f"[RISK-VOL] Treinando GradientBoosting em {len(X_tr)} eventos...")
         self.model = GradientBoostingClassifier(
@@ -131,6 +162,8 @@ class VoluntaryRiskModel:
             "n_teste": int(len(X_te)),
             "fonte_usada": fonte,
             "n_amostras": int(n_samples),
+            "origem_dados": "dataframe_fornecido" if dados is not None else "gerador_em_memoria",
+            **split_info,
             "proveniencia": calibracao.resumo_proveniencia("risk_scorer_voluntario", fonte),
             "versoes": calibracao.versoes_bibliotecas(),
             "treinado_em": datetime.now().isoformat(timespec="seconds"),
