@@ -113,22 +113,32 @@ def canais_considerados_involuntario(optimal: dict | None) -> list[dict]:
     for canal in custos_por_canal():
         if canal == CANAL_PADRAO:
             escolhido = True
+            codigo = "unico_com_integracao"
             motivo = "único canal com integração de envio nesta fase (bot de WhatsApp)"
         elif canal in CANAIS_HUMANOS:
             escolhido = False
+            codigo = "canal_humano"
             motivo = "canal humano: proibido pela invariante de escalonamento zero"
         elif canal == melhor:
             escolhido = False
+            codigo = "melhor_sem_integracao"
             motivo = "maior e-Profit do comparativo, mas sem integração de envio nesta fase"
         else:
             escolhido = False
+            codigo = "sem_integracao"
             motivo = "sem integração de envio nesta fase"
         linhas.append({
             "canal": canal,
             "eprofit": eprofits.get(canal),
             "melhor_eprofit": canal == melhor,
             "escolhido": escolhido,
+            # `motivo` e a frase em pt-BR, como sempre foi — quem ja consumia
+            # continua funcionando. `motivo_codigo` e a MESMA informacao como
+            # identificador: sao quatro motivos fechados, decididos por
+            # condicao, entao quem exibe pode escrever no idioma do leitor sem
+            # que a tela invente explicacao nenhuma.
             "motivo": motivo,
+            "motivo_codigo": codigo,
         })
     return linhas
 
@@ -457,6 +467,11 @@ async def trigger_dunning(state: AgentState) -> AgentState:
         "channel": result["channel"],
         "metodo_pagamento": result["payment_method"],
         "message_sent": result["message"],
+        "mensagem_meta": {"origem": result.get("origem") or "gerado",
+                          "codigo": result.get("codigo_template") or "",
+                          "valor": state["amount"],
+                          "link": result.get("portal_link") or "",
+                          "metodo": result["payment_method"]},
     }
 
 

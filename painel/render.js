@@ -62,7 +62,6 @@ function abrir(nome){
   window.scrollTo({ top:0, behavior: reduz ? "auto" : "smooth" });
   if(nome === "recuperar") desenharRecuperacao();
   if(nome === "mensagens") mostrarPainelMsg();
-  if(nome === "visao") desenharVisao();
 }
 abas.forEach(function(a){ a.addEventListener("click", function(){ abrir(a.dataset.tela); }); });
 
@@ -71,12 +70,34 @@ document.getElementById("tema").addEventListener("click", function(){
   if(!at) at = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   raiz.setAttribute("data-theme", at === "dark" ? "light" : "dark");
   if(ultimaAnalise) desenharDistribuicao(ultimaAnalise);
-  if(document.querySelector('[data-tela="visao"]').classList.contains("on")) desenharVisao();
 });
 
 /* ═══════════ TROCA DE IDIOMA ═══════════ */
+/* Rebusca o ranking no idioma atual e redesenha. Nao reimporta a base: so
+   `GET /simulate/painel/insights`, que e leitura. Se falhar, mantem o que
+   estava na tela e avisa — melhor a frase no idioma errado do que tela vazia. */
+function recarregarInsights(){
+  API.insights(idioma)
+    .then(function(res){
+      if(!res || !Array.isArray(res.clientes_em_risco) || typeof res.total_clientes !== "number") return;
+      var atual = { relatorio:(ultimaAnalise ? ultimaAnalise.relatorio : null),
+                    clientes:res.clientes_em_risco, total:res.total_clientes,
+                    gerado_em:res.gerado_em };
+      ultimaAnalise = atual;
+      estado.analise = atual;
+      mostrarResultado(atual, estado.rotuloBase);
+      montarSelectMsg(true);
+    })
+    .catch(function(){ /* mantem a analise que ja esta desenhada */ });
+}
+
 function aplicarIdioma(){
   document.documentElement.lang = idioma === "pt" ? "pt-BR" : "en";
+  /* Título da aba do navegador e rótulo do leitor de tela: texto visível que
+     não passa por [data-i18n] porque não é conteúdo de elemento. */
+  document.title = t("titulo_pagina");
+  var nav = document.querySelector(".abas");
+  if(nav) nav.setAttribute("aria-label", t("aria_secoes"));
   [].slice.call(document.querySelectorAll("[data-i18n]")).forEach(function(n){
     n.textContent = t(n.dataset.i18n);
   });
@@ -89,16 +110,20 @@ function aplicarIdioma(){
   montarSelectMsg(true);
   if(ultimaAnalise) mostrarResultado(ultimaAnalise, estado.rotuloBase);
   else if(ultimoErro) mostrarErro(ultimoErro.err, ultimoErro.rotulo);
-  if(clienteMsg) mostrarMensagem(clienteMsg); else mostrarSemBase();
+  mostrarPainelMsg();
   if(!document.getElementById("msgTodos").hidden) montarLote();
-  desenharVisao();
   document.getElementById("areaResultado").innerHTML = "";
 }
 [].slice.call(document.querySelectorAll(".idioma button")).forEach(function(b){
   b.addEventListener("click", function(){
+    if(idioma === b.dataset.idioma) return;
     idioma = b.dataset.idioma;
     try{ localStorage.setItem("crai_idioma", idioma); }catch(e){}
     aplicarIdioma();
+    /* As frases de cada cliente em risco sao escritas pelo backend. Trocar o
+       idioma da tela nao as traduz: e preciso pedir de novo a analise, agora
+       no outro idioma. Sem base analisada, nao ha o que refazer. */
+    if(ultimaAnalise) recarregarInsights();
   });
 });
 
@@ -162,24 +187,47 @@ function descartarAnalise(){
   estado.rotuloBase = null;
   clienteMsg = null;
   loteResultado = null;
-  atualizarPontoVisao();
+  decisoesUm = {};                // base nova, ciclos apagados: decisões velhas não valem
   montarSelectMsg(true);          // a lista de clientes da aba Mensagens some junto
 }
+
+/* O loading da análise tem DURAÇÃO MÍNIMA. A importação e o ranking costumam
+   voltar em bem menos de um segundo com as bases de exemplo, e as quatro
+   etapas passavam rápido demais para alguém ler o que o sistema estava
+   fazendo. `ETAPA_MS` é o instante mínimo de cada etapa e `ANALISE_MS` o do
+   resultado, ambos contados do clique.
+
+   O piso não vira teto: se a API demorar mais que o mínimo, cada etapa aparece
+   no instante real em que chega. E o resultado exibido é sempre o da resposta
+   — o tempo aqui é só da animação, nada é recalculado nem adiado por outro
+   motivo. */
+var ANALISE_MS = 5000;
+var ETAPA_MS = [0, 1250, 2500, 3750];
+/* Análise nova invalida os temporizadores da anterior: sem isto, importar uma
+   segunda base enquanto a primeira ainda anima faria o texto antigo aparecer
+   por cima do novo. */
+var corridaAnalise = 0;
 
 /* `obterArquivo` devolve uma Promise<File>: o arquivo do usuário ou o CSV de
    exemplo buscado do servidor. Daqui em diante o caminho é um só. */
 function rodarAnalise(obterArquivo, rotulo){
   descartarAnalise();
   ultimoErro = null;
+  var inicio = Date.now(), minha = ++corridaAnalise, nEtapa = 0;
   zEnvio.hidden = true; zResultado.hidden = true; zAnalise.hidden = false;
   zAnalise.innerHTML = '<div class="painel pad"><div style="display:flex;align-items:center;gap:16px">' +
     '<div class="spin"></div><div><div style="font-size:17px;font-weight:600;font-family:\'Inter Tight\',sans-serif" id="passoTxt"></div>' +
     '<div class="sub" id="passoSub"></div></div></div><div class="barra"><i id="barraI"></i></div></div>';
   function passo(k, pct){
-    var a = document.getElementById("passoTxt"), b = document.getElementById("passoSub"), c = document.getElementById("barraI");
-    if(a) a.textContent = t(k);
-    if(b) b.textContent = t(k + "s", { rotulo:rotulo });
-    if(c) c.style.width = pct + "%";
+    var alvo = inicio + (ETAPA_MS[nEtapa++] || 0);
+    var atraso = reduz ? 0 : Math.max(0, alvo - Date.now());
+    setTimeout(function(){
+      if(minha !== corridaAnalise) return;
+      var a = document.getElementById("passoTxt"), b = document.getElementById("passoSub"), c = document.getElementById("barraI");
+      if(a) a.textContent = t(k);
+      if(b) b.textContent = t(k + "s", { rotulo:rotulo });
+      if(c) c.style.width = pct + "%";
+    }, atraso);
   }
   var relatorio = null;
   passo("an1", 12);
@@ -195,7 +243,7 @@ function rodarAnalise(obterArquivo, rotulo){
       if(typeof r.importados !== "number") throw API.erro("resposta_invalida", { rota:"/simulate/painel/importar" });
       if(r.importados === 0) throw API.erro("nada_importado", { relatorio:r });
       passo("an3", 72);
-      return API.insights();
+      return API.insights(idioma);
     })
     .then(function(ins){
       if(!ins || !Array.isArray(ins.clientes_em_risco) || typeof ins.total_clientes !== "number")
@@ -205,8 +253,11 @@ function rodarAnalise(obterArquivo, rotulo){
       ultimaAnalise = res;
       estado.analise = res;
       estado.rotuloBase = rotulo;
-      atualizarPontoVisao();
-      setTimeout(function(){ mostrarResultado(res, rotulo); }, reduz ? 0 : 260);
+      var espera = reduz ? 0 : Math.max(260, inicio + ANALISE_MS - Date.now());
+      setTimeout(function(){
+        if(minha !== corridaAnalise) return;
+        mostrarResultado(res, rotulo);
+      }, espera);
     })
     .catch(function(err){ mostrarErro(err, rotulo); });
 }
@@ -522,12 +573,13 @@ document.getElementById("btnCobrar").addEventListener("click", function(){
         throw API.erro("resposta_invalida", { rota:"/simulate/painel/cobranca-falhada" });
       estado.cobrancasRecusadas++;
       estado.valorRecusado += valor;
-      atualizarPontoVisao();
       registrarCaso({ valor:valor, codigo:codigo, tentativas:tentativas,
                       cliente:(cli ? cli.nome : null) }, d);
       area.innerHTML = bloco("f", corDe("--falha"), IC.x, t("res_falha_t"),
-        t("res_falha_d", { causa:esc(d.failure_cause_legivel || d.failure_cause || "—"), valor:moedaDec(valor), codigo:esc(codigo) }),
-        t("res_falha_r", { decisao:esc(d.estrategia_legivel || d.estrategia || "—") }), t("res_falha_b"));
+        t("res_falha_d", { cliente:esc(cli ? cli.nome : t("cliente")),
+                           causa:causaLegivel(d),
+                           valor:moedaDec(valor), codigo:esc(codigo) }),
+        t("res_falha_r", { decisao:estrategiaLegivel(d) }), t("res_falha_b"));
       var b = area.querySelector("#irRecuperar");
       if(b) b.addEventListener("click", function(){ abrir("recuperar"); });
     })
@@ -550,7 +602,129 @@ var casos = [];
 var casoAtivo = -1;
 var CANAL_INV_K = { bot_whatsapp:"ci_bot_whatsapp", email_auto:"ci_email_auto", sms:"ci_sms",
                     ligacao_cs:"ci_ligacao_cs", pix_boleto_link:"ci_pix_boleto_link" };
+/* Rotulo de cada feature do SHAP, montado pelo NOME DO CAMPO e nao pela frase
+   que a API manda. A API devolve `rotulo` so em portugues (ela nao aceita
+   parametro de idioma), e ai o painel em ingles mostrava frase em portugues e
+   nome interno cru, tipo "Codigo de erro insufficient_funds". O `feature` e
+   estavel e e um identificador: traduzir identificador e o que um dicionario
+   faz. Nenhuma frase da API e reescrita — as que ela produz (raciocinio,
+   explicacao, motivo de canal) continuam exibidas como chegaram. */
+var ROTULO_FEATURE = {
+  tenure_months:"ft_tenure", payment_history_score:"ft_historico",
+  failure_count_90d:"ft_falhas", attempt_count:"ft_tentativas",
+  invoice_amount:"ft_valor", avg_ticket:"ft_ticket",
+  gateway_error_code:"ft_codigo", card_brand:"ft_bandeira",
+  day_of_month:"ft_dia_mes", day_of_week:"ft_dia_semana", hour_of_day:"ft_hora"
+};
+/* Valores categoricos que chegam como codigo interno. */
+var VALOR_FEATURE = {
+  insufficient_funds:"vf_saldo", expired_card:"vf_expirado",
+  card_declined:"vf_recusado", processing_error:"vf_processamento",
+  do_not_honor:"vf_nao_honrado", generic_decline:"vf_generico"
+};
+function rotuloShap(x){
+  var k = ROTULO_FEATURE[x.feature];
+  if(!k) return esc(x.rotulo || x.feature);          // campo novo: mostra o que veio
+  var v = x.value;
+  if(v == null || v === "") return t(k);
+  if(typeof v === "string"){
+    var vk = VALOR_FEATURE[v];
+    return t(k) + ": " + (vk ? t(vk) : esc(v));
+  }
+  return t(k) + ": " + (Math.abs(v) >= 1000 || v % 1 === 0 ? v.toLocaleString(loc()) : nDec(v, 2));
+}
+
 var FEATURES_LIDAS = ["payment_history_score", "failure_count_90d", "tenure_months", "avg_ticket", "attempt_count"];
+
+/* ═══════════ VOCABULÁRIO DA API ═══════════
+   A API responde em duas camadas: IDENTIFICADORES (failure_cause, estrategia,
+   offer_type, motivo_codigo, texto_codigo — conjuntos fechados) e as frases
+   prontas em pt-BR que ela sempre mandou. Identificador é exatamente o que um
+   dicionário traduz, então a tela escreve a frase no idioma do leitor a partir
+   do código. A frase da API continua sendo o que aparece quando não há código:
+   campo novo do backend nunca some da tela, só sai sem tradução. */
+var CAUSA_K = {
+  insufficient_funds:"ca_insufficient_funds", limit_exceeded:"ca_limit_exceeded",
+  authorization_revoked:"ca_authorization_revoked", processing_error:"ca_processing_error"
+};
+function causaLegivel(d){
+  var k = CAUSA_K[d && d.failure_cause];
+  return k ? esc(t(k)) : esc((d && (d.failure_cause_legivel || d.failure_cause)) || "—");
+}
+var ESTRATEGIA_K = { retry_automatico:"es_retry_automatico", mensagem_pagamento:"es_mensagem_pagamento" };
+function estrategiaLegivel(d){
+  var k = ESTRATEGIA_K[d && d.estrategia];
+  return k ? esc(t(k)) : esc((d && (d.estrategia_legivel || d.estrategia)) || "—");
+}
+var OFERTA_K = { desconto_10:"of_desconto_10", desconto_20:"of_desconto_20",
+                 pausa_1_mes:"of_pausa_1_mes", pix_boleto_flash:"of_pix_boleto_flash" };
+function ofertaLegivel(codigo, rotuloDaApi){
+  return OFERTA_K[codigo] ? t(OFERTA_K[codigo]) : (rotuloDaApi || t("of_outra"));
+}
+/* Versão curta, para a linha de resumo do lote: sem ela a tela mostrava a
+   chave crua (`desconto_10`), que é justamente o sublinhado que não pode
+   aparecer em texto nenhum do painel. */
+function ofertaCurta(codigo){
+  return OFERTA_K[codigo] ? t("ofc_" + codigo) : String(codigo || "—");
+}
+var MP_K = { pix_automatico:"mp_pix_automatico", boleto:"mp_boleto" };
+/* A mensagem que sai para o cliente na cobrança recusada. `mensagem_meta` diz
+   se ela veio de MODELO (conjunto fechado, traduzível) ou foi gerada pela
+   Claude API (texto livre, exibido como chegou). */
+function mensagemCobranca(d){
+  var m = d && d.mensagem_meta;
+  var k = m && m.origem === "template" && m.codigo ? "tpl_cob_" + m.codigo : null;
+  if(!k || !T.pt[k]) return esc((d && d.mensagem) || "");
+  return esc(t(k, { valor:moedaDec(m.valor),
+                    metodo:(MP_K[m.metodo] ? t(MP_K[m.metodo]) : m.metodo),
+                    link:m.link }));
+}
+/* Os parâmetros do motivo também chegam como código (criticidade, canal).
+   Traduzi-los aqui é o que evita "criticidade critico" na tela em inglês. */
+function paramsDoMotivo(p){
+  var saida = {}, v;
+  for(var k in (p || {})){
+    v = p[k];
+    if(k === "criticidade") saida[k] = NIVEL[v] ? t("nl_" + v) : esc(String(v));
+    else if(k === "canal") saida[k] = CANAL_K[v] ? t(CANAL_K[v]) : esc(String(v));
+    else saida[k] = v;
+  }
+  return saida;
+}
+var MOTIVO_CAND_K = { maior_eprofit:"cm_maior_eprofit", abaixo_da_escolhida:"cm_abaixo_da_escolhida" };
+function motivoCandidata(x){
+  var k = MOTIVO_CAND_K[x.motivo_codigo];
+  return k ? t(k, paramsDoMotivo(x.motivo_params)) : esc(x.motivo || "");
+}
+/* O texto de cada candidata, na ordem: escrito pela Claude API no idioma do
+   leitor; o modelo daquele idioma; ou, no caminho sem geração por idioma, o
+   texto como a API mandou. */
+function textoCandidata(x){
+  var ti = x.textos_idioma;
+  if(ti && ti[idioma]) return esc(ti[idioma]);
+  if(!x.texto_codigo) return esc(x.texto || "");
+  var pr = x.texto_params || {};
+  var txt = t(x.texto_codigo === "critico" ? "tpl_ret_critico" : "tpl_ret_padrao",
+              { oferta:ofertaLegivel(pr.oferta, x.oferta_label) });
+  if(x.texto_codigo === "critico" && pr.assinatura)
+    txt += "\n" + t("tpl_ret_assinatura", { nome:pr.assinatura });
+  return esc(txt);
+}
+/* A etiqueta de origem segue o texto que está sendo exibido: a geração pode
+   ter dado certo num idioma e caído no modelo no outro, e dizer "gerado pela
+   Claude API" embaixo de um modelo seria a tela mentindo sobre a própria
+   demonstração. */
+function origemCandidata(x){
+  var o = (x.origens_idioma && x.origens_idioma[idioma]) || x.origem_texto;
+  return o === "gerado" ? t("origem_gerado") : t("origem_template");
+}
+/* Por que um cliente foi pulado: `motivo` é código; o `detalhe` da API é a
+   mesma razão por extenso, e a tela escreve a versão no idioma do leitor. */
+function detalhePulado(p){
+  if(!p) return "";
+  var k = "pulado_" + p.motivo + "_d";
+  return T.pt[k] ? esc(t(k)) : esc(p.detalhe || "");
+}
 
 function registrarCaso(entrada, resposta){
   casos.push({ n:casos.length + 1, entrada:entrada, resposta:resposta });
@@ -585,7 +759,7 @@ function colunaFatos(){
     h += '<h3>' + t("rec_qual_caso") + '</h3><div class="caso-sel">';
     casos.forEach(function(x, i){
       h += '<button type="button" class="caso-b" data-i="' + i + '" aria-pressed="' + (i === casoAtivo) + '">' +
-        '<span><b>' + esc(x.entrada.cliente || t("caso_n", { n:x.n })) + '</b><span>' + esc(x.resposta.failure_cause_legivel || x.resposta.failure_cause || "") + '</span></span>' +
+        '<span><b>' + esc(x.entrada.cliente || t("caso_n", { n:x.n })) + '</b><span>' + causaLegivel(x.resposta) + '</span></span>' +
         '<span class="cv">' + moeda(x.entrada.valor) + '</span></button>';
     });
     h += '</div>';
@@ -595,10 +769,10 @@ function colunaFatos(){
       ? fato(IC.busca, t("f_cliente"), esc(c.entrada.cliente), t("f_cliente_de"))
       : "") +
     fato(IC.cartao, t("f_valor"), moedaDec(c.entrada.valor), t("f_valor_de")) +
-    fato(IC.alerta, t("f_causa"), esc(d.failure_cause_legivel || d.failure_cause || "—"), t("f_causa_de", { codigo:esc(c.entrada.codigo) })) +
+    fato(IC.alerta, t("f_causa"), causaLegivel(d), t("f_causa_de", { codigo:esc(c.entrada.codigo) })) +
     fato(IC.relogio, t("f_tentativas"), String(c.entrada.tentativas), t("f_tentativas_de"));
   var lidas = (d.shap || []).filter(function(x){ return FEATURES_LIDAS.indexOf(x.feature) !== -1; });
-  lidas.forEach(function(x){ h += fato(IC.check, esc(x.rotulo), "", t("f_lido_de")); });
+  lidas.forEach(function(x){ h += fato(IC.check, rotuloShap(x), "", t("f_lido_de")); });
   h += fato(IC.busca, t("f_perfil"), "—", t("f_nao_devolvido")) +
     '<button type="button" class="btn" style="margin-top:20px;width:100%;justify-content:center" id="recRecomecar">' +
       t("rec_recomecar") + '</button></aside>';
@@ -622,8 +796,7 @@ function desenharFluxo(){
   var c = caso(), d = c.resposta;
   var host = document.getElementById("recFluxo");
   var age = !!d.estrategia;
-  var tit = age ? esc(d.estrategia_legivel || d.estrategia) : t("dec_nao");
-  var racio = (d.raciocinio || []).map(function(x){ return String(x); });
+  var tit = age ? estrategiaLegivel(d) : t("dec_nao");
 
   var h = '<div class="decisao ' + (age ? "sim" : "nao") + '">' +
     '<span class="dic" style="background:' + (age ? "var(--ok)" : "var(--falha)") + '">' + (age ? IC.check : IC.x) + '</span>' +
@@ -635,9 +808,14 @@ function desenharFluxo(){
     '<div><div class="rot">' + t("big_retorno") + '</div><div class="v" style="color:' + (typeof d.eprofit === "number" && d.eprofit >= 0 ? "var(--ok)" : "var(--falha)") + '">' +
       (typeof d.eprofit === "number" ? (d.eprofit < 0 ? "−" : "") + moedaDec(Math.abs(d.eprofit)) : "—") + '</div><div class="pe">' + t("big_retorno_pe") + '</div></div>' +
     '<div><div class="rot">' + t("big_custo") + '</div><div class="v">—</div>' +
-      '<div class="pe">' + t("big_custo_pe") + '</div></div></div>';
+      '<div class="pe">' + t("big_custo_pe", { n:c.entrada.tentativas }) + '</div></div></div>';
 
-  h += passo("p1_t", t("p1_d", { valor:moedaDec(c.entrada.valor), codigo:esc(c.entrada.codigo), causa:esc(d.failure_cause_legivel || d.failure_cause || "—"), n:c.entrada.tentativas }), "");
+  h += passo("p1_t", t("p1_d", {
+    cliente:esc(c.entrada.cliente || t("caso_n", { n:c.n })),
+    valor:moedaDec(c.entrada.valor),
+    codigo:esc(c.entrada.codigo),
+    causa:causaLegivel(d),
+    n:c.entrada.tentativas }), "");
 
   /* SHAP: ordenado pelo peso absoluto, como a tarefa pede; rótulo e valores da API. */
   var shap = (d.shap || []).slice().sort(function(a, b){ return Math.abs(b.shap_value) - Math.abs(a.shap_value); });
@@ -645,7 +823,7 @@ function desenharFluxo(){
   var razoes = shap.length ? '<div class="razoes">' : '<p class="sub">' + t("p2_sem_shap") + "</p>";
   shap.forEach(function(x){
     var pos = x.shap_value >= 0, w = Math.abs(x.shap_value) / maxAbs * 50;
-    razoes += '<div class="razao"><span class="rn">' + esc(x.rotulo) + '</span>' +
+    razoes += '<div class="razao"><span class="rn">' + rotuloShap(x) + '</span>' +
       '<span class="rb"><i style="' + (pos ? "left:50%" : "right:50%") + ';width:' + w.toFixed(1) + '%;background:' +
       (pos ? "var(--ok)" : "var(--falha)") + '"></i></span>' +
       '<span class="rv" style="color:' + (pos ? "var(--ok)" : "var(--falha)") + '">' +
@@ -654,33 +832,36 @@ function desenharFluxo(){
   if(shap.length) razoes += '</div>';
   h += passo("p2_t", t("p2_d"), razoes);
 
-  h += passo("p_racio_t", t("p_racio_d"), racio.length
-    ? '<ol class="raciocinio">' + racio.map(function(x){ return "<li>" + esc(x) + "</li>"; }).join("") + "</ol>"
-    : '<p class="sub">' + t("p_racio_vazio") + "</p>");
-
-  var plano = d.plano || [];
-  h += passo("p3_t", plano.length ? t("p3_d") : t("p3_sem_plano", { decisao:esc(d.estrategia_legivel || d.estrategia || "—") }),
+  /* `plano_itens` traz os campos crus (instante em ISO, valor); `plano` traz a
+     frase já escrita em pt-BR, com data e moeda no formato brasileiro. Data e
+     moeda são FORMATAÇÃO: quem exibe é que sabe o formato do leitor. Usa a
+     frase pronta só se a API for antiga e não mandar os itens. */
+  var itens = d.plano_itens || [];
+  var plano = itens.length ? itens : (d.plano || []);
+  h += passo("p3_t", plano.length ? t("p3_d") : t("p3_sem_plano", { decisao:estrategiaLegivel(d) }),
     plano.length ? '<div class="tent">' + plano.map(function(x, i){
-      return '<div class="tent-l futura"><span class="tent-n">' + (i + 1) + '</span><span><span class="tent-q">' + esc(x) + "</span></span></div>";
+      var txt = itens.length
+        ? (x.quando ? t("plano_tentativa", { data:dataHora(x.quando), valor:moedaDec(x.valor) })
+                    : esc(x.texto || ""))
+        : esc(x);
+      return '<div class="tent-l futura"><span class="tent-n">' + (i + 1) + '</span><span><span class="tent-q">' + txt + "</span></span></div>";
     }).join("") + "</div>" : "");
 
   /* Comparativo de canal: os cinco canais por e-Profit, com o motivo de cada um.
      A mensagem sai por WhatsApp por limitação de integração; se outro canal tem
      o maior e-Profit, isso fica visível junto com a razão. */
-  var canais = d.canais_considerados || [];
+  var canais = canaisVisiveis(d.canais_considerados);
   var escolhido = canais.find(function(x){ return x.escolhido && CANAIS_HUMANOS.indexOf(x.canal) === -1; });
   var melhor = canais.find(function(x){ return x.melhor_eprofit; });
   var tabela = '<div class="comparativo">';
   canais.forEach(function(x){
-    var humano = CANAIS_HUMANOS.indexOf(x.canal) !== -1;
-    var vence = !!x.escolhido && !humano;
+    var vence = !!x.escolhido;
     tabela += '<div class="comp-l' + (vence ? " vence" : "") + '">' +
       '<span class="comp-n">' + esc(CANAL_INV_K[x.canal] ? t(CANAL_INV_K[x.canal]) : x.canal) + "</span>" +
       '<span class="comp-e num">' + (typeof x.eprofit === "number" ? moedaDec(x.eprofit) : "—") + "</span>" +
       '<span class="comp-t">' + (vence ? '<span class="tag o">' + IC.check + " " + t("escolhido") + "</span>" : "") +
-      (x.melhor_eprofit ? '<span class="tag a">' + t("melhor_eprofit") + "</span>" : "") +
-      (humano ? '<span class="tag n">' + t("canal_humano") + "</span>" : "") + "</span>" +
-      '<span class="comp-m">' + esc(x.motivo) + "</span></div>";
+      (x.melhor_eprofit ? '<span class="tag a">' + t("melhor_eprofit") + "</span>" : "") + "</span>" +
+      '<span class="comp-m">' + motivoCanal(x) + "</span></div>";
   });
   tabela += "</div>";
   var nota = (escolhido && melhor && melhor.canal !== escolhido.canal)
@@ -691,7 +872,7 @@ function desenharFluxo(){
 
   var msg = d.mensagem;
   h += passo("p5_t", msg ? t("p5_d_api", { canal:esc(d.channel ? (CANAL_INV_K["bot_" + d.channel] ? t(CANAL_INV_K["bot_" + d.channel]) : d.channel) : "—") }) : t("p5_sem_msg"),
-    (msg ? '<div class="balao escolhido"><div class="txt">' + esc(msg) + "</div></div>" : "") +
+    (msg ? '<div class="balao escolhido"><div class="txt">' + mensagemCobranca(d) + "</div></div>" : "") +
     (msg ? '<button type="button" class="btn p" style="margin-top:16px" id="irMsgCaso">' + t("ir_msg_caso") + "</button>" : ""));
 
   host.innerHTML = h;
@@ -720,7 +901,52 @@ function passo(tk, desc, extra){
    inteiro (simulado) e lê a entrada deste cliente na resposta. */
 var clienteMsg = null;
 var loteResultado = null;    // a última resposta de POST /simulate/painel/disparo-lote
+/* As decisões geradas UM A UM, por customer_id_externo. Guardar é o que
+   permite voltar num cliente já decidido sem pedir de novo — e pedir de novo
+   não daria a mesma coisa: o ciclo de retenção dele já está aberto, então a
+   segunda chamada o devolveria como `ciclo_aberto` em vez de mostrar a
+   decisão. */
+var decisoesUm = {};
 var CANAL_K = { whatsapp:"c_whats", popup:"c_popup", email:"c_email" };
+
+/* O motivo de cada canal vem da API em duas formas: `motivo` (frase em pt-BR) e
+   `motivo_codigo` (identificador de um conjunto fechado de quatro). Traduzimos
+   pelo CODIGO — identificador e o que um dicionario traduz. Sem codigo, mostra
+   a frase como chegou. */
+var MOTIVO_CANAL_K = {
+  /* involuntário (crai/agent/workflow.py) */
+  unico_com_integracao:  "mc_unico",
+  canal_humano:          "mc_humano",
+  melhor_sem_integracao: "mc_melhor_sem",
+  sem_integracao:        "mc_sem",
+  /* voluntário (crai/churn_voluntary/voluntary_agent.py) */
+  escolha_criticidade:              "vm_escolha_criticidade",
+  escolha_historico:                "vm_escolha_historico",
+  escolha_no_produto:               "vm_escolha_no_produto",
+  escolha_reserva:                  "vm_escolha_reserva",
+  descarte_sem_telefone:            "vm_descarte_sem_telefone",
+  descarte_criticidade_baixa:       "vm_descarte_criticidade_baixa",
+  descarte_preterido:               "vm_descarte_preterido",
+  descarte_fora_do_produto:         "vm_descarte_fora_do_produto",
+  descarte_no_site_mas_criticidade: "vm_descarte_no_site_mas_criticidade",
+  descarte_no_site_mas_historico:   "vm_descarte_no_site_mas_historico",
+  descarte_reserva_criticidade:     "vm_descarte_reserva_criticidade",
+  descarte_reserva_no_produto:      "vm_descarte_reserva_no_produto",
+  descarte_reserva_historico:       "vm_descarte_reserva_historico"
+};
+function motivoCanal(x){
+  var k = MOTIVO_CANAL_K[x.motivo_codigo];
+  return k ? t(k, paramsDoMotivo(x.motivo_params)) : esc(x.motivo || "");
+}
+
+/* Canais humanos nao aparecem na tela. A invariante de escalonamento zero e
+   garantida no backend (`CANAIS_HUMANOS` em crai/config.py, mais a restricao no
+   banco e os testes) e a API continua devolvendo a linha com o motivo do
+   descarte — o painel so nao a exibe, para nao dar a entender que falar com
+   atendente e uma opcao do produto. */
+function canaisVisiveis(lista){
+  return (lista || []).filter(function(x){ return CANAIS_HUMANOS.indexOf(x.canal) === -1; });
+}
 var CANAIS_HUMANOS = ["ligacao_cs"];   // espelho de crai/config.py: nunca é opção de envio
 
 function fonteMsg(){
@@ -789,11 +1015,15 @@ function taxaDosTratados(clientes){
 
 /* Um balão por candidata, com tudo o que a API disse sobre ela. */
 function balaoCandidata(x, i){
-  var origem = x.origem_texto === "gerado" ? t("origem_gerado") : t("origem_template");
-  var h = '<div class="balao' + (x.escolhida ? " escolhido" : "") + '" style="animation-delay:' + (i * 70) + 'ms">' +
-    '<div class="balao-cab"><span class="balao-tom">' + esc(x.oferta_label) + "</span>" +
+  var origem = origemCandidata(x);
+  var rotulo = ofertaLegivel(x.oferta, x.oferta_label);
+  var h = '<div class="balao clicavel' + (x.escolhida ? " escolhido" : "") + '"' +
+    ' role="button" tabindex="0" data-cand="' + i + '"' +
+    ' aria-label="' + esc(t("enviar_esta", { oferta:rotulo })) + '"' +
+    ' style="animation-delay:' + (i * 70) + 'ms">' +
+    '<div class="balao-cab"><span class="balao-tom">' + esc(rotulo) + "</span>" +
     (x.escolhida ? '<span class="tag o">' + IC.check + " " + t("escolhida_bandit") + "</span>" : "") + "</div>" +
-    '<div class="txt">' + esc(x.texto) + "</div>" +
+    '<div class="txt">' + textoCandidata(x) + "</div>" +
     '<div class="pe" style="flex-wrap:wrap;gap:8px 16px"><span>' + t("aceite_aprendido", { p:pctOuTraco(x.p_sucesso) }) + "</span>" +
     "<span>" + t("retorno_esperado", { v:moedaDec(x.eprofit_amostrado) }) + "</span>" +
     '<span class="tag n">' + esc(origem) + "</span></div>";
@@ -801,45 +1031,94 @@ function balaoCandidata(x, i){
     h += '<div class="sub" style="margin-top:10px;font-size:13.5px">' +
       t("posterior_linha", { p:pctOuTraco(x.p_sucesso), a:x.alpha.toLocaleString(loc()), b:x.beta.toLocaleString(loc()), peso:(x.alpha + x.beta).toLocaleString(loc()) }) + "</div>";
   }
-  h += '<div class="sub" style="margin-top:6px;font-size:13.5px">' + esc(x.motivo) + "</div></div>";
+  h += '<div class="sub" style="margin-top:6px;font-size:13.5px">' + motivoCandidata(x) + "</div>" +
+    '<div class="balao-acao">' + IC.check + " " + t("enviar_esta", { oferta:esc(rotulo) }) + "</div></div>";
   return h;
+}
+
+/* Liga o clique nas tres candidatas. A recomendacao do bandit continua marcada
+   com o selo; escolher outra e um OVERRIDE do operador, e a tela diz isso em
+   vez de fingir que o sistema decidiu assim. Em producao o desfecho volta por
+   `/webhooks/retention-outcome` e move a posterior daquela oferta. */
+function ligarEscolhaMsg(host, d){
+  var cands = d.candidatas || [];
+  if(!cands.length) return;
+  var caixa = host.querySelector(".escolha-envio");
+  var balaos = [].slice.call(host.querySelectorAll(".balao.clicavel"));
+
+  function escolher(i){
+    var x = cands[i];
+    if(!x || host.dataset.enviando === "1") return;
+    host.dataset.enviando = "1";
+    balaos.forEach(function(b, j){
+      b.classList.toggle("selecionado", j === i);
+      b.setAttribute("aria-pressed", String(j === i));
+    });
+    caixa.innerHTML = '<div class="resultado n"><div class="processando">' +
+      '<div class="spin"></div><span>' + t("enviando_msg", { oferta:esc(ofertaLegivel(x.oferta, x.oferta_label)) }) + "</span></div></div>";
+
+    setTimeout(function(){
+      host.dataset.enviando = "0";
+      var recomendada = cands.find(function(c){ return c.escolhida; });
+      var igual = !recomendada || recomendada.oferta === x.oferta;
+      caixa.innerHTML = '<div class="resultado o"><div class="res-in">' +
+        '<span class="res-ic" style="background:var(--ok)">' + IC.check + "</span>" +
+        '<span class="res-corpo"><span class="t">' + t("msg_enviada_ok_t", { oferta:esc(ofertaLegivel(x.oferta, x.oferta_label)) }) + "</span>" +
+        '<span class="d">' +
+        (igual ? t("msg_enviada_conforme")
+               : t("msg_enviada_override", { oferta:esc(ofertaLegivel(recomendada.oferta, recomendada.oferta_label)) })) +
+        " " + t("msg_enviada_nota") + "</span></span></div></div>";
+    }, 2000);
+  }
+
+  balaos.forEach(function(b, i){
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", function(){ escolher(i); });
+    b.addEventListener("keydown", function(e){
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); escolher(i); }
+    });
+  });
 }
 
 /* Um cartão por canal considerado. Escolhido só se a API disse e o canal
    não é humano; canal humano aparece sempre como descartado, com o motivo. */
 function cartaoCanal(x){
-  var humano = CANAIS_HUMANOS.indexOf(x.canal) !== -1;
-  var vence = !!x.escolhido && !humano;
+  var vence = !!x.escolhido;
   var nome = CANAL_K[x.canal] ? t(CANAL_K[x.canal]) : x.canal;
   return '<div class="canal' + (vence ? " vence" : "") + '">' +
     (vence ? '<span class="tag o">' + IC.check + " " + t("escolhido") + "</span>" : '<span class="tag n">' + t("descartado") + "</span>") +
-    '<div class="n">' + esc(nome) + '</div><div class="d">' + esc(x.motivo) + "</div></div>";
+    '<div class="n">' + esc(nome) + '</div><div class="d">' + motivoCanal(x) + "</div></div>";
 }
 
-/* A decisão completa de um cliente tratado, como veio do lote. */
-function painelDecisao(d, aviso){
+/* A decisão completa de um cliente tratado, como veio do lote.
+   O segundo parâmetro existia para repassar `aviso` da API — uma frase fixa em
+   pt-BR. A tela tem a mesma frase nos dois idiomas (`envio_simulado_d`), então
+   o parâmetro saiu: quem chama não precisa mais carregar o aviso. */
+function painelDecisao(d){
   var n = NIVEL[d.criticality] || NIVEL.alto;
   var h = '<div class="painel pad" style="margin-bottom:18px">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px">' +
     "<h2>" + esc(d.customer_id_externo) + '</h2><span class="tag ' + n.cls + '">' + n.ic + " " + t(n.k) + "</span></div>" +
-    '<p class="sub" style="margin-bottom:22px">' + t("decisao_resumo", { oferta:esc(d.offer_label), risco:pctOuTraco(d.risk_score), mrr:moedaDec(d.mrr) }) + "</p>" +
-    "<h3>" + t("tres_formas") + '</h3><div style="display:flex;flex-direction:column;gap:12px">' +
-    (d.candidatas || []).map(balaoCandidata).join("") + "</div></div>" +
+    '<p class="sub" style="margin-bottom:22px">' + t("decisao_resumo", { oferta:esc(ofertaLegivel(d.offer_type, d.offer_label)), risco:pctOuTraco(d.risk_score), mrr:moedaDec(d.mrr) }) + "</p>" +
+    "<h3>" + t("tres_formas") + '</h3><p class="sub" style="margin:-6px 0 14px">' + t("escolher_msg") + "</p>" +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+    (d.candidatas || []).map(balaoCandidata).join("") + "</div>" +
+    '<div class="escolha-envio" style="margin-top:18px"></div></div>' +
     '<div class="painel pad"><h2>' + t("por_onde") + '</h2><p class="sub" style="margin-bottom:20px">' + t("por_onde_s") + "</p>" +
-    '<div class="canais">' + (d.canais_considerados || []).map(cartaoCanal).join("") + "</div>";
-  if(d.envio){
-    h += '<div class="resultado ' + (d.envio.simulado ? "n" : "o") + '" style="margin-top:22px"><div class="res-in">' +
-      '<span class="res-ic" style="background:' + (d.envio.simulado ? "var(--neutro)" : "var(--ok)") + '">' + IC.check + "</span>" +
-      '<span class="res-corpo"><span class="t">' + (d.envio.simulado ? t("envio_simulado_t") : t("msg_enviada_t")) + "</span>" +
-      '<span class="d">' + esc(aviso || "") + (d.envio.registrado ? " " + t("envio_registrado", { id:d.envio.ciclo_id == null ? "—" : d.envio.ciclo_id }) : " " + t("envio_nao_registrado")) + "</span></span></div></div>";
-  }
+    '<div class="canais">' + canaisVisiveis(d.canais_considerados).map(cartaoCanal).join("") + "</div>";
+  /* Aqui havia um cartao de desfecho ("Envio simulado", depois "Enviado com
+     sucesso"). Saiu inteiro: ele aparecia junto com a DECISAO, antes de o
+     operador escolher qual das tres mensagens enviar, entao anunciava um envio
+     que ainda nao tinha acontecido. O desfecho de verdade e a confirmacao que
+     `ligarEscolhaMsg` mostra depois do clique. `d.envio` continua vindo da API
+     e o ciclo continua sendo registrado; so nao e exibido aqui. */
   return h + "</div>";
 }
 
 /* Um cliente pulado pelo lote: motivo e a frase da API. */
 function painelPulado(p){
   return '<div class="painel pad"><div class="tag n" style="margin-bottom:12px">' + IC.alerta + " " + esc(t("pulado_" + p.motivo) || p.motivo) + "</div>" +
-    "<h2>" + esc(p.customer_id_externo) + '</h2><p class="sub" style="margin-top:8px">' + esc(p.detalhe) + "</p></div>";
+    "<h2>" + esc(p.customer_id_externo) + '</h2><p class="sub" style="margin-top:8px">' + detalhePulado(p) + "</p></div>";
 }
 
 function painelErroMsg(err){
@@ -859,10 +1138,27 @@ function mostrarMensagem(c){
   var host = document.getElementById("msgDetalhe");
   var n = NIVEL[c.criticality] || NIVEL.alto;
 
+  /* Decisão gerada para ESTE cliente tem precedência sobre a do disparo geral:
+     é a mais recente e é a que a nota de rodapé descreve. */
+  var um = decisoesUm[c.customer_id_externo];
+  if(um && !um.erro){
+    if(um.tratado){
+      host.innerHTML = notaUm(c) + painelDecisao(um.tratado);
+      ligarEscolhaMsg(host, um.tratado);
+      return;
+    }
+    if(um.pulado){ host.innerHTML = painelPulado(um.pulado); return; }
+  }
+
   if(loteResultado && !loteResultado.erro){
     var r = loteResultado;
     var tratado = r.clientes.find(function(x){ return x.customer_id_externo === c.customer_id_externo; });
-    if(tratado){ host.innerHTML = painelDecisao(tratado, r.simulado ? r.aviso : ""); return; }
+    if(tratado){
+      host.innerHTML = '<div class="fonte-dado" style="margin-bottom:14px"><span>' + IC.alerta + " " +
+        esc(t("um_fora_do_lote")) + "</span></div>" + painelDecisao(tratado);
+      ligarEscolhaMsg(host, tratado);
+      return;
+    }
     var pulado = r.pulados.find(function(x){ return x.customer_id_externo === c.customer_id_externo; });
     if(pulado){ host.innerHTML = painelPulado(pulado); return; }
   }
@@ -870,20 +1166,32 @@ function mostrarMensagem(c){
   var cabecalho = '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px">' +
     "<h2>" + esc(c.customer_id_externo) + '</h2><span class="tag ' + n.cls + '">' + n.ic + " " + t(n.k) + "</span></div>" +
     '<p class="sub" style="margin-bottom:22px">' + esc(c.explicacao || "") + "</p>";
-  if(loteResultado && loteResultado.erro){
-    host.innerHTML = '<div class="painel pad" style="margin-bottom:18px">' + cabecalho + "</div>" + painelErroMsg(loteResultado.erro);
+  var falha = (um && um.erro) || (loteResultado && loteResultado.erro);
+  if(falha){
+    host.innerHTML = '<div class="painel pad" style="margin-bottom:18px">' + cabecalho + "</div>" + painelErroMsg(falha);
     return;
   }
   host.innerHTML = '<div class="painel pad">' + cabecalho +
-    '<p class="sub" style="margin-bottom:18px">' + (loteResultado ? t("um_fora_do_lote") : t("um_explica")) + "</p>" +
+    '<p class="sub" style="margin-bottom:18px">' + t("um_explica") + "</p>" +
     '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">' +
     '<button type="button" class="btn p g" id="btnDecidirUm">' + t("decidir_um") + "</button>" +
-    '<span class="sub">' + t("envio_simulado") + "</span></div></div>";
+    '<span class="sub">' + t("envio_simulado") + '</span></div><div id="gerandoUm"></div></div>';
 
   document.getElementById("btnDecidirUm").addEventListener("click", function(){
-    var b = this; b.disabled = true; b.textContent = t("lote_enviando");
-    executarLote(function(){ if(clienteMsg === c) mostrarMensagem(c); });
+    var b = this;
+    b.disabled = true; b.textContent = t("lote_enviando");
+    var caixa = document.getElementById("gerandoUm");
+    if(caixa) caixa.innerHTML = '<div class="resultado n" style="margin-top:18px"><div class="processando">' +
+      '<div class="spin"></div><span>' + t("um_gerando", { cliente:esc(c.customer_id_externo) }) + "</span></div></div>";
+    gerarDecisaoUm(c, function(){ if(clienteMsg === c) mostrarMensagem(c); });
   });
+}
+
+/* A nota que separa "decidi para este cliente" de "decidi para a base toda".
+   Sem ela a tela mostra a mesma decisão nos dois casos e não diz qual foi. */
+function notaUm(c){
+  return '<div class="fonte-dado" style="margin-bottom:14px"><span>' + IC.check + " " +
+    esc(t("um_pronto_nota", { cliente:c.customer_id_externo })) + "</span></div>";
 }
 
 /* O caso de cobranca recusada que a aba Mensagens esta exibindo, quando o
@@ -924,16 +1232,15 @@ function mostrarCaso(c){
   var h = '<div class="painel pad">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px">' +
     "<h2>" + esc(c.entrada.cliente || t("caso_n", { n:c.n })) + "</h2>" +
-    '<span class="tag n">' + esc(d.failure_cause_legivel || d.failure_cause || "") + "</span></div>" +
+    '<span class="tag n">' + causaLegivel(d) + "</span></div>" +
     '<p class="sub" style="margin-bottom:20px">' + t("caso_msg_d", { valor:moedaDec(c.entrada.valor) }) + "</p>";
 
   h += d.mensagem
-    ? '<div class="balao escolhido"><div class="txt">' + esc(d.mensagem) + "</div></div>" +
+    ? '<div class="balao escolhido"><div class="txt">' + mensagemCobranca(d) + "</div></div>" +
       '<div class="sub" style="margin-top:12px">' + t("caso_msg_canal", { canal:esc(canalK) }) + "</div>"
     : '<p class="sub">' + t("caso_msg_sem") + "</p>";
 
-  h += '<div class="fonte-dado" style="margin-top:18px"><span>' + IC.alerta + " " + t("caso_msg_nota") + "</span></div>" +
-    '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:20px">' +
+  h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px">' +
     '<button type="button" class="btn p" id="voltarRecup">' + t("voltar_recup") + "</button>" +
     '<button type="button" class="btn" id="sairCaso">' + t("sair_caso") + "</button></div></div>";
 
@@ -986,16 +1293,64 @@ function executarLote(aoTerminar){
         estado.contatados += r.clientes.length;
         var taxa = taxaDosTratados(r.clientes);
         if(taxa != null) estado.taxaAceite = taxa;
-        atualizarPontoVisao();
       }
       aoTerminar();
     })
     .catch(function(err){ loteResultado = { erro:err }; aoTerminar(); });
 }
+/* O disparo do lote também tem duração mínima, pelo mesmo motivo da análise: a
+   API decide oferta, mensagem e canal da base inteira em bem menos de um
+   segundo, e o botão voltava ao normal antes de alguém ver que algo aconteceu.
+   Erro não espera — quem errou precisa saber na hora. */
+var LOTE_MS = 3000;
+var corridaLote = 0;
+/* Gera a decisão de UM cliente: `somente` manda a API tratar só ele, com a
+   régua e o risco da base inteira. A resposta NÃO entra em `loteResultado` —
+   aquilo é o relatório do disparo para todos, e sobrescrevê-lo com um cliente
+   faria a aba "Enviar para todos" mostrar um lote de uma linha só. */
+var UM_MS = 3000;
+var corridaUm = 0;
+function gerarDecisaoUm(c, aoTerminar){
+  var minha = ++corridaUm, inicio = Date.now(), id = c.customer_id_externo;
+  API.disparoLote(null, null, [id], true)
+    .then(function(r){
+      if(!r || !r.resumo || !Array.isArray(r.clientes) || !Array.isArray(r.pulados))
+        throw API.erro("resposta_invalida", { rota:"/simulate/painel/disparo-lote" });
+      var tratado = r.clientes.find(function(x){ return x.customer_id_externo === id; });
+      var pulado = r.pulados.find(function(x){ return x.customer_id_externo === id; });
+      if(tratado){
+        estado.contatados += 1;
+        var taxa = taxaDosTratados([tratado]);
+        if(taxa != null) estado.taxaAceite = taxa;
+      }
+      decisoesUm[id] = { tratado:tratado || null, pulado:pulado || null, erro:null };
+    })
+    .catch(function(err){ decisoesUm[id] = { tratado:null, pulado:null, erro:err }; })
+    .then(function(){
+      var falhou = decisoesUm[id] && decisoesUm[id].erro;
+      var espera = (reduz || falhou) ? 0 : Math.max(0, inicio + UM_MS - Date.now());
+      setTimeout(function(){
+        if(minha !== corridaUm) return;
+        aoTerminar();
+      }, espera);
+    });
+}
+
 function rodarLote(){
   var b = document.getElementById("btnLote");
+  var fila = document.getElementById("filaLote");
+  var minha = ++corridaLote, inicio = Date.now();
   if(b){ b.disabled = true; b.textContent = t("lote_enviando"); }
-  executarLote(function(){ desenharLote(loteResultado); });
+  if(fila) fila.innerHTML = '<div class="resultado n" style="margin-top:22px"><div class="processando">' +
+    '<div class="spin"></div><span>' + t("lote_processando") + "</span></div></div>";
+  executarLote(function(){
+    var falhou = !loteResultado || loteResultado.erro;
+    var espera = (reduz || falhou) ? 0 : Math.max(0, inicio + LOTE_MS - Date.now());
+    setTimeout(function(){
+      if(minha !== corridaLote) return;
+      desenharLote(loteResultado);
+    }, espera);
+  });
 }
 
 function desenharLote(r){
@@ -1010,12 +1365,21 @@ function desenharLote(r){
   if(b){ b.disabled = false; b.textContent = t("lote_de_novo"); }
   var res = r.resumo;
   var h = "";
-  if(r.simulado) h += '<div class="resultado n" style="margin-top:22px"><div class="res-in"><span class="res-ic" style="background:var(--neutro)">' + IC.alerta + "</span>" +
-    '<span class="res-corpo"><span class="t">' + t("envio_simulado_t") + '</span><span class="d">' + esc(r.aviso || "") + "</span></span></div></div>";
+  /* O cartão de desfecho diz o que de fato aconteceu. "Enviadas com sucesso"
+     só aparece quando saiu mensagem: num segundo disparo é normal que todos os
+     clientes em risco já tenham um ciclo aberto e ninguém seja abordado, e
+     anunciar sucesso ali seria a tela afirmando um envio que não houve. */
+  var enviou = res.processados > 0;
+  h += '<div class="resultado ' + (enviou ? "o" : "n") + '" style="margin-top:22px"><div class="res-in">' +
+    '<span class="res-ic" style="background:' + (enviou ? "var(--ok)" : "var(--neutro)") + '">' +
+    (enviou ? IC.check : IC.alerta) + "</span>" +
+    '<span class="res-corpo"><span class="t">' + (enviou ? t("lote_ok_t") : t("lote_nada_t")) + "</span>" +
+    '<span class="d">' + (enviou ? t("lote_ok_d", { n:res.processados }) : t("lote_nada_d")) +
+    (r.simulado ? " " + t("envio_simulado_d") : "") + "</span></span></div></div>";
   h += '<div class="destaques" style="margin:22px 0 18px">' +
     '<div class="destaque" style="--cor:var(--ok)"><div class="rot">' + t("lote_tratados") + '</div><div class="big num">' + res.processados + '</div><div class="pe">' + t("lote_tratados_pe", { mrr:moeda(res.mrr_envolvido || 0) }) + "</div></div>" +
     '<div class="destaque" style="--cor:var(--neutro)"><div class="rot">' + t("lote_pulados") + '</div><div class="big num">' + res.pulados + '</div><div class="pe">' + t("lote_pulados_pe", { n:res.recebidos }) + "</div></div>" +
-    '<div class="destaque" style="--cor:var(--acento-viva)"><div class="rot">' + t("lote_por_canal") + '</div><div class="big num" style="font-size:20px">' + esc(Object.keys(res.por_canal || {}).map(function(k){ return (CANAL_K[k] ? t(CANAL_K[k]) : k) + " " + res.por_canal[k]; }).join(" · ") || "—") + '</div><div class="pe">' + esc(Object.keys(res.por_oferta || {}).map(function(k){ return k + " " + res.por_oferta[k]; }).join(" · ")) + "</div></div></div>";
+    '<div class="destaque" style="--cor:var(--acento-viva)"><div class="rot">' + t("lote_por_canal") + '</div><div class="big num" style="font-size:20px">' + esc(Object.keys(res.por_canal || {}).map(function(k){ return CANAL_K[k] ? t(CANAL_K[k]) : k; }).join(" · ") || "—") + '</div><div class="pe">' + esc(Object.keys(res.por_oferta || {}).map(function(k){ return ofertaCurta(k) + " " + res.por_oferta[k]; }).join(" · ")) + "</div></div></div>";
 
   if(r.clientes.length){
     h += "<h3>" + t("lote_lista_t", { n:r.clientes.length }) + '</h3><div class="fila" id="filaIn">';
@@ -1024,7 +1388,7 @@ function desenharLote(r){
       var escolhida = (c.candidatas || []).find(function(x){ return x.escolhida; });
       h += '<div class="fila-l" style="grid-template-columns:26px 1fr auto auto"><span class="ok-mini">' + IC.check + "</span>" +
         '<span><span class="nome">' + esc(c.customer_id_externo) + '</span><span class="oq" style="display:block">' +
-        esc(c.offer_label) + " · " + esc(CANAL_K[c.channel] ? t(CANAL_K[c.channel]) : c.channel) + (escolhidoCanal ? " — " + esc(escolhidoCanal.motivo) : "") +
+        esc(ofertaLegivel(c.offer_type, c.offer_label)) + " · " + esc(CANAL_K[c.channel] ? t(CANAL_K[c.channel]) : c.channel) + (escolhidoCanal ? " — " + motivoCanal(escolhidoCanal) : "") +
         (escolhida ? " · " + t("aceite_aprendido", { p:pctOuTraco(escolhida.p_sucesso) }) : "") + "</span></span>" +
         '<span class="tag n">' + t("por_mes", { v:moeda(c.mrr || 0) }) + "</span>" +
         '<button type="button" class="btn" data-ver="' + i + '">' + t("ver_decisao") + "</button></div>";
@@ -1040,7 +1404,7 @@ function desenharLote(r){
     motivos.forEach(function(m){
       var exemplo = r.pulados.find(function(p){ return p.motivo === m; });
       h += '<div class="fila-l" style="grid-template-columns:1fr auto;margin-top:8px"><span><span class="nome">' + esc(t("pulado_" + m) || m) +
-        '</span><span class="oq" style="display:block">' + (exemplo ? esc(exemplo.detalhe) : "") + "</span></span>" +
+        '</span><span class="oq" style="display:block">' + detalhePulado(exemplo) + "</span></span>" +
         '<span class="tag n">' + res.por_motivo[m] + "</span></div>";
     });
   }
@@ -1049,161 +1413,17 @@ function desenharLote(r){
   [].slice.call(fila.querySelectorAll("[data-ver]")).forEach(function(btn){
     btn.addEventListener("click", function(){
       var c = r.clientes[+btn.dataset.ver];
-      document.getElementById("detalheLote").innerHTML = painelDecisao(c, r.simulado ? r.aviso : "");
+      var hd = document.getElementById("detalheLote");
+      hd.innerHTML = painelDecisao(c);
+      ligarEscolhaMsg(hd, c);
       document.getElementById("detalheLote").scrollIntoView({ behavior: reduz ? "auto" : "smooth", block:"start" });
     });
   });
 }
 
 
-/* ═══════════ ABA: VISÃO GERAL ═══════════ */
-var dataAlvo = null;
-function mesesAte(d){
-  var hoje = new Date();
-  var m = (d.getFullYear() - hoje.getFullYear()) * 12 + (d.getMonth() - hoje.getMonth());
-  return Math.max(1, m);
-}
-function atualizarPontoVisao(){
-  var p = document.getElementById("pontoVisao");
-  p.hidden = !estado.analise;
-}
-function desenharVisao(){
-  var host = document.getElementById("visaoCorpo");
-  if(!estado.analise){
-    host.innerHTML = '<div class="painel pad"><div class="vazio"><div style="color:var(--ink-3)">' + IC.vazio + "</div>" +
-      '<div class="t">' + t("visao_vazio_t") + '</div><p class="sub" style="margin-top:6px;max-width:50ch;margin-inline:auto">' +
-      t("visao_vazio_d") + '</p><button type="button" class="btn p" style="margin-top:18px" id="irRisco3">' + t("ir_risco") + "</button></div></div>";
-    var b = document.getElementById("irRisco3");
-    if(b) b.addEventListener("click", function(){ abrir("risco"); });
-    return;
-  }
-
-  var emRisco = estado.analise.clientes.filter(function(c){ return c.criticality === "critico" || c.criticality === "alto"; });
-  var mrrRisco = emRisco.reduce(function(s,c){ return s + (c.mrr || 0); }, 0);
-  var taxa = estado.taxaAceite;            // vem da API (aba Mensagens); null até o primeiro envio
-  var temTaxa = typeof taxa === "number";
-  var mrrSalvo = temTaxa ? mrrRisco * taxa : 0;
-
-  if(!dataAlvo){ dataAlvo = new Date(); dataAlvo.setMonth(dataAlvo.getMonth() + 6); }
-  var meses = mesesAte(dataAlvo);
-  var acumulado = mrrSalvo * meses + estado.valorRecuperado;
-
-  var iso = dataAlvo.toISOString().slice(0,10);
-  var min = new Date(); min.setMonth(min.getMonth() + 1);
-
-  host.innerHTML =
-    '<div class="painel pad" style="margin-bottom:18px">' +
-      '<div class="proj-cab">' +
-        '<div class="campo"><label for="inpData">' + t("proj_data") + '</label>' +
-        '<input type="date" id="inpData" value="' + iso + '" min="' + min.toISOString().slice(0,10) + '"></div>' +
-        '<div class="proj-atalhos" id="atalhos"></div>' +
-      "</div>" +
-      '<div class="destaques" style="margin-bottom:0">' +
-        '<div class="destaque" style="--cor:var(--atencao)"><div class="rot">' + t("vg_mrr_risco") + '</div>' +
-        '<div class="big num">' + moeda(mrrRisco) + '</div><div class="pe">' + t("vg_mrr_risco_pe", { n:emRisco.length }) + "</div></div>" +
-        '<div class="destaque" style="--cor:var(--ok)"><div class="rot">' + t("vg_mrr_salvo") + '</div>' +
-        '<div class="big num">' + (temTaxa ? moeda(mrrSalvo) : "—") + '</div><div class="pe">' + (temTaxa ? t("vg_mrr_salvo_pe", { pct:Math.round(taxa*100) }) : t("vg_sem_taxa")) + "</div></div>" +
-        '<div class="destaque" style="--cor:var(--acento-viva)"><div class="rot">' + t("vg_ganho", { data:dataLonga(dataAlvo) }) + '</div>' +
-        '<div class="big num">' + (temTaxa ? moeda(acumulado) : "—") + '</div><div class="pe">' + (temTaxa ? t("vg_ganho_pe", { meses:meses }) : t("vg_sem_taxa")) + "</div></div>" +
-      "</div>" +
-    "</div>" +
-    '<div class="painel pad" style="margin-bottom:18px">' +
-      "<h2>" + t("g_proj_t") + '</h2><p class="sub" style="margin-bottom:22px">' + t("g_proj_s") + "</p>" +
-      '<div class="g-wrap" id="gProj"></div>' +
-      '<div class="fonte-dado"><span><b>' + t("formula_t") + ".</b> " + t("formula_d") + "</span></div>" +
-    "</div>" +
-    '<div class="painel pad"><h2>' + t("origem_t") + '</h2><p class="sub" style="margin-bottom:18px">' + t("origem_s") + "</p>" +
-      '<div class="origem">' +
-        og("o_base", estado.rotuloBase + " · " + estado.analise.total.toLocaleString(loc())) +
-        og("o_risco", String(emRisco.length)) +
-        og("o_mrr", moeda(mrrRisco)) +
-        og("o_taxa", temTaxa ? Math.round(taxa * 100) + "%" : t("nenhuma")) +
-        og("o_cobr", estado.cobrancasRecusadas ? estado.cobrancasRecusadas + " · " + moeda(estado.valorRecusado) : t("nenhuma")) +
-        og("o_recup", estado.faturasRecuperadas ? estado.faturasRecuperadas + " · " + moeda(estado.valorRecuperado) : t("nenhuma")) +
-        og("o_contatados", estado.contatados ? String(estado.contatados) : t("nenhum")) +
-      "</div></div>";
-
-  var inp = document.getElementById("inpData");
-  inp.addEventListener("change", function(){
-    var d = new Date(inp.value + "T12:00:00");
-    if(!isNaN(d.getTime())){ dataAlvo = d; desenharVisao(); }
-  });
-  var at = document.getElementById("atalhos");
-  [[3,"at_3m"],[6,"at_6m"],[12,"at_12m"]].forEach(function(a){
-    var b = el("button","atalho", t(a[1]));
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(meses === a[0]));
-    b.addEventListener("click", function(){
-      var d = new Date(); d.setMonth(d.getMonth() + a[0]); dataAlvo = d; desenharVisao();
-    });
-    at.appendChild(b);
-  });
-
-  if(temTaxa) desenharProjecao(mrrSalvo, meses, estado.valorRecuperado);
-  else document.getElementById("gProj").innerHTML = '<div class="vazio" style="padding:36px 16px"><div class="t">' + t("vg_sem_taxa_t") + '</div><p class="sub" style="margin-top:6px;max-width:52ch;margin-inline:auto">' + t("vg_sem_taxa_d") + "</p></div>";
-}
-function og(k, valor){
-  return '<div class="origem-l"><span>' + t(k) + '<span class="de">' + t(k + "_de") + "</span></span>" +
-    '<span class="v">' + valor + "</span></div>";
-}
-
-function desenharProjecao(mrrSalvo, meses, base){
-  var host = document.getElementById("gProj");
-  if(!host) return;
-  var n = Math.min(meses, 24);
-  var vals = [], rot = [], hoje = new Date();
-  for(var i = 1; i <= n; i++){
-    vals.push(base + mrrSalvo * i);
-    var d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
-    rot.push(dataCurta(d));
-  }
-  var W = 640, H = 240, ml = 10, mr = 10, mt = 18, mb = 34;
-  var iw = W - ml - mr, ih = H - mt - mb;
-  var max = vals[vals.length - 1] * 1.1 || 1;
-  var bw = iw / n;
-  var ac = corDe("--acento-viva"), ok = corDe("--ok"), ink3 = corDe("--ink-3"), ln = corDe("--line");
-
-  var svg = '<svg class="grafico" viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="height:240px" role="img" aria-label="' + t("g_proj_alt") + '">';
-  [0.5, 1].forEach(function(f){
-    var y = mt + ih - f * ih * .88;
-    svg += '<line x1="' + ml + '" y1="' + y.toFixed(1) + '" x2="' + (W - mr) + '" y2="' + y.toFixed(1) + '" stroke="' + ln + '" stroke-width="1"/>';
-  });
-  vals.forEach(function(v, i){
-    var h = (v / max) * ih;
-    var x = ml + i * bw + bw * .16;
-    var w = bw * .68;
-    var y = mt + ih - h;
-    var ult = i === n - 1;
-    svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + Math.max(2, h).toFixed(1) +
-      '" rx="4" fill="' + (ult ? ok : ac) + '" opacity="' + (ult ? 1 : .55 + .45 * (i / n)) + '"></rect>';
-  });
-  var passo = n > 12 ? 3 : (n > 6 ? 2 : 1);
-  rot.forEach(function(r, i){
-    if(i % passo !== 0 && i !== n - 1) return;
-    svg += '<text x="' + (ml + i * bw + bw / 2).toFixed(1) + '" y="' + (H - 12) + '" text-anchor="middle" font-size="11" font-family="Inter,sans-serif" fill="' + ink3 + '">' + r + "</text>";
-  });
-  svg += "</svg>" + '<div class="g-dica" id="dicaP"></div>';
-  host.innerHTML = svg;
-
-  var dica = document.getElementById("dicaP");
-  var s = host.querySelector("svg");
-  s.addEventListener("mousemove", function(ev){
-    var r = s.getBoundingClientRect();
-    var i = Math.floor(((ev.clientX - r.left) / r.width) * n);
-    i = Math.max(0, Math.min(n - 1, i));
-    dica.innerHTML = "<b>" + moeda(vals[i]) + "</b><span>" + rot[i] + " · " + (i + 1) + " " + (i === 0 ? t("mes") : t("meses")) + "</span>";
-    dica.style.left = Math.min(r.width - 140, Math.max(0, ((ml + i * bw + bw / 2) / W) * r.width - 60)) + "px";
-    dica.style.top = Math.max(0, ((mt + ih - (vals[i] / max) * ih) / H) * r.height - 62) + "px";
-    dica.style.opacity = "1";
-  });
-  s.addEventListener("mouseleave", function(){ dica.style.opacity = "0"; });
-}
 
 /* ═══════════ INÍCIO ═══════════ */
 aplicarIdioma();
 mostrarSemBase();
-atualizarPontoVisao();
-window.addEventListener("resize", function(){
-  if(document.querySelector('[data-tela="visao"]').classList.contains("on")) desenharVisao();
-});
 })();

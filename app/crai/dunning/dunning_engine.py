@@ -54,6 +54,13 @@ class DunningState(TypedDict):
     sent: bool
     portal_link: str
     payment_method: str
+    # De onde veio `message`: "gerado" (Claude API) ou "template" (fallback).
+    # `codigo_template` e a chave de FALLBACK_TEMPLATES usada, ou "" quando o
+    # texto foi gerado. Os dois existem para que quem EXIBE a mensagem possa
+    # escreve-la no idioma do leitor: um template e um conjunto fechado, entao
+    # e traduzivel; texto gerado nao e, e continua exibido como chegou.
+    origem: str
+    codigo_template: str
 
 
 class DunningEngine:
@@ -119,10 +126,13 @@ Retorne APENAS a mensagem."""
             message = response.content[0].text.strip()
         except Exception as e:
             print(f"[DUNNING] Claude API indisponível ({e}) — usando fallback")
-            template = FALLBACK_TEMPLATES.get(state["failure_cause"], FALLBACK_TEMPLATES["processing_error"])
-            message = template.format(amount=state["amount"], link=state["portal_link"],
-                                      metodo=metodo_label)
-        return {**state, "message": message}
+            codigo = (state["failure_cause"] if state["failure_cause"] in FALLBACK_TEMPLATES
+                      else "processing_error")
+            message = FALLBACK_TEMPLATES[codigo].format(
+                amount=state["amount"], link=state["portal_link"], metodo=metodo_label)
+            return {**state, "message": message, "origem": "template",
+                    "codigo_template": codigo}
+        return {**state, "message": message, "origem": "gerado", "codigo_template": ""}
 
     async def _send_message(self, state):
         print(f"[DUNNING] {state['channel'].upper()} → {state['customer_id']}: {state['message'][:90]}")
@@ -132,8 +142,10 @@ Retorne APENAS a mensagem."""
         initial = DunningState(
             customer_id=customer_id, failure_cause=failure_cause, recovery_score=recovery_score,
             amount=amount, channel="whatsapp", tone="", message="", sent=False,
-            portal_link="", payment_method="",
+            portal_link="", payment_method="", origem="", codigo_template="",
         )
         result = await self.graph.ainvoke(initial)
         return {"sent": result["sent"], "channel": result["channel"],
-                "payment_method": result["payment_method"], "message": result["message"]}
+                "payment_method": result["payment_method"], "message": result["message"],
+                "origem": result["origem"], "codigo_template": result["codigo_template"],
+                "portal_link": result["portal_link"]}

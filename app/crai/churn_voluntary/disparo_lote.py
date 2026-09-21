@@ -47,6 +47,12 @@ CRITERIO_INCLUSAO = ("critico", "alto")
 # requisição é recusada com 413 — quem tem mais, pagina com `limite`.
 LIMITE_LOTE = 5000
 
+# Quantos clientes podem ter o texto GERADO pela Claude API numa chamada. Cada
+# um custa (ofertas x idiomas) chamadas de LLM -- hoje 3 x 2 = 6 --, entao isto
+# e um caminho para a tela pedir a mensagem de um cliente escolhido a dedo, nao
+# para o lote. O lote continua usando modelo, que e o que o mantem em segundos.
+LIMITE_GERACAO = 3
+
 EVENTO_LOTE = "Disparo em lote"
 
 ORIGEM_CORPO = "corpo"
@@ -157,8 +163,12 @@ def motivo_para_pular(linha: dict, com_ciclo_aberto: set) -> tuple[str, str] | N
     return None
 
 
-async def tratar(linha: dict, tenant_id: str) -> tuple[dict, dict]:
+async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tuple[dict, dict]:
     """Candidatas, escolha e canal para UM cliente que precisa.
+
+    `gerar_texto` troca o modelo pronto por texto escrito pela Claude API para
+    ESTE cliente, uma redação por oferta e por idioma (ver `gerar_textos`).
+    Falha de API cai no modelo, e a candidata diz de onde o texto veio.
 
     Devolve (linha do relatório, estado a registrar). O registro no
     `retention_log` é feito pelo lote inteiro de uma vez, em `disparar` —
@@ -192,8 +202,17 @@ async def tratar(linha: dict, tenant_id: str) -> tuple[dict, dict]:
     estado = await va.choose_channel(estado)
 
     label = va.OFFER_LABELS.get(oferta, "uma oferta especial")
-    texto = va._fallback_de_retencao(criticidade, label)
-    candidatas = va.montar_candidatas(estado, texto, origem_texto_vencedora="template")
+    if gerar_texto:
+        textos = await va.gerar_textos(
+            estado, [l["offer"] for l in estado["ofertas_consideradas"]], criticidade)
+        em_pt = (textos.get(oferta) or {}).get("pt") or {}
+        texto = em_pt.get("texto") or va._fallback_de_retencao(criticidade, label)
+        candidatas = va.montar_candidatas(
+            estado, texto, origem_texto_vencedora=em_pt.get("origem") or "template",
+            textos=textos)
+    else:
+        texto = va._fallback_de_retencao(criticidade, label)
+        candidatas = va.montar_candidatas(estado, texto, origem_texto_vencedora="template")
     estado = {**estado, "message": texto, "candidatas": candidatas, "offer_sent": True}
 
     return {
@@ -214,14 +233,38 @@ async def tratar(linha: dict, tenant_id: str) -> tuple[dict, dict]:
 
 # ── O lote ───────────────────────────────────────────────────────────────
 
-async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | None = None) -> dict:
+async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | None = None,
+                   somente: list[str] | None = None, gerar_texto: bool = False) -> dict:
     """Processa o conjunto e devolve o relatório por cliente e o resumo.
 
     `limite` corta a lista DEPOIS da ordenação por risco: "trate os 50
     piores". Os cortados não são "pulados" — não foram avaliados — e entram
     só na contagem `nao_avaliados`.
+
+    `somente` trata UM subconjunto sem mudar a régua. A diferença para mandar
+    esses clientes em `clientes` é o que decide o risco de cada um: com a
+    lista no corpo, `preparar` calcula a régua em cima da própria lista, e um
+    cliente sozinho não sustenta percentis — a mesma linha que é "critico" na
+    base inteira sai "padrao" avaliada isolada, e aí é descartada por estar
+    fora do critério de inclusão. Com `somente`, a régua, o risco e a
+    criticidade continuam vindo da base do tenant, e o filtro entra DEPOIS:
+    só os clientes pedidos passam por `tratar`, então só eles recebem
+    mensagem e só eles têm ciclo registrado. Ninguém mais é contatado.
+
+    É o que o painel usa para mostrar a decisão de um cliente sem disparar a
+    base inteira por baixo.
+
+    `gerar_texto` só vale para até `LIMITE_GERACAO` clientes. Acima disso o
+    pedido não falha: cai no modelo pronto, que é o comportamento do lote. O
+    teto é do código e não de quem chama, porque o custo é em chamadas de LLM
+    e um lote grande com geração ligada por engano sairia caro e lento sem
+    ninguém perceber antes do fim.
     """
     linhas, descartes, origem = preparar(clientes, tenant_id)
+    if somente is not None:
+        pedidos = {str(c) for c in somente}
+        linhas = [l for l in linhas if l.get("customer_id_externo") in pedidos]
+        descartes = [d for d in descartes if d.get("customer_id_externo") in pedidos]
     total = len(linhas) + len(descartes)
 
     nao_avaliados = 0
@@ -234,6 +277,8 @@ async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | No
         if c.get("offer_type") and c.get("accepted") is None
     }
 
+    gerar = gerar_texto and len(linhas) <= LIMITE_GERACAO
+
     tratados, estados, pulados = [], [], list(descartes)
     for linha in linhas:
         motivo = motivo_para_pular(linha, com_ciclo_aberto)
@@ -242,7 +287,7 @@ async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | No
                             "criticality": linha.get("criticality"),
                             "motivo": motivo[0], "detalhe": motivo[1]})
             continue
-        relatorio, estado = await tratar(linha, tenant_id)
+        relatorio, estado = await tratar(linha, tenant_id, gerar_texto=gerar)
         tratados.append(relatorio)
         estados.append(estado)
 

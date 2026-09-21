@@ -413,3 +413,23 @@ input[type=range]:active::-moz-range-thumb{transform:scale(1.15)}
 @media (max-width:760px){.comp-l{grid-template-columns:1fr auto}.comp-m{grid-column:1 / -1}.comp-t{grid-column:1 / -1}}
 .raciocinio{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px;font-size:14.5px;line-height:1.55;color:var(--ink-2)}
 .razao .rv small{font-size:11.5px;color:var(--ink-3);font-weight:400}
+
+
+/* ── Candidatas de mensagem: escolhiveis pelo operador ──────────────
+   O selo de "escolhida" continua sendo a recomendacao do bandit. Este
+   estado e a selecao do humano, e por isso e visualmente diferente. */
+.balao.clicavel{cursor:pointer;transition:border-color .15s,transform .15s,box-shadow .15s}
+.balao.clicavel:hover{border-color:var(--acento);transform:translateY(-1px)}
+.balao.clicavel:focus-visible{outline:2px solid var(--acento);outline-offset:3px}
+.balao.clicavel .balao-acao{margin-top:12px;font-size:13px;font-weight:600;
+  color:var(--acento);display:flex;align-items:center;gap:6px;opacity:0;
+  transition:opacity .15s}
+.balao.clicavel:hover .balao-acao,
+.balao.clicavel:focus-visible .balao-acao,
+.balao.clicavel.selecionado .balao-acao{opacity:1}
+.balao.clicavel.selecionado{border-color:var(--ok);box-shadow:0 0 0 1px var(--ok) inset}
+.balao.clicavel.selecionado .balao-acao{color:var(--ok)}
+@media (prefers-reduced-motion:reduce){
+  .balao.clicavel,.balao.clicavel .balao-acao{transition:none}
+  .balao.clicavel:hover{transform:none}
+}

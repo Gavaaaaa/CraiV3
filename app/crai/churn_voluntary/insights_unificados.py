@@ -51,7 +51,7 @@ def _linha_do_upload(l: dict) -> dict:
             "evento": None}
 
 
-def _linha_do_sdk(ciclo: dict) -> dict:
+def _linha_do_sdk(ciclo: dict, idioma: str = "pt") -> dict:
     """Um ciclo do `retention_log` no MESMO formato do ranking do upload."""
     risk = ciclo.get("risk_score")
     crit = ciclo.get("criticality") or "padrao"
@@ -62,7 +62,7 @@ def _linha_do_sdk(ciclo: dict) -> dict:
         "days_since_last": ciclo.get("days_since_last"),
         "features_used_30d": ciclo.get("features_used_30d"),
     }
-    explicacao = batch_scoring.explicar(cliente, risk, crit)
+    explicacao = batch_scoring.explicar(cliente, risk, crit, None, idioma)
     evento = ciclo.get("event")
     if evento:
         explicacao = f"último evento: {evento}; {explicacao}"
@@ -90,7 +90,7 @@ def _mais_recente(a: dict, b: dict) -> dict:
     return a if a["origem"] == ORIGEM_SDK else b
 
 
-def clientes_em_risco(tenant_id: str) -> list[dict]:
+def clientes_em_risco(tenant_id: str, idioma: str = "pt") -> list[dict]:
     """Upload ∪ SDK deste tenant, um por cliente, ordenado por risco.
 
     Lê as duas origens SÓ para o tenant pedido; nenhuma das duas leituras tem
@@ -99,11 +99,11 @@ def clientes_em_risco(tenant_id: str) -> list[dict]:
     """
     por_cliente: dict = {}
 
-    for l in batch_scoring.pontuar_base(tenant_id):
+    for l in batch_scoring.pontuar_base(tenant_id, idioma):
         por_cliente[l["customer_id_externo"]] = _linha_do_upload(l)
 
     for ciclo in retention_log.ultimo_ciclo_por_cliente(tenant_id):
-        linha = _linha_do_sdk(ciclo)
+        linha = _linha_do_sdk(ciclo, idioma)
         cid = linha["customer_id_externo"]
         if cid in por_cliente:
             vencedora = _mais_recente(por_cliente[cid], linha)

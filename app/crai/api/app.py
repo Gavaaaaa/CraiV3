@@ -901,9 +901,10 @@ def _filtros_de_insights(limite: Optional[int], criticidade_minima: Optional[str
     return limite, crit
 
 
-def _insights_do_tenant(tenant_id: str, limite, criticidade_minima) -> dict:
+def _insights_do_tenant(tenant_id: str, limite, criticidade_minima,
+                        idioma: str = "pt") -> dict:
     try:
-        ranking = insights_unificados.clientes_em_risco(tenant_id)
+        ranking = insights_unificados.clientes_em_risco(tenant_id, idioma)
     except clientes_importados.ConfiguracaoAusente as e:
         logger.error("[INSIGHTS] %s", e)
         raise HTTPException(status_code=500, detail={
@@ -1749,14 +1750,33 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
                                   f"{f.get('value')}")}
             for i, f in enumerate(feats)]
 
+    # O plano sai em DUAS formas, de proposito:
+    #
+    #   `plano`       -- as frases prontas, como sempre saiu. Quem ja consumia
+    #                    continua funcionando.
+    #   `plano_itens` -- os campos crus (numero, instante em ISO, valor). Data e
+    #                    moeda sao FORMATACAO, nao explicacao: quem exibe e que
+    #                    sabe o idioma e o formato do leitor. A frase pronta em
+    #                    pt-BR deixava "17/09/2026 as 17:17 - R$ 489.0" no painel
+    #                    em ingles, com o centavo comido.
     plano = []
+    plano_itens = []
     for t in (final.get("pix_retry_schedule") or []):
         if isinstance(t, dict):
             quando = t.get("quando")
-            quando = quando.strftime("%d/%m/%Y as %H:%M") if hasattr(quando, "strftime") else quando
-            plano.append(f"tentativa {t.get('numero')} - {quando} - R$ {t.get('valor')}")
+            iso = quando.isoformat() if hasattr(quando, "isoformat") else quando
+            texto = quando.strftime("%d/%m/%Y as %H:%M") if hasattr(quando, "strftime") else quando
+            try:
+                valor_item = float(t.get("valor"))
+            except (TypeError, ValueError):
+                valor_item = None
+            plano.append(f"tentativa {t.get('numero')} - {texto} - R$ {t.get('valor')}")
+            plano_itens.append({"numero": t.get("numero"), "quando": iso,
+                                "valor": valor_item})
         else:
             plano.append(str(t))
+            plano_itens.append({"numero": None, "quando": None, "valor": None,
+                                "texto": str(t)})
 
     racio = final.get("raciocinio")
     causa_bruta = final.get("failure_cause")
@@ -1771,9 +1791,12 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
         "eprofit": final.get("eprofit"),
         "estrategia": estrategia_bruta,
         "estrategia_legivel": ESTRATEGIA_LEGIVEL_PAINEL.get(estrategia_bruta, estrategia_bruta),
-        "shap": shap, "plano": plano,
+        "shap": shap, "plano": plano, "plano_itens": plano_itens,
         "raciocinio": racio if isinstance(racio, list) else ([racio] if racio else []),
         "mensagem": final.get("message_sent"),
+        # Como a mensagem foi escrita (modelo + parametros, ou gerada). O
+        # painel usa para exibi-la no idioma do leitor quando veio de modelo.
+        "mensagem_meta": final.get("mensagem_meta"),
         "channel": final.get("channel"),
         "canais_considerados": final.get("canais_considerados") or [],
     })
@@ -1844,6 +1867,14 @@ class PainelDisparoLote(BaseModel):
     # base importada do tenant do painel.
     clientes: list[dict] | None = None
     limite: int | None = None
+    # Trata só estes `customer_id_externo`, com a régua e o risco da base
+    # inteira. Ver `disparo_lote.disparar` para por que isto não é o mesmo que
+    # mandar os clientes em `clientes`.
+    somente: list[str] | None = None
+    # Escreve o texto de cada oferta com a Claude API, nos dois idiomas, em vez
+    # de usar o modelo pronto. Exige `somente` com poucos clientes: o custo e
+    # (ofertas x idiomas) chamadas POR cliente.
+    gerar: bool = False
 
 
 @app.post("/simulate/painel/disparo-lote")
@@ -1860,9 +1891,24 @@ async def painel_disparo_lote(payload: PainelDisparoLote = None):
     if payload.limite is not None and payload.limite < 1:
         raise HTTPException(status_code=422, detail={
             "motivo": "limite_invalido", "detalhe": "limite precisa ser inteiro >= 1"})
+    if payload.gerar and not payload.somente:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "geracao_exige_somente", "campo": "gerar",
+            "detalhe": ("gerar texto com a Claude API custa (ofertas x idiomas) "
+                        "chamadas por cliente; peca os clientes em `somente`")})
+    if payload.gerar and len(payload.somente) > disparo_lote.LIMITE_GERACAO:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "geracao_grande_demais", "campo": "somente",
+            "detalhe": f"no maximo {disparo_lote.LIMITE_GERACAO} clientes com `gerar`"})
+    if payload.somente is not None and len(payload.somente) > disparo_lote.LIMITE_LOTE:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "somente_grande_demais", "campo": "somente",
+            "detalhe": f"no maximo {disparo_lote.LIMITE_LOTE} identificadores"})
     try:
         relatorio = await disparo_lote.disparar(payload.clientes, TENANT_PAINEL,
-                                                limite=payload.limite)
+                                                limite=payload.limite,
+                                                somente=payload.somente,
+                                                gerar_texto=payload.gerar)
     except disparo_lote.LoteGrandeDemais as e:
         raise HTTPException(status_code=413, detail={
             "motivo": "lote_grande_demais", "detalhe": str(e)})
@@ -1908,8 +1954,8 @@ async def painel_importar(arquivo: UploadFile = File(None)):
 
 
 @app.get("/simulate/painel/insights")
-async def painel_insights():
+async def painel_insights(idioma: str = "pt"):
     """O ranking do tenant do painel -- mesmo `_insights_do_tenant` da rota
     autenticada `/insights`, so que sem o JWT."""
     _require_simulation_env()
-    return JSONResponse(_insights_do_tenant(TENANT_PAINEL, None, None))
+    return JSONResponse(_insights_do_tenant(TENANT_PAINEL, None, None, idioma))

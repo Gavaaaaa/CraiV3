@@ -31,6 +31,7 @@ grafo — que é o que se lê para entender o sistema — mentiria sobre onde o
 fluxo termina.
 """
 
+import asyncio
 import os
 import random
 from langgraph.graph import StateGraph, END
@@ -79,6 +80,18 @@ OFFER_LABELS = {
     "pix_boleto_flash": "trocar para pagamento via Pix ou boleto em 1 clique",
 }
 
+# A mesma oferta dita em ingles, para o PROMPT. Sem isto o pedido em ingles
+# levava o rotulo em portugues dentro dele, e o texto voltava com "20% de
+# desconto por 3 meses" no meio de uma frase em ingles. Estes rotulos existem
+# so para o prompt: `OFFER_LABELS` continua sendo o rotulo que a API devolve, e
+# quem exibe traduz pelo codigo da oferta.
+OFFER_LABELS_EN = {
+    "desconto_10": "10% off for 3 months",
+    "desconto_20": "20% off for 3 months",
+    "pausa_1_mes": "a 1-month pause on the subscription at no cost",
+    "pix_boleto_flash": "a switch to Pix or a bank slip in one click",
+}
+
 # Quantas candidatas de mensagem o painel vê por evento.
 N_CANDIDATAS = 3
 
@@ -93,6 +106,18 @@ TERMOS_DE_ENCAMINHAMENTO_HUMANO = (
     "ligamos", "ligar para", "te ligar", "te liga",
     "nossa equipe", "nosso time", "time de", "equipe de",
     "chat", "agende", "agendar", "agendamento",
+    # Em ingles. A lista existia so em portugues porque o texto gerado so saia
+    # em portugues; no momento em que o painel passou a pedir a mensagem no
+    # idioma do leitor, "talk to our support team" passaria batido por um
+    # filtro que so procura "suporte" -- e a invariante de escalonamento zero
+    # cairia justamente pelo idioma novo. Nenhum destes aparece nos modelos em
+    # portugues, entao o caminho de fallback continua passando pelo filtro.
+    "support", "agent", "human", "representative", "specialist",
+    "advisor", "adviser", "consultant", "concierge",
+    "talk to", "speak to", "speak with", "chat with", "reach out to",
+    "call you", "give you a call", "get in touch",
+    "our team", "team member", "contact us", "help desk", "helpdesk",
+    "customer service", "live chat", "book a call", "schedule a call",
 )
 
 
@@ -179,25 +204,31 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     if destino and criticality in ("critico", "alto"):
         channel = "whatsapp"
         motivo = f"telefone presente e criticidade '{criticality}': o canal mais pessoal"
+        codigo, params = "escolha_criticidade", {"criticidade": criticality}
         print(f"[CHURN-VOL] Canal por criticidade ({criticality}): whatsapp")
     elif prior and (prior != "whatsapp" or destino):
         channel = prior
         motivo = f"o cliente já converteu por {prior} antes (histórico)"
+        codigo, params = "escolha_historico", {"canal": prior}
         print(f"[CHURN-VOL] Canal por histórico: {channel} (converteu antes)")
     elif on_site:
         channel = "popup"
         motivo = "cliente está no produto agora: a intervenção mais barata e imediata"
+        codigo, params = "escolha_no_produto", {}
     else:
         channel = "email"
         motivo = "sem telefone utilizável, sem histórico e fora do produto: canal de reserva"
+        codigo, params = "escolha_reserva", {}
 
     return {**state, "channel": channel, "on_site_now": on_site,
             "canais_considerados": _canais_considerados(
-                channel, motivo, destino, criticality, prior, on_site)}
+                channel, motivo, destino, criticality, prior, on_site,
+                codigo_escolha=codigo, params_escolha=params)}
 
 
 def _canais_considerados(channel: str, motivo_escolha: str, destino, criticality: str,
-                         prior, on_site) -> list[dict]:
+                         prior, on_site, codigo_escolha: str = "",
+                         params_escolha: dict | None = None) -> list[dict]:
     """Os três canais do fluxo, cada um com o motivo de ter sido escolhido ou
     descartado — a cadeia de `choose_channel` explicada canal a canal.
 
@@ -208,30 +239,70 @@ def _canais_considerados(channel: str, motivo_escolha: str, destino, criticality
     descartes = {}
 
     if not destino:
-        descartes["whatsapp"] = "sem telefone utilizável no evento"
+        descartes["whatsapp"] = ("sem telefone utilizável no evento",
+                                 "descarte_sem_telefone", {})
     elif criticality not in ("critico", "alto"):
         descartes["whatsapp"] = (f"telefone presente, mas criticidade '{criticality}' não pede "
-                                 f"o canal mais pessoal, e não há histórico de conversão por WhatsApp")
+                                 f"o canal mais pessoal, e não há histórico de conversão por WhatsApp",
+                                 "descarte_criticidade_baixa", {"criticidade": criticality})
     else:
-        descartes["whatsapp"] = "preterido"   # não acontece: whatsapp vence quando os dois valem
+        # não acontece: whatsapp vence quando os dois valem
+        descartes["whatsapp"] = ("preterido", "descarte_preterido", {})
 
     if not on_site:
-        descartes["popup"] = "cliente não está no produto agora"
+        descartes["popup"] = ("cliente não está no produto agora",
+                              "descarte_fora_do_produto", {})
     elif channel == "whatsapp":
-        descartes["popup"] = "cliente está no site, mas a criticidade pediu o canal mais pessoal"
+        descartes["popup"] = ("cliente está no site, mas a criticidade pediu o canal mais pessoal",
+                              "descarte_no_site_mas_criticidade", {})
     else:
-        descartes["popup"] = f"cliente está no site, mas o histórico aponta {prior}"
+        descartes["popup"] = (f"cliente está no site, mas o histórico aponta {prior}",
+                              "descarte_no_site_mas_historico", {"canal": prior})
 
     if channel == "whatsapp":
-        descartes["email"] = "canal de reserva; a criticidade pediu o canal mais pessoal"
+        descartes["email"] = ("canal de reserva; a criticidade pediu o canal mais pessoal",
+                              "descarte_reserva_criticidade", {})
     elif channel == "popup":
-        descartes["email"] = "canal de reserva; o cliente estava no produto"
+        descartes["email"] = ("canal de reserva; o cliente estava no produto",
+                              "descarte_reserva_no_produto", {})
     else:
-        descartes["email"] = f"canal de reserva; o histórico aponta {prior}"
+        descartes["email"] = (f"canal de reserva; o histórico aponta {prior}",
+                              "descarte_reserva_historico", {"canal": prior})
 
-    return [{"canal": c, "escolhido": c == channel,
-             "motivo": motivo_escolha if c == channel else descartes[c]}
-            for c in ("whatsapp", "popup", "email")]
+    # `motivo` continua sendo a frase em pt-BR, como sempre foi -- quem ja
+    # consumia a API nao muda. `motivo_codigo` e `motivo_params` sao a MESMA
+    # razao como identificador de um conjunto fechado, para quem exibe poder
+    # escrever a frase no idioma do leitor. Mesmo desenho do comparativo de
+    # canal do involuntario (`crai/agent/workflow.py`).
+    linhas = []
+    for c in ("whatsapp", "popup", "email"):
+        if c == channel:
+            frase, cod, par = motivo_escolha, codigo_escolha, (params_escolha or {})
+        else:
+            frase, cod, par = descartes[c]
+        linhas.append({"canal": c, "escolhido": c == channel, "motivo": frase,
+                       "motivo_codigo": cod or None, "motivo_params": par})
+    return linhas
+
+
+IDIOMAS_TEXTO = ("pt", "en")
+
+
+def _idioma_do_texto(idioma) -> str:
+    """Qualquer entrada vira "pt" ou "en". O idioma chega do navegador."""
+    return "en" if str(idioma or "").lower().startswith("en") else "pt"
+
+
+# So a LINGUA DA SAIDA muda com o idioma; a instrucao continua em portugues.
+# Traduzir o prompt inteiro seria manter duas redacoes do mesmo pedido, e as
+# duas divergiriam na primeira vez que alguem ajustasse uma.
+# Em pt o valor é o mesmo trecho de sempre, palavra por palavra: o pedido em
+# português é o caso de antes e não podia mudar junto com o idioma novo — há um
+# teste-catraca (`test_prompt_padrao_e_o_texto_de_antes`) que o trava byte a
+# byte, e ele está certo em existir.
+_LINGUA_DA_SAIDA = {"pt": "português brasileiro natural",
+                    "en": "escrita em inglês natural (write the message in English)"}
+_ASSINATURA_MODELO = {"pt": "— {nome}, time CRAI", "en": "— {nome}, CRAI team"}
 
 
 def _assinatura() -> str:
@@ -244,24 +315,28 @@ def _assinatura() -> str:
     return os.getenv("CRAI_CS_SIGNATURE_NAME", "").strip()
 
 
-def _instrucao_de_assinatura() -> str:
+def _instrucao_de_assinatura(idioma: str = "pt") -> str:
     nome = _assinatura()
     if not nome:
         return ("Não assine com nome de pessoa nenhuma: não há um nome real "
                 "configurado e inventar um seria mentir sobre quem fala.")
-    return f'Assine na última linha, exatamente assim: "— {nome}, time CRAI".'
+    linha = _ASSINATURA_MODELO[_idioma_do_texto(idioma)].format(nome=nome)
+    return f'Assine na última linha, exatamente assim: "{linha}".'
 
 
-def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str) -> str:
+def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str,
+                        idioma: str = "pt") -> str:
     """O prompt muda com a criticidade; o resto do nó, não.
 
     A oferta já foi escolhida pelo bandit e não muda aqui — criticidade é tom,
     não decisão. As três variantes compartilham o mesmo cabeçalho de contexto
     para que a diferença fique no que se pede, não no que se informa.
     """
+    lingua = _LINGUA_DA_SAIDA[_idioma_do_texto(idioma)]
     contexto = (f"Evento: {state['event']} | Canal: {state['channel']} "
                 f"| Oferta: {offer_label}")
-    fecho = "Sem culpar o cliente, no máximo 3 frases, português brasileiro natural.\nRetorne APENAS a mensagem."
+    fecho = (f"Sem culpar o cliente, no máximo 3 frases, {lingua}.\n"
+             "Retorne APENAS a mensagem.")
 
     criticality = state.get("criticality", "padrao")
 
@@ -270,7 +345,7 @@ def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str) -> str:
 {contexto}
 Tom pessoal e de alto cuidado: reconheça o valor da relação, sem bajular e sem prometer o que não foi oferecido.
 Apresente a oferta como uma solução pensada para este cliente, não como promoção genérica.
-{_instrucao_de_assinatura()}
+{_instrucao_de_assinatura(idioma)}
 {fecho}"""
 
     if criticality == "alto":
@@ -284,7 +359,7 @@ Apresente a oferta como personalizada e diga que ela vale pelos próximos 7 dias
     # caso comum não podia mudar de comportamento junto com os dois novos.
     return f"""Gere uma mensagem curta de retenção para um cliente que demonstrou risco de cancelar.
 {contexto}
-Tom empático, sem culpar o cliente, no máximo 3 frases, português brasileiro natural.
+Tom empático, sem culpar o cliente, no máximo 3 frases, {lingua}.
 Retorne APENAS a mensagem."""
 
 
@@ -305,7 +380,8 @@ def _fallback_de_retencao(criticality: str, offer_label: str) -> str:
 
 
 async def _texto_da_oferta_escolhida(state: ChurnVoluntaryState, offer_label: str,
-                                     criticality: str) -> tuple[str, str]:
+                                     criticality: str,
+                                     idioma: str = "pt") -> tuple[str, str]:
     """O texto da vencedora e de onde ele veio: ("...", "gerado" | "template").
 
     Depois de gerado, o texto passa pelo filtro de encaminhamento humano. Se a
@@ -313,7 +389,7 @@ async def _texto_da_oferta_escolhida(state: ChurnVoluntaryState, offer_label: st
     entra no lugar — o prompt pede o tom, mas quem garante a invariante é o
     código, não a instrução.
     """
-    prompt = _prompt_de_retencao(state, offer_label)
+    prompt = _prompt_de_retencao(state, offer_label, idioma)
     try:
         response = await claude.messages.create(
             model="claude-sonnet-4-20250514", max_tokens=200,
@@ -332,8 +408,51 @@ async def _texto_da_oferta_escolhida(state: ChurnVoluntaryState, offer_label: st
     return message, "gerado"
 
 
+def rotulo_da_oferta(oferta: str, idioma: str = "pt") -> str:
+    """O rótulo da oferta no idioma do PROMPT."""
+    if _idioma_do_texto(idioma) == "en":
+        return OFFER_LABELS_EN.get(oferta, "a special offer")
+    return OFFER_LABELS.get(oferta, "uma oferta especial")
+
+
+async def gerar_textos(state: ChurnVoluntaryState, ofertas, criticality: str,
+                       idiomas=IDIOMAS_TEXTO) -> dict:
+    """Um texto por oferta E por idioma, todos em paralelo.
+
+    Devolve {oferta: {idioma: {"texto": ..., "origem": "gerado"|"template"}}}.
+
+    POR QUE POR OFERTA. Ate aqui so a vencedora tinha texto gerado e as outras
+    duas levavam o modelo da propria oferta: o painel comparava ABORDAGENS, nao
+    redacoes, e gerar tres textos por cliente num lote de centenas seria
+    centenas de chamadas. Para UM cliente pedido de proposito na tela, o custo
+    e tres chamadas e o ganho e a demonstracao de fato mostrar tres mensagens
+    escritas para aquele cliente. Quem chama e que decide: o lote inteiro
+    continua sem gerar nada.
+
+    POR QUE POR IDIOMA. Texto gerado e a unica coisa na tela que o dicionario
+    do painel nao consegue traduzir. Gerar nos dois idiomas de uma vez e o que
+    permite trocar PT/EN depois sem pedir de novo -- e pedir de novo nao daria
+    no mesmo: o ciclo de retencao do cliente ja estaria aberto.
+
+    Falha de API nao propaga: `_texto_da_oferta_escolhida` devolve o modelo com
+    origem "template", e quem exibe mostra o modelo no idioma do leitor.
+    """
+    unicas = list(dict.fromkeys(ofertas))
+    idiomas = [_idioma_do_texto(i) for i in idiomas]
+    pedidos = [(o, i) for o in unicas for i in dict.fromkeys(idiomas)]
+    resultados = await asyncio.gather(*[
+        _texto_da_oferta_escolhida(state, rotulo_da_oferta(o, i), criticality, i)
+        for o, i in pedidos
+    ])
+    saida: dict = {}
+    for (oferta, idi), (texto, origem) in zip(pedidos, resultados):
+        saida.setdefault(oferta, {})[idi] = {"texto": texto, "origem": origem}
+    return saida
+
+
 def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
-                      origem_texto_vencedora: str = "gerado") -> list[dict]:
+                      origem_texto_vencedora: str = "gerado",
+                      textos: dict | None = None) -> list[dict]:
     """As candidatas que o painel mostra, e qual venceu.
 
     São os braços de maior e-Profit amostrado na rodada do bandit que decidiu
@@ -370,20 +489,58 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
         oferta = linha["offer"]
         label = OFFER_LABELS.get(oferta, "uma oferta especial")
         vencedora = oferta == escolhida
+        # `textos` (de `gerar_textos`) tem texto proprio para esta oferta em
+        # cada idioma. Sem ele, o caminho de sempre: a vencedora leva o texto
+        # que o no gerou e as outras levam o modelo da propria oferta.
+        por_idioma = (textos or {}).get(oferta) or {}
+        em_pt = por_idioma.get("pt") or {}
+        if por_idioma:
+            texto_c = em_pt.get("texto") or _fallback_de_retencao(criticality, label)
+            origem_c = em_pt.get("origem") or "template"
+        elif vencedora:
+            texto_c, origem_c = texto_vencedora, origem_texto_vencedora
+        else:
+            texto_c, origem_c = _fallback_de_retencao(criticality, label), "template"
+        # So os textos REALMENTE gerados entram aqui: onde a API falhou, a
+        # chave some e quem exibe cai no modelo daquele idioma.
+        gerados = {i: v["texto"] for i, v in por_idioma.items()
+                   if v.get("origem") == "gerado"}
+        origens = {i: v.get("origem") for i, v in por_idioma.items()}
         candidatas.append({
             "oferta": oferta,
             "oferta_label": label,
-            "texto": texto_vencedora if vencedora else _fallback_de_retencao(criticality, label),
+            "texto": texto_c,
             "p_sucesso": linha.get("p_estimado"),
             "alpha": linha.get("alpha"),          # posterior de onde saiu p_sucesso
             "beta": linha.get("beta"),            # (None no caminho sem rodada)
             "p_amostrado": linha.get("p_amostrado"),
             "eprofit_amostrado": linha.get("eprofit_amostrado"),
             "escolhida": vencedora,
-            "origem_texto": origem_texto_vencedora if vencedora else "template",
+            "origem_texto": origem_c,
             "motivo": ("maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
                        if vencedora else
                        f"e-Profit amostrado abaixo da escolhida nesta rodada (posição {posicao})"),
+            # Os campos abaixo sao a MESMA informacao dos de cima na forma de
+            # identificador + parametros, para quem exibe escrever no idioma do
+            # leitor. `texto_codigo` so existe quando o texto veio de MODELO
+            # (conjunto fechado: "critico" ou "padrao"); texto gerado pela
+            # Claude API nao tem codigo e e exibido como chegou.
+            "motivo_codigo": "maior_eprofit" if vencedora else "abaixo_da_escolhida",
+            "motivo_params": {} if vencedora else {"posicao": posicao},
+            # `texto_codigo` diz QUAL modelo se aplica a esta candidata. Ele
+            # existe sempre que um modelo pode ser preciso -- inclusive quando
+            # houve geracao, porque a geracao pode ter dado certo num idioma e
+            # falhado no outro. So fica nulo no caminho antigo (sem `textos`),
+            # onde a vencedora tem texto gerado e nao ha modelo por idioma a
+            # oferecer: ali quem exibe mostra o texto como chegou.
+            "texto_codigo": (criticality
+                             if (por_idioma or not vencedora
+                                 or origem_texto_vencedora == "template") else None),
+            "texto_params": {"oferta": oferta, "assinatura": _assinatura()},
+            # Presentes so quando houve geracao. Quem exibe usa o texto do
+            # idioma do leitor; sem ele, cai no modelo via `texto_codigo`.
+            "textos_idioma": gerados or None,
+            "origens_idioma": origens or None,
         })
     return candidatas
 

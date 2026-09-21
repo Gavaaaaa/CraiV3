@@ -65,7 +65,12 @@ var API = (function(){
   }
 
   /* GET /simulate/painel/insights → {total_clientes, clientes_em_risco, gerado_em, filtros} */
-  function insights(){ return pedir("/simulate/painel/insights"); }
+  /* `idioma` chega ate o gerador de explicacao no backend: a frase de cada
+     cliente e produzida la, nos dois idiomas, e nao traduzida aqui. Sem o
+     parametro a API responde em portugues, como sempre respondeu. */
+  function insights(idioma){
+    return pedir("/simulate/painel/insights" + (idioma ? "?idioma=" + encodeURIComponent(idioma) : ""));
+  }
 
   /* POST /simulate/painel/cobranca-falhada → roda o grafo do churn involuntário
      e devolve a decisão: causa, score, e-Profit, estratégia, SHAP, plano,
@@ -79,10 +84,20 @@ var API = (function(){
      canal para cada cliente que precisa, e registra o envio (simulado).
      Sem `clientes`, o lote é a base importada do tenant do painel; com uma
      lista, só aqueles. `limite` corta os N piores depois da ordenação. */
-  function disparoLote(clientes, limite){
+  /* `somente` trata SÓ estes customer_id_externo, mantendo a régua, o risco e
+     a criticidade da base inteira — é o caminho de "gerar a mensagem deste
+     cliente" sem disparar a base toda por baixo. Mandar o cliente em
+     `clientes` não serve: ali a régua sai da própria lista, e um cliente
+     sozinho não sustenta os percentis. */
+  /* `gerar` troca o modelo pronto por texto escrito pela Claude API para
+     aquele cliente, nos dois idiomas. So vale com `somente` e poucos clientes
+     — a API recusa o resto, porque o custo e por cliente. */
+  function disparoLote(clientes, limite, somente, gerar){
     var corpo = {};
     if(clientes && clientes.length) corpo.clientes = clientes;
     if(limite) corpo.limite = limite;
+    if(somente && somente.length) corpo.somente = somente;
+    if(gerar) corpo.gerar = true;
     return pedir("/simulate/painel/disparo-lote", {
       method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(corpo) });
   }

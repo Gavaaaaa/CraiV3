@@ -109,3 +109,9 @@ class AgentState(TypedDict):
     canais_considerados: Optional[list]
     metodo_pagamento: Optional[str]   # pix_automatico | boleto (Pix Automático como fallback antes do boleto)
     message_sent:     Optional[str]
+    # Como `message_sent` foi escrita: {"origem": "template"|"gerado",
+    # "codigo": <chave de FALLBACK_TEMPLATES>, "valor", "link", "metodo"}.
+    # Quem EXIBE a mensagem usa isto para escreve-la no idioma do leitor
+    # quando ela veio de modelo; texto gerado pela Claude API nao tem codigo e
+    # e exibido como chegou. Nao participa de nenhuma decisao.
+    mensagem_meta:    Optional[dict]

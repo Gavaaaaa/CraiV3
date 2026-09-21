@@ -64,6 +64,67 @@ TEXTO_SEM_DADO = ("sem dado de atividade — impossível avaliar risco de churn 
 # filtrar por "mínima"): maior primeiro.
 ORDEM_CRITICIDADE = {"critico": 3, "alto": 2, "padrao": 1, CRITICIDADE_SEM_DADO: 0}
 
+# ── Idioma da explicacao ─────────────────────────────────────────────────
+# A frase de `explicar()` e produzida AQUI, nao na tela: e o sistema dizendo
+# por que classificou assim. O painel e bilingue, entao ela precisa existir
+# nos dois idiomas -- e precisa continuar vindo do backend, senao a tela
+# passaria a mostrar o que ela acha que o sistema quis dizer.
+#
+# O default e "pt" em toda a cadeia: sem ninguem pedir ingles, cada byte da
+# saida e identico ao de antes deste parametro existir.
+IDIOMAS = ("pt", "en")
+
+
+def _idioma(idioma) -> str:
+    return idioma if idioma in IDIOMAS else "pt"
+
+
+FRASES = {
+    "sem_dado": {
+        "pt": TEXTO_SEM_DADO,
+        "en": ("no activity data - impossible to assess churn risk for this "
+               "customer"),
+    },
+    "inatividade": {
+        "pt": ("acima de 90% da sua base", "acima de 75% da sua base",
+               "acima da metade da sua base", "dentro do normal da sua base"),
+        "en": ("higher than 90% of your base", "higher than 75% of your base",
+               "higher than half of your base", "within the normal range of your base"),
+    },
+    "uso": {
+        "pt": ("menos que 90% da sua base", "menos que 75% da sua base",
+               "menos que a metade da sua base", "dentro do normal da sua base"),
+        "en": ("lower than 90% of your base", "lower than 75% of your base",
+               "lower than half of your base", "within the normal range of your base"),
+    },
+    "acessou_hoje":   {"pt": "acessou hoje", "en": "logged in today"},
+    "sem_login":      {"pt": "sem login há {d} dia{s}", "en": "no login for {d} day{s}"},
+    "dias_desc":      {"pt": "dias sem login desconhecidos (assumido 0)",
+                       "en": "days without login unknown (assumed 0)"},
+    "uso_n":          {"pt": "usa {u} funcionalidade{s} nos últimos 30 dias",
+                       "en": "uses {u} feature{s} in the last 30 days"},
+    "uso_desc_regua": {"pt": "uso de funcionalidades desconhecido (assumido como os mais ativos da sua base)",
+                       "en": "feature usage unknown (assumed to be among the most active in your base)"},
+    "uso_desc":       {"pt": "uso de funcionalidades desconhecido (assumido 10)",
+                       "en": "feature usage unknown (assumed 10)"},
+    "mrr":            {"pt": "MRR {v}", "en": "MRR {v}"},
+    "mrr_desc":       {"pt": "MRR desconhecido", "en": "MRR unknown"},
+    "critico_valor":  {"pt": " — crítico pelo valor da conta, não pelo risco",
+                       "en": " - critical because of the account value, not the risk"},
+    "sem_sinal":      {"pt": " — primeiro da fila da sua base, mas sem sinal de abandono: ",
+                       "en": " - first in line in your base, but with no sign of churn: "},
+    "entrou_ha":      {"pt": "entrou há menos de {n} dias",
+                       "en": "logged in less than {n} days ago"},
+    "usa_produto":    {"pt": "usa o produto", "en": "uses the product"},
+    "e":              {"pt": " e ", "en": " and "},
+}
+
+
+def _f(chave: str, idioma: str) -> str:
+    return FRASES[chave][_idioma(idioma)]
+
+
+
 # ── Régua da base ────────────────────────────────────────────────────────
 REGUA_BASE = "base_do_tenant"
 REGUA_GLOBAL = "padrao_global"
@@ -116,51 +177,55 @@ def regua_da_base(base: list[dict]):
     return regua
 
 
-def _frase_de_inatividade(pos: float) -> str:
+def _frase_de_inatividade(pos: float, idioma: str = "pt") -> str:
     """Como o dono do SaaS deve ler a posição de 'dias sem login' na base dele.
 
     Comparações ESTRITAS: quem está exatamente no p90 ganha a frase do p75.
     Com empates no percentil, "acima de 90%" seria a afirmação mais forte do
     que os dados sustentam; a frase mais fraca é sempre verdadeira.
     """
+    faixas = FRASES["inatividade"][_idioma(idioma)]
     if pos > 0.9:
-        return "acima de 90% da sua base"
+        return faixas[0]
     if pos > 0.75:
-        return "acima de 75% da sua base"
+        return faixas[1]
     if pos > 0.5:
-        return "acima da metade da sua base"
-    return "dentro do normal da sua base"
+        return faixas[2]
+    return faixas[3]
 
 
-def _frase_de_uso(desengajamento: float) -> str:
+def _frase_de_uso(desengajamento: float, idioma: str = "pt") -> str:
     """Idem para 'funcionalidades usadas': aqui, estar embaixo é o sinal.
     `desengajamento` vem de `desengajamento_de_uso`: 0,9 é o p10 da base."""
+    faixas = FRASES["uso"][_idioma(idioma)]
     if desengajamento > 0.9:
-        return "menos que 90% da sua base"
+        return faixas[0]
     if desengajamento > 0.75:
-        return "menos que 75% da sua base"
+        return faixas[1]
     if desengajamento > 0.5:
-        return "menos que a metade da sua base"
-    return "dentro do normal da sua base"
+        return faixas[2]
+    return faixas[3]
 
 
-def _frase_sem_sinal_absoluto(dias, uso) -> str:
+def _frase_sem_sinal_absoluto(dias, uso, idioma: str = "pt") -> str:
     """Por que um cliente no topo da lista NÃO é alarme: o que se sabe dele
     está dentro do que é uso normal em escala absoluta."""
     motivos = []
     if dias is not None:
-        motivos.append(f"entrou há menos de {int(PISO_ABSOLUTO_DIAS_SEM_LOGIN)} dias")
+        motivos.append(_f("entrou_ha", idioma).format(n=int(PISO_ABSOLUTO_DIAS_SEM_LOGIN)))
     if uso is not None:
-        motivos.append("usa o produto")
-    return " — primeiro da fila da sua base, mas sem sinal de abandono: " + " e ".join(motivos)
+        motivos.append(_f("usa_produto", idioma))
+    return _f("sem_sinal", idioma) + _f("e", idioma).join(motivos)
 
 
-def _reais(valor) -> str:
+def _reais(valor, idioma: str = "pt") -> str:
     """1500.5 → 'R$ 1.500,50'. Formato pt-BR sem depender de locale do SO."""
     try:
         s = f"{float(valor):,.2f}"
     except (TypeError, ValueError):
-        return "MRR desconhecido"
+        return _f("mrr_desc", idioma)
+    if _idioma(idioma) == "en":
+        return "R$ " + s
     return "R$ " + s.replace(",", "|").replace(".", ",").replace("|", ".")
 
 
@@ -170,7 +235,8 @@ def _inteiro_se_der(valor):
     return int(f) if f.is_integer() else f
 
 
-def explicar(cliente: dict, risk_score, criticality: str, regua: dict | None = None) -> str:
+def explicar(cliente: dict, risk_score, criticality: str, regua: dict | None = None,
+             idioma: str = "pt") -> str:
     """Uma frase curta, em PT-BR, com os números que produziram o risco.
 
     É a explicabilidade do caminho (2): as próprias features, ditas. Não há
@@ -186,30 +252,33 @@ def explicar(cliente: dict, risk_score, criticality: str, regua: dict | None = N
     é a resposta a "então por que ele está em primeiro e não é alarme?".
     """
     if criticality == CRITICIDADE_SEM_DADO:
-        return TEXTO_SEM_DADO
+        return _f("sem_dado", idioma)
 
     partes = []
     dias = cliente.get("days_since_last")
     uso = cliente.get("features_used_30d")
     if dias is not None:
         d = _inteiro_se_der(dias)
-        frase = "acessou hoje" if d == 0 else f"sem login há {d} dia{'s' if d != 1 else ''}"
+        frase = (_f("acessou_hoje", idioma) if d == 0
+                 else _f("sem_login", idioma).format(d=d, s="s" if d != 1 else ""))
         if regua is not None and d != 0:
-            frase += " — " + _frase_de_inatividade(posicao_na_base(dias, regua["days_since_last"]))
+            frase += " — " + _frase_de_inatividade(
+                posicao_na_base(dias, regua["days_since_last"]), idioma)
         partes.append(frase)
     else:
-        partes.append("dias sem login desconhecidos (assumido 0)")
+        partes.append(_f("dias_desc", idioma))
     if uso is not None:
         u = _inteiro_se_der(uso)
-        frase = f"usa {u} funcionalidade{'s' if u != 1 else ''} nos últimos 30 dias"
+        frase = _f("uso_n", idioma).format(u=u, s="s" if u != 1 else "")
         if regua is not None:
-            frase += " — " + _frase_de_uso(desengajamento_de_uso(uso, regua["features_used_30d"]))
+            frase += " — " + _frase_de_uso(
+                desengajamento_de_uso(uso, regua["features_used_30d"]), idioma)
         partes.append(frase)
     elif regua is not None:
-        partes.append("uso de funcionalidades desconhecido (assumido como os mais ativos da sua base)")
+        partes.append(_f("uso_desc_regua", idioma))
     else:
-        partes.append("uso de funcionalidades desconhecido (assumido 10)")
-    partes.append(f"MRR {_reais(cliente.get('mrr'))}")
+        partes.append(_f("uso_desc", idioma))
+    partes.append(_f("mrr", idioma).format(v=_reais(cliente.get("mrr"), idioma)))
 
     texto = ", ".join(partes)
     if risk_score is None:
@@ -220,14 +289,15 @@ def explicar(cliente: dict, risk_score, criticality: str, regua: dict | None = N
     com_sinal = regua is None or sinal_absoluto_de_desengajamento(dias, uso)
     risco_critico_valido = is_critical_risk(risk_score) and com_sinal
     if criticality == "critico" and not risco_critico_valido:
-        texto += " — crítico pelo valor da conta, não pelo risco"
+        texto += _f("critico_valor", idioma)
     elif (regua is not None and criticality == "padrao"
           and risk_score >= HIGH_RISK_THRESHOLD and not com_sinal):
-        texto += _frase_sem_sinal_absoluto(dias, uso)
+        texto += _frase_sem_sinal_absoluto(dias, uso, idioma)
     return texto
 
 
-def pontuar_cliente(cliente: dict, regua: dict | None = None) -> dict:
+def pontuar_cliente(cliente: dict, regua: dict | None = None,
+                    idioma: str = "pt") -> dict:
     """Uma linha da base → uma linha do ranking. Não grava nada.
 
     Sem `regua` (o default, e o caso de toda base pequena), o número é o de
@@ -258,7 +328,7 @@ def pontuar_cliente(cliente: dict, regua: dict | None = None) -> dict:
         "customer_id_externo": cliente["customer_id_externo"],
         "risk_score": risk,
         "criticality": crit,
-        "explicacao": explicar(cliente, risk, crit, regua_da_explicacao),
+        "explicacao": explicar(cliente, risk, crit, regua_da_explicacao, idioma),
         "mrr": mrr,
         "billing_profile": cliente.get("billing_profile"),
         "days_since_last": dias,
@@ -288,7 +358,7 @@ def ordenar(linhas: list[dict]) -> list[dict]:
     return sorted(linhas, key=chave)
 
 
-def pontuar_base(tenant_id: str) -> list[dict]:
+def pontuar_base(tenant_id: str, idioma: str = "pt") -> list[dict]:
     """O ranking de risco da base importada DESTE tenant.
 
     Lê só o tenant pedido — `clientes_importados.listar` não tem leitura sem
@@ -296,7 +366,7 @@ def pontuar_base(tenant_id: str) -> list[dict]:
     """
     base = clientes_importados.listar(tenant_id)
     regua = regua_da_base(base)
-    ranking = ordenar([pontuar_cliente(c, regua) for c in base])
+    ranking = ordenar([pontuar_cliente(c, regua, idioma) for c in base])
     sem_dado = sum(1 for l in ranking if l["criticality"] == CRITICIDADE_SEM_DADO)
     logger.info("[BATCH-SCORING] tenant=%s clientes=%d sem_dado=%d regua=%s",
                 tenant_id, len(ranking), sem_dado,
