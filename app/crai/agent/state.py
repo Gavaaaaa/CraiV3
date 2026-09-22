@@ -44,6 +44,13 @@ class AgentState(TypedDict):
     amount:         float
     invoice_id:     str
 
+    # A trilha do Art. 20 (LGPD): uma entrada por decisão automatizada deste
+    # ciclo (risco, retentativa, oferta, canal), montada no nó que decide
+    # (`retention_log.decisao`) e gravada de uma vez no `update_roi_dashboard`
+    # (`retention_log.registrar_decisoes`). Declarada aqui porque o LangGraph
+    # só carrega entre nós as chaves do schema.
+    decisoes:       Optional[list]
+
     # Diagnóstico (XGBoost + RF + e-Profit + SHAP)
     #
     # `features` é o X que o classificador consumiu — as 11 features + LTV.

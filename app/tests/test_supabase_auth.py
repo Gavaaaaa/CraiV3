@@ -317,11 +317,21 @@ class TestWebhooksIntocados:
         catraca impede."""
         from crai.api import app as app_module
 
-        SELF_SERVICE = ("/clientes/", "/insights")
+        # Self-service é o caminho EXATO ou um filho dele (`/clientes`,
+        # `/clientes/lote`, `/clientes/{id}`, `/clientes/importar`, `/insights`,
+        # `/insights/enviar`). Não é `startswith` puro: um `/clientes-webhook`
+        # ou `/insights_admin` criado daqui a meses tem que cair na catraca,
+        # não passar por ela.
+        SELF_SERVICE = ("/clientes", "/insights", "/titular")
+
+        def _e_self_service(caminho: str) -> bool:
+            return any(caminho == p or caminho.startswith(p + "/")
+                       for p in SELF_SERVICE)
+
         for rota in app_module.app.routes:
             deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
             nomes = {getattr(d.call, "__name__", "") for d in deps}
             usa = bool(nomes & {"get_tenant_id", "get_conta"})
-            e_self_service = rota.path.startswith(SELF_SERVICE)
+            e_self_service = _e_self_service(rota.path)
             assert usa == e_self_service, (
                 f"{rota.path}: usa get_tenant_id={usa}, self-service={e_self_service}")

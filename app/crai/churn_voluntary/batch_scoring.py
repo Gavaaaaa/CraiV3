@@ -44,6 +44,7 @@ Sem estado, sem escrita: é leitura + cálculo. O que persiste é a base (Sprint
 """
 
 import logging
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -128,6 +129,21 @@ def _f(chave: str, idioma: str) -> str:
 # ── Régua da base ────────────────────────────────────────────────────────
 REGUA_BASE = "base_do_tenant"
 REGUA_GLOBAL = "padrao_global"
+
+# A VERSÃO DO ESQUEMA DE CÁLCULO da régua, que a API de clientes devolve em
+# `regua_versao`. Hoje é "lote": a régua é recalculada INTEIRA a cada
+# `pontuar_base` (isto é, a cada `GET /insights`), a partir de `listar()`, e
+# não é persistida em lugar nenhum. Quando a régua incremental entrar, esta
+# constante muda e o consumidor sabe que o contrato de defasagem mudou.
+REGUA_VERSAO = "lote-v1"
+
+# Quando foi o último cálculo em lote, por tenant, NESTE processo. É a única
+# memória que existe disso: a régua não é gravada, então "quando foi
+# calculada" só pode ser "quando `pontuar_base` rodou pela última vez". Zera
+# no reinício — `None` significa "ninguém pediu o ranking desde que o
+# processo subiu", não "nunca". Mesma classe de limitação da janela de
+# idempotência (`api/idempotencia.py`), pelo mesmo motivo.
+_ultimo_calculo_da_regua: dict = {}
 CAMPOS_DA_REGUA = ("days_since_last", "features_used_30d")
 # Cada coluna olha para a cauda onde o sinal mora: em dias sem login, MAIS é
 # pior (cauda alta); em funcionalidades usadas, MENOS é pior (cauda baixa).
@@ -358,6 +374,19 @@ def ordenar(linhas: list[dict]) -> list[dict]:
     return sorted(linhas, key=chave)
 
 
+def esquecer_calculos_da_regua() -> None:
+    """Zera a marca de todos os tenants. Existe para o teste (`conftest`):
+    um teste que pediu o ranking não pode deixar `regua_calculada_em`
+    preenchido para o teste seguinte."""
+    _ultimo_calculo_da_regua.clear()
+
+
+def ultimo_calculo_da_regua(tenant_id: str):
+    """ISO-8601 UTC do último `pontuar_base` deste tenant neste processo, ou
+    `None` se ainda não houve um. Ver `_ultimo_calculo_da_regua`."""
+    return _ultimo_calculo_da_regua.get(tenant_id)
+
+
 def pontuar_base(tenant_id: str, idioma: str = "pt") -> list[dict]:
     """O ranking de risco da base importada DESTE tenant.
 
@@ -366,6 +395,8 @@ def pontuar_base(tenant_id: str, idioma: str = "pt") -> list[dict]:
     """
     base = clientes_importados.listar(tenant_id)
     regua = regua_da_base(base)
+    _ultimo_calculo_da_regua[tenant_id] = datetime.now(timezone.utc).isoformat(
+        timespec="seconds")
     ranking = ordenar([pontuar_cliente(c, regua, idioma) for c in base])
     sem_dado = sum(1 for l in ranking if l["criticality"] == CRITICIDADE_SEM_DADO)
     logger.info("[BATCH-SCORING] tenant=%s clientes=%d sem_dado=%d regua=%s",

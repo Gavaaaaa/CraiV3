@@ -261,6 +261,37 @@ def validar_linha(valores: dict) -> tuple:
     return cliente, None
 
 
+def validar_linhas(linhas: list) -> tuple[list[dict], list[tuple[int, str]]]:
+    """Cada item de `linhas` passa por `validar_linha`. Devolve (clientes
+    válidos, [(posição, motivo)] dos rejeitados).
+
+    A ÚNICA porta de validação em lote: a planilha (`importar`) e o
+    `POST /clientes/lote` da API passam por aqui, com o mesmo crivo. Dentro
+    do mesmo lote, `customer_id_externo` repetido: a última linha vence, como
+    no upsert. Item que não é um dicionário é rejeitado com motivo, não
+    derruba o lote.
+    """
+    validos: dict = {}                     # customer_id → cliente (última linha vence)
+    rejeitados = []
+    for posicao, valores in enumerate(linhas):
+        if not isinstance(valores, dict):
+            rejeitados.append((posicao, "não é um objeto com os campos do cliente"))
+            continue
+        cliente, motivo = validar_linha(valores)
+        if motivo:
+            rejeitados.append((posicao, motivo))
+            continue
+        validos[cliente["customer_id_externo"]] = cliente
+    return list(validos.values()), rejeitados
+
+
+def contar_sem_comportamento(clientes: list[dict]) -> int:
+    """Quantos entram sem `days_since_last` E sem `features_used_30d` — o
+    Sprint 3 não calcula risco para eles, e a empresa precisa saber."""
+    return sum(1 for c in clientes
+               if all(c.get(campo) is None for campo in COMPORTAMENTAIS))
+
+
 # ── O fluxo inteiro ──────────────────────────────────────────────────────
 
 def importar(tenant_id: str, nome_arquivo: str, conteudo: bytes,
@@ -293,24 +324,14 @@ def importar(tenant_id: str, nome_arquivo: str, conteudo: bytes,
                          "para apontar qual coluna corresponde a cada campo."),
         }
 
-    validos: dict = {}                     # customer_id → cliente (última linha vence)
-    rejeitados = []
+    series_por_campo = {campo: df[col].tolist() for campo, col in colunas.items()}
+    linhas = [{campo: serie[posicao] for campo, serie in series_por_campo.items()}
+              for posicao in range(len(df))]
+    clientes, ruins = validar_linhas(linhas)
     # Linha 1 da planilha é o cabeçalho; a primeira linha de dado é a 2. É esse
     # o número que a pessoa vai procurar no Excel, não o índice do pandas.
-    series_por_campo = {campo: df[col].tolist() for campo, col in colunas.items()}
-    for posicao in range(len(df)):
-        valores = {campo: serie[posicao] for campo, serie in series_por_campo.items()}
-        cliente, motivo = validar_linha(valores)
-        indice = posicao + 2
-        if motivo:
-            rejeitados.append({"linha": indice, "motivo": motivo})
-            continue
-        validos[cliente["customer_id_externo"]] = cliente
-
-    clientes = list(validos.values())
-    sem_comportamento = sum(
-        1 for c in clientes
-        if c.get("days_since_last") is None and c.get("features_used_30d") is None)
+    rejeitados = [{"linha": posicao + 2, "motivo": motivo} for posicao, motivo in ruins]
+    sem_comportamento = contar_sem_comportamento(clientes)
 
     importados = clientes_importados.gravar(tenant_id, clientes)
     logger.info("[IMPORTACAO] tenant=%s arquivo=%s importados=%d rejeitados=%d "

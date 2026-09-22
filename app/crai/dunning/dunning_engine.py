@@ -12,6 +12,8 @@ Brasil desde jun/2025) recupera na hora, sem o cliente reabrir o app.
 """
 
 from anthropic import AsyncAnthropic
+
+from ..churn_voluntary import retention_log as trilha
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
 
@@ -61,6 +63,9 @@ class DunningState(TypedDict):
     # e traduzivel; texto gerado nao e, e continua exibido como chegou.
     origem: str
     codigo_template: str
+    # Por que `_select_payment` escolheu o meio de pagamento — vai para a
+    # trilha do Art. 20 como `motivo_da_regra`.
+    motivo_metodo: str
 
 
 class DunningEngine:
@@ -103,7 +108,8 @@ class DunningEngine:
 
         portal = f"https://pay.crai.ai/{metodo}/{state['customer_id'][:8]}"
         print(f"[DUNNING] Meio de pagamento: {METODO_LABEL[metodo]} ({motivo})")
-        return {**state, "channel": "whatsapp", "payment_method": metodo, "portal_link": portal}
+        return {**state, "channel": "whatsapp", "payment_method": metodo, "portal_link": portal,
+                "motivo_metodo": motivo}
 
     async def _define_tone(self, state):
         score = state["recovery_score"]
@@ -138,7 +144,36 @@ Retorne APENAS a mensagem."""
         print(f"[DUNNING] {state['channel'].upper()} → {state['customer_id']}: {state['message'][:90]}")
         return {**state, "sent": True}
 
-    async def run_campaign(self, customer_id, failure_cause, recovery_score, amount) -> dict:
+    def decisoes_da_campanha(self, tenant_id, customer_id, result: dict) -> list[dict]:
+        """As duas decisões da campanha para a trilha do Art. 20: o que
+        oferecer (meio de pagamento + tom) e por onde (canal).
+
+        Entra `texto_codigo` e `origem` da mensagem, NUNCA o texto: o corpo
+        é o que a pessoa leu, não o critério que o sistema usou.
+        """
+        entradas = {"failure_cause": result.get("failure_cause"),
+                    "p_recovery": trilha._num(result.get("recovery_score")),
+                    "amount": trilha._num(result.get("amount"))}
+        oferta = trilha.decisao(
+            tenant_id, customer_id, trilha.DOMINIO_INVOLUNTARIO, trilha.TIPO_OFERTA,
+            trilha.MODELO_REGRA, entradas=entradas,
+            saida={"payment_method": result.get("payment_method"),
+                   "tom": result.get("tone"),
+                   "texto_codigo": result.get("codigo_template") or None,
+                   "origem_texto": result.get("origem"),
+                   "regra": "DunningEngine._select_payment",
+                   "motivo_da_regra": result.get("motivo_metodo")})
+        canal = trilha.decisao(
+            tenant_id, customer_id, trilha.DOMINIO_INVOLUNTARIO, trilha.TIPO_CANAL,
+            trilha.MODELO_REGRA, entradas={"failure_cause": result.get("failure_cause")},
+            saida={"channel": result.get("channel"),
+                   "regra": "DunningEngine.canal_padrao",
+                   "motivo_da_regra": "único canal com integração de envio nesta fase "
+                                      "(bot de WhatsApp); canais humanos são proibidos"})
+        return [oferta, canal]
+
+    async def run_campaign(self, customer_id, failure_cause, recovery_score, amount,
+                           tenant_id=None) -> dict:
         initial = DunningState(
             customer_id=customer_id, failure_cause=failure_cause, recovery_score=recovery_score,
             amount=amount, channel="whatsapp", tone="", message="", sent=False,
@@ -148,4 +183,6 @@ Retorne APENAS a mensagem."""
         return {"sent": result["sent"], "channel": result["channel"],
                 "payment_method": result["payment_method"], "message": result["message"],
                 "origem": result["origem"], "codigo_template": result["codigo_template"],
-                "portal_link": result["portal_link"]}
+                "portal_link": result["portal_link"],
+                # Trilha do Art. 20: montadas aqui, gravadas no fim do grafo.
+                "decisoes": self.decisoes_da_campanha(tenant_id, customer_id, result)}

@@ -125,8 +125,16 @@ class JanelaDeIdempotencia:
 EVENTOS_DE_FALHA = JanelaDeIdempotencia("pix_falha")
 CICLOS_FECHADOS = JanelaDeIdempotencia("pix_recuperacao")
 
+# A janela da API de sincronização de clientes (`api/clientes.py`). A chave é
+# o header `Idempotency-Key` que o backend do cliente manda, composta com
+# tenant, método e caminho (`chave_do_evento`): a mesma chave em tenants
+# diferentes, ou em rotas diferentes, são requisições diferentes. Separada
+# das janelas do Pix pelo mesmo motivo que elas são separadas entre si.
+CLIENTES_API = JanelaDeIdempotencia("clientes_api")
+
 
 def limpar_tudo() -> None:
-    """Zera as duas janelas. Usado pela fixture de isolamento dos testes."""
+    """Zera as três janelas. Usado pela fixture de isolamento dos testes."""
     EVENTOS_DE_FALHA.limpar()
     CICLOS_FECHADOS.limpar()
+    CLIENTES_API.limpar()

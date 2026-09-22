@@ -94,3 +94,4 @@ htmlcov/
 # por convenção (mesmo espírito de um .env.local); não deve ir para um repo
 # compartilhado.
 .claude/
+/RELATORIO_*.md

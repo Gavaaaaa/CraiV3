@@ -134,6 +134,30 @@ def modelo_ativo() -> bool:
     return _modelo is not None
 
 
+NOME_DO_MODELO = "risk_scorer_voluntario"
+REGRA_DE_RISCO = "risk_scorer.risco_por_features"
+
+
+def identidade_do_modelo() -> tuple[str, str | None]:
+    """(modelo, versão) de quem está decidindo o risco — para a trilha do Art. 20.
+
+    Com modelo carregado: (`NOME_DO_MODELO`, `<treinado_em>#<hash do .joblib>`).
+    Sem: (`"regra"`, None), e o nome da regra vai em `REGRA_DE_RISCO`. Nunca
+    levanta: meta ilegível vira versão só pelo hash, ou None.
+    """
+    if not modelo_ativo():
+        return "regra", None
+    from .retention_log import versao_do_artefato
+
+    meta = None
+    try:
+        with open(MODELO_META_PATH, encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:                             # noqa: BLE001
+        meta = None
+    return NOME_DO_MODELO, versao_do_artefato(meta, MODELO_PATH)
+
+
 def _risco_do_modelo(event: str, props: dict):
     """O risco segundo o modelo, ou None para cair nas regras.
 

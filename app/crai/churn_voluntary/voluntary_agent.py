@@ -39,6 +39,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
+from . import retention_log as trilha
+from .risk_scorer import REGRA_DE_RISCO, identidade_do_modelo
 from .retention_log import (
     TENANT_PADRAO,
     ciclo_aberto,
@@ -143,7 +145,26 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     criticality = classify_criticality(risk, state["props"].get("mrr"))
     print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} "
           f"| perfil: {profile} | criticidade: {criticality}")
-    return {**state, "risk_score": risk, "profile": profile, "criticality": criticality}
+    # Trilha do Art. 20: a decisão de risco, com as features que ela viu —
+    # dicionário explícito, nunca o `props` inteiro (telefone, e-mail).
+    props = state["props"] if isinstance(state.get("props"), dict) else {}
+    modelo, versao = identidade_do_modelo()
+    saida = {"risk_score": round(float(risk), 4), "profile": profile,
+             "criticality": criticality}
+    if modelo == trilha.MODELO_REGRA:
+        saida["regra"] = REGRA_DE_RISCO
+    dec = trilha.decisao(
+        state.get("tenant_id"), state["user_id"], trilha.DOMINIO_VOLUNTARIO,
+        trilha.TIPO_RISCO, modelo, modelo_versao=versao,
+        entradas={"event": state["event"],
+                  "days_since_last": trilha._num(props.get("days_since_last")),
+                  "features_used_30d": trilha._num(props.get("features_used_30d")),
+                  "mrr": trilha._num(props.get("mrr")),
+                  "billing_profile": props.get("billing_profile")
+                  if isinstance(props.get("billing_profile"), str) else None},
+        saida=saida)
+    return trilha.anotar_decisao(
+        {**state, "risk_score": risk, "profile": profile, "criticality": criticality}, dec)
 
 
 async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -164,9 +185,32 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     p_estimado = rodada[0]["p_estimado"]
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
-    return {**state, "offer_type": offer,
-            "ofertas_consideradas": rodada[:N_CANDIDATAS],
-            "is_critical": is_critical_risk(state["risk_score"])}
+    dec = decisao_de_oferta(tenant, state["user_id"], state["profile"],
+                            state["risk_score"], mrr, rodada)
+    return trilha.anotar_decisao(
+        {**state, "offer_type": offer,
+         "ofertas_consideradas": rodada[:N_CANDIDATAS],
+         "is_critical": is_critical_risk(state["risk_score"])}, dec)
+
+
+def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list) -> dict:
+    """A linha da trilha para a escolha do bandit. Compartilhada com o
+    disparo em lote, que chama o bandit direto.
+
+    Entra o que o bandit viu (perfil, risco, MRR) e o que saiu (a oferta e a
+    probabilidade APRENDIDA de cada candidata). NÃO entram `alpha`/`beta`:
+    o estado do posterior é segredo comercial (Art. 20 §1º) e
+    `_sem_dado_cru` os tira de qualquer jeito.
+    """
+    return trilha.decisao(
+        tenant_id, user_id, trilha.DOMINIO_VOLUNTARIO, trilha.TIPO_OFERTA,
+        "offer_bandit",
+        entradas={"profile": profile, "risk_score": round(float(risk_score), 4),
+                  "mrr": trilha._num(mrr)},
+        saida={"offer_type": rodada[0]["offer"],
+               "p_estimado": rodada[0].get("p_estimado"),
+               "ofertas_consideradas": [{"offer": r["offer"], "p_estimado": r.get("p_estimado")}
+                                        for r in rodada[:N_CANDIDATAS]]})
 
 
 async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -220,10 +264,19 @@ async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         motivo = "sem telefone utilizável, sem histórico e fora do produto: canal de reserva"
         codigo, params = "escolha_reserva", {}
 
-    return {**state, "channel": channel, "on_site_now": on_site,
-            "canais_considerados": _canais_considerados(
-                channel, motivo, destino, criticality, prior, on_site,
-                codigo_escolha=codigo, params_escolha=params)}
+    # Trilha do Art. 20: entra SE há telefone, nunca o número.
+    dec = trilha.decisao(
+        state.get("tenant_id"), state["user_id"], trilha.DOMINIO_VOLUNTARIO,
+        trilha.TIPO_CANAL, trilha.MODELO_REGRA,
+        entradas={"criticality": criticality, "telefone_disponivel": bool(destino),
+                  "canal_historico": prior, "on_site_now": bool(on_site)},
+        saida={"channel": channel, "regra": f"choose_channel.{codigo}",
+               "motivo_da_regra": motivo, **params})
+    return trilha.anotar_decisao(
+        {**state, "channel": channel, "on_site_now": on_site,
+         "canais_considerados": _canais_considerados(
+             channel, motivo, destino, criticality, prior, on_site,
+             codigo_escolha=codigo, params_escolha=params)}, dec)
 
 
 def _canais_considerados(channel: str, motivo_escolha: str, destino, criticality: str,
@@ -700,6 +753,9 @@ async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # com as linhas gravadas ele é MENSURÁVEL em vez de invisível. Está
     # documentado no README_treino.md.
     registrar_ciclo(state)
+    # A trilha do Art. 20, numa transação só para as decisões deste ciclo.
+    # Best effort, como o ciclo: falha aqui não derruba a retenção.
+    trilha.registrar_decisoes(state.get("decisoes") or [])
     if state.get("offer_type") and state.get("accepted") is None:
         print("[CHURN-VOL] Ciclo registrado — aguardando retorno do cliente")
     print()

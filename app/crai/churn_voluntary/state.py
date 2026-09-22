@@ -47,3 +47,10 @@ class ChurnVoluntaryState(TypedDict):
     offer_sent: bool
     accepted:   Optional[bool]
     retained:   bool
+
+    # A trilha do Art. 20 (LGPD): uma entrada por decisão automatizada deste
+    # ciclo (risco, oferta, canal), montada NO NÓ que decide
+    # (`retention_log.decisao`) e gravada de uma vez no `update_crm`
+    # (`retention_log.registrar_decisoes`). Declarada aqui porque o LangGraph
+    # só carrega entre nós as chaves do schema.
+    decisoes: Optional[list]

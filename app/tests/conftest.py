@@ -104,3 +104,15 @@ def janelas_de_idempotencia_limpas():
     limpar_idempotencia()
     yield
     limpar_idempotencia()
+
+
+@pytest.fixture(autouse=True)
+def marca_da_regua_limpa():
+    """Mesma classe de acoplamento: `batch_scoring` guarda, por tenant, quando
+    foi o último cálculo em lote da régua (é o `regua_calculada_em` da API de
+    clientes). Um teste que pediu o `/insights` não pode deixar a marca para
+    o próximo, que espera `null` antes do primeiro cálculo."""
+    from crai.churn_voluntary import batch_scoring
+    batch_scoring.esquecer_calculos_da_regua()
+    yield
+    batch_scoring.esquecer_calculos_da_regua()

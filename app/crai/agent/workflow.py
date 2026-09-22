@@ -12,12 +12,14 @@ from ..config import (
     success_fee_pct,
 )
 from .pix_codes import CAUSA_LEGIVEL, CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
-from ..ml.failure_classifier import FailureClassifier
+from ..churn_voluntary import retention_log as trilha
+from ..ml.failure_classifier import MODELS_DIR as _MODELS_DIR, FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
 from ..ml.payday_inference import PaydayInference
 from .perfil_provider import provedor_padrao
 from ..dunning.pix_automatico_retry import (
     MAX_TENTATIVAS as MAX_TENTATIVAS_PIX,
+    ORIGEM_PAYDAY,
     PixAutomaticoRetryPolicy,
     fim_da_janela,
     inicio_da_janela,
@@ -44,6 +46,17 @@ _payday.load()
 # A política de Pix reaproveita o Payday Engine já carregado acima, em vez de
 # instanciar e recarregar o modelo por conta própria.
 _pix_retry = PixAutomaticoRetryPolicy(payday_inference=_payday)
+
+# Identidade dos artefatos para a trilha do Art. 20 (`modelo_versao`):
+# `<treinado_em>#<hash>`, calculada uma vez por processo. None quando o
+# modelo não carregou — a trilha grava NULL, não inventa versão.
+_VERSAO_CLASSIFICADOR = trilha.versao_do_artefato(
+    getattr(_classifier, "meta", None),
+    _MODELS_DIR / "xgb_failure_classifier.joblib", _MODELS_DIR / "rf_failure_classifier.joblib",
+) if getattr(_classifier, "is_fitted", False) else None
+_VERSAO_PAYDAY = trilha.versao_do_artefato(
+    getattr(_payday, "meta", None), _MODELS_DIR / "payday_lstm.pt",
+) if getattr(_payday, "is_fitted", False) else None
 
 # De onde vem tenure/histórico/LTV. Sintético enquanto não houver fonte real —
 # ver `crai/agent/perfil_provider.py` e `crai/agent/README_treino.md`. É
@@ -169,8 +182,30 @@ async def diagnose_failure(state: AgentState) -> AgentState:
     if shap_readable:
         print(f"[SHAP]  {shap_readable}")
 
+    # Trilha do Art. 20: o diagnóstico é a decisão de risco do involuntário.
+    # As contribuições são o SHAP JÁ calculado pelo classificador — k=5, no
+    # momento da decisão, nunca recalculado depois. Sem modelo (heurística),
+    # `modelo="regra"` e contribuições NULL: não se inventa contribuição.
+    com_modelo = result.get("method") != "heuristic"
+    contribuicoes = [
+        {"feature": f.get("feature"), "contribution_pct": f.get("contribution_pct"),
+         "direcao": f.get("direction")}
+        for f in (result.get("shap_explanation") or {}).get("features", [])[:5]
+    ] if com_modelo else None
+    saida_risco = {"recovery_score": result["recovery_score"],
+                   "p_recovery": result.get("p_recovery"),
+                   "eprofit": result.get("eprofit"),
+                   "recommend_action": result.get("recommend_action")}
+    if not com_modelo:
+        saida_risco["regra"] = "FailureClassifier.heuristica"
+    decisao_risco = trilha.decisao(
+        state.get("tenant_id"), state["customer_id"], trilha.DOMINIO_INVOLUNTARIO,
+        trilha.TIPO_RISCO, "failure_classifier" if com_modelo else trilha.MODELO_REGRA,
+        modelo_versao=_VERSAO_CLASSIFICADOR if com_modelo else None,
+        entradas=features, saida=saida_risco, contribuicoes=contribuicoes or None)
+
     return {
-        **state,
+        **trilha.anotar_decisao(state, decisao_risco),
         # Preservado para o log de ciclo (Sprint 6): é o X do dataset de treino.
         "features": features,
         "failure_cause": features["gateway_error_code"],
@@ -373,8 +408,19 @@ async def decide_recovery(state: AgentState) -> AgentState:
     for passo in raciocinio:
         print(f"[RACIOCÍNIO] {passo}")
 
-    return {**state, "estrategia": estrategia, "raciocinio": raciocinio,
-            "retry_count": usadas, "pix_janela_ate": prazo_vigente}
+    # Trilha do Art. 20: é regra (ReAct sobre causa + janela), sem modelo.
+    dec = trilha.decisao(
+        state.get("tenant_id"), state.get("customer_id"), trilha.DOMINIO_INVOLUNTARIO,
+        trilha.TIPO_RETENTATIVA, trilha.MODELO_REGRA,
+        entradas={"failure_cause": causa, "recovery_score": trilha._num(score),
+                  "eprofit": trilha._num(eprofit), "is_anomalous": bool(anomala),
+                  "payment_method": metodo, "tentativas_usadas": usadas,
+                  "limite_tentativas": limite},
+        saida={"estrategia": estrategia, "regra": "decide_recovery",
+               "motivo_da_regra": raciocinio[1].removeprefix("Pensamento: ")})
+    return trilha.anotar_decisao(
+        {**state, "estrategia": estrategia, "raciocinio": raciocinio,
+         "retry_count": usadas, "pix_janela_ate": prazo_vigente}, dec)
 
 
 async def schedule_retry_pix(state: AgentState) -> AgentState:
@@ -414,9 +460,17 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
 
     if not tentativas:
         print("[AGENT] Pix Automático: janela regulada esgotada — sem nova tentativa")
-        return {**state, "next_retry_at": None, "retry_exhausted": True,
-                "retry_count": usadas, "pix_janela_ate": prazo_vigente,
-                "pix_retry_schedule": []}
+        dec = trilha.decisao(
+            state.get("tenant_id"), state["customer_id"], trilha.DOMINIO_INVOLUNTARIO,
+            trilha.TIPO_RETENTATIVA, trilha.MODELO_REGRA,
+            entradas={"tentativas_usadas": usadas, "limite_tentativas": MAX_TENTATIVAS_PIX,
+                      "amount": trilha._num(state["amount"]), "payment_method": "pix_automatico"},
+            saida={"tentativas": [], "regra": "PixAutomaticoRetryPolicy.janela_esgotada",
+                   "motivo_da_regra": "a janela regulada do BACEN não comporta nova tentativa"})
+        return trilha.anotar_decisao(
+            {**state, "next_retry_at": None, "retry_exhausted": True,
+             "retry_count": usadas, "pix_janela_ate": prazo_vigente,
+             "pix_retry_schedule": []}, dec)
 
     plano = [
         {"numero": t.numero, "quando": t.quando, "valor": t.valor, "origem": t.origem}
@@ -451,18 +505,40 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
         for devida in retry_state.tentativas_devidas(registro, momento):
             await disparar_tentativa(registro, devida, momento)
 
-    return {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
-            "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
-            "pix_retry_schedule": plano}
+    # Trilha do Art. 20: QUANDO tentar de novo. As datas vêm do modelo de
+    # liquidez (payday) ou, no fallback, de uma distribuição uniforme — e a
+    # linha diz qual dos dois foi.
+    origem_datas = tentativas[0].origem
+    pelo_modelo = origem_datas == ORIGEM_PAYDAY
+    saida_plano = {"tentativas": [{"numero": t["numero"], "quando": t["quando"],
+                                   "valor": t["valor"], "origem": t["origem"]} for t in plano],
+                   "origem_das_datas": origem_datas, "janela_ate": prazo_final}
+    if not pelo_modelo:
+        saida_plano["regra"] = "PixAutomaticoRetryPolicy.fallback_uniforme"
+    dec = trilha.decisao(
+        state.get("tenant_id"), state["customer_id"], trilha.DOMINIO_INVOLUNTARIO,
+        trilha.TIPO_RETENTATIVA, "payday_inference" if pelo_modelo else trilha.MODELO_REGRA,
+        modelo_versao=_VERSAO_PAYDAY if pelo_modelo else None,
+        entradas={"tentativas_usadas": usadas, "limite_tentativas": MAX_TENTATIVAS_PIX,
+                  "amount": trilha._num(state["amount"]), "payment_method": "pix_automatico",
+                  "vencimento": vencimento},
+        saida=saida_plano)
+    return trilha.anotar_decisao(
+        {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
+         "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
+         "pix_retry_schedule": plano}, dec)
 
 
 async def trigger_dunning(state: AgentState) -> AgentState:
     """Executa a mensagem personalizada via LLM (LangGraph) — nunca aciona humano."""
     p_recovery = state.get("p_recovery", state.get("recovery_score", 50) / 100)
     result = await _dunning.run_campaign(state["customer_id"], state["failure_cause"],
-                                          p_recovery, state["amount"])
+                                          p_recovery, state["amount"],
+                                          tenant_id=state.get("tenant_id"))
     return {
         **state,
+        # As decisões da campanha (oferta + canal) entram na trilha do ciclo.
+        "decisoes": list(state.get("decisoes") or []) + list(result.get("decisoes") or []),
         "dunning_sent": result["sent"],
         "channel": result["channel"],
         "metodo_pagamento": result["payment_method"],
@@ -517,6 +593,8 @@ async def update_roi_dashboard(state: AgentState) -> AgentState:
     # entra depois, quando a confirmação do PSP chega; até lá `recovered` é 0,
     # que é a verdade: em produção ninguém sabe ainda.
     recovery_log.registrar_ciclo(state, tentativas_ja_disparadas(state))
+    # A trilha do Art. 20 deste ciclo, numa transação só. Best effort.
+    trilha.registrar_decisoes(state.get("decisoes") or [])
     return state
 
 

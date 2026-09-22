@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from . import batch_scoring, clientes_importados, insights_unificados, retention_log
 from .batch_scoring import CRITICIDADE_SEM_DADO
 from .offer_bandit import PROFILES
-from .risk_scorer import mrr_utilizavel
+from .risk_scorer import REGRA_DE_RISCO, identidade_do_modelo, mrr_utilizavel
 from . import voluntary_agent as va
 
 CRITERIO_INCLUSAO = ("critico", "alto")
@@ -190,6 +190,24 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
     rodada = va._bandit.classificar_ofertas(tenant_id, perfil, risco, mrr=mrr)
     oferta = rodada[0]["offer"]
 
+    # Trilha do Art. 20: o risco desta linha veio de `batch_scoring` (régua
+    # da base ou global, ou modelo treinado se ativo); a oferta, do bandit.
+    # O canal entra sozinho, por `va.choose_channel`. Montadas aqui, gravadas
+    # pelo lote inteiro em `disparar`.
+    modelo, versao = identidade_do_modelo()
+    saida_risco = {"risk_score": round(risco, 4), "criticality": criticidade}
+    if modelo == retention_log.MODELO_REGRA:
+        saida_risco["regra"] = (f"batch_scoring.{linha.get('origem_da_regua')}"
+                                if linha.get("origem_da_regua") else REGRA_DE_RISCO)
+    decisao_risco = retention_log.decisao(
+        tenant_id, _user_id(cid), retention_log.DOMINIO_VOLUNTARIO, retention_log.TIPO_RISCO,
+        modelo, modelo_versao=versao,
+        entradas={"days_since_last": retention_log._num(props["days_since_last"]),
+                  "features_used_30d": retention_log._num(props["features_used_30d"]),
+                  "mrr": retention_log._num(mrr), "billing_profile": perfil},
+        saida=saida_risco)
+    decisao_oferta = va.decisao_de_oferta(tenant_id, _user_id(cid), perfil, risco, mrr, rodada)
+
     estado = {
         "tenant_id": tenant_id, "user_id": _user_id(cid), "event": EVENTO_LOTE,
         "props": props, "risk_score": risco, "profile": perfil,
@@ -198,6 +216,7 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
         "channel": None, "on_site_now": props["on_site_now"],
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False,
+        "decisoes": [decisao_risco, decisao_oferta],
     }
     estado = await va.choose_channel(estado)
 
@@ -296,6 +315,10 @@ async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | No
     for relatorio, ciclo_id in zip(tratados, retention_log.registrar_ciclos(estados)):
         relatorio["envio"] = {"simulado": True, "registrado": ciclo_id is not None,
                               "ciclo_id": ciclo_id}
+    # A trilha do Art. 20 do lote inteiro — risco, oferta e canal de cada
+    # cliente tratado — na MESMA disciplina: uma transação, best effort.
+    retention_log.registrar_decisoes(
+        [d for e in estados for d in (e.get("decisoes") or [])])
 
     por_motivo: dict[str, int] = {}
     for p in pulados:

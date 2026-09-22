@@ -70,6 +70,8 @@ from .idempotencia import (
     EVENTOS_DE_FALHA,
     chave_do_evento,
 )
+from . import clientes as clientes_api
+from . import titular as titular_api
 from ..security.webhook_verification import (
     verify_stripe_signature,
     verify_segment_signature,
@@ -848,6 +850,14 @@ async def health():
 # tem. Autenticação é o JWT do Supabase (`accounts.get_tenant_id`), NÃO a
 # assinatura HMAC dos webhooks — são contratos diferentes para chamadores
 # diferentes (um frontend logado vs. um PSP/Segment assinando payload).
+
+# As rotas de sincronização um a um (`POST /clientes`, `/clientes/lote`,
+# `PATCH`, `DELETE`) moram em `api/clientes.py`; este arquivo só as monta.
+app.include_router(clientes_api.router)
+# O direito à explicação (LGPD Art. 20) para a CONTROLADORA — `api/titular.py`.
+# Autenticada por tenant; não existe rota pública para o titular.
+app.include_router(titular_api.router)
+
 
 @app.post("/clientes/importar")
 async def importar_clientes(
