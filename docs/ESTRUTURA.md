@@ -25,7 +25,7 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 | `data/`, `logs/` | Estado de execução e dados brutos. Gerados localmente, ignorados pelo git. |
 | `README.md` | Documentação técnica do backend. Tem dono. |
 | `README_treino.md` | O relatório de treino, gerado a partir dos JSONs de `docs/evidencia/treino/`. |
-| `requirements.txt`, `requirements-lock.txt` | Dependências; o lock trava as versões usadas nas medições. |
+| `requirements.txt`, `requirements-lock.txt` | **`requirements.txt` é a fonte da verdade**: fixa as versões gravadas nos `meta.json` de todos os artefatos publicados (numpy 1.26.4, sklearn 1.5.2, xgboost 2.1.1, torch 2.13.0+cpu, prophet 1.4.0). O lock é um `pip freeze` de outro ambiente (Python 3.12; numpy 2.4.6, shap 0.52.0) que nenhum artefato usou — mantido como registro, com cabeçalho dizendo isso; não instalar por ele. Versão fixada garante que o artefato recarrega igual e que classificador, liquidez e voluntário treinam igual (medido em três máquinas, quarta casa); **não** reproduz o autoencoder, que varia entre máquinas com as mesmas versões (`docs/LIMITACOES.md`). |
 | `test_pipeline.py` | Roda cenários dos dois pipelines de ponta a ponta, sem serviços externos. |
 
 ## `painel/` — o dashboard (ainda não construído)

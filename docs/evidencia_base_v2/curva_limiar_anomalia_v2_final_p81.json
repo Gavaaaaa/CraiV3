@@ -1,0 +1,193 @@
+{
+  "base": "v2",
+  "percentil_usado": 81.0,
+  "criterio": "maior percentil da curva com recall >= 0.7 (AnomalyDetector.escolher_percentil); o percentil e DERIVADO da curva deste artefato, nao uma constante — outra maquina pode dar outro percentil pelo mesmo criterio",
+  "percentil_pelo_criterio_nesta_curva": 81.0,
+  "recall_no_percentil_usado": 0.7121,
+  "curva": [
+    {
+      "percentil": 75.0,
+      "threshold": 0.116078,
+      "precision": 0.6796,
+      "recall": 0.8094,
+      "f1": 0.7388,
+      "taxa_flag": 0.4714
+    },
+    {
+      "percentil": 76.0,
+      "threshold": 0.120358,
+      "precision": 0.6844,
+      "recall": 0.7944,
+      "f1": 0.7353,
+      "taxa_flag": 0.4595
+    },
+    {
+      "percentil": 77.0,
+      "threshold": 0.124448,
+      "precision": 0.6896,
+      "recall": 0.7801,
+      "f1": 0.7321,
+      "taxa_flag": 0.4478
+    },
+    {
+      "percentil": 78.0,
+      "threshold": 0.128526,
+      "precision": 0.6948,
+      "recall": 0.7646,
+      "f1": 0.728,
+      "taxa_flag": 0.4356
+    },
+    {
+      "percentil": 79.0,
+      "threshold": 0.133712,
+      "precision": 0.7001,
+      "recall": 0.7483,
+      "f1": 0.7234,
+      "taxa_flag": 0.4231
+    },
+    {
+      "percentil": 80.0,
+      "threshold": 0.139183,
+      "precision": 0.7048,
+      "recall": 0.729,
+      "f1": 0.7167,
+      "taxa_flag": 0.4094
+    },
+    {
+      "percentil": 81.0,
+      "threshold": 0.144647,
+      "precision": 0.7106,
+      "recall": 0.7121,
+      "f1": 0.7113,
+      "taxa_flag": 0.3966
+    },
+    {
+      "percentil": 82.0,
+      "threshold": 0.150245,
+      "precision": 0.7164,
+      "recall": 0.6943,
+      "f1": 0.7052,
+      "taxa_flag": 0.3836
+    },
+    {
+      "percentil": 83.0,
+      "threshold": 0.157317,
+      "precision": 0.7206,
+      "recall": 0.6695,
+      "f1": 0.6941,
+      "taxa_flag": 0.3677
+    },
+    {
+      "percentil": 84.0,
+      "threshold": 0.164105,
+      "precision": 0.7264,
+      "recall": 0.6484,
+      "f1": 0.6852,
+      "taxa_flag": 0.3534
+    },
+    {
+      "percentil": 85.0,
+      "threshold": 0.17215,
+      "precision": 0.733,
+      "recall": 0.6287,
+      "f1": 0.6769,
+      "taxa_flag": 0.3395
+    },
+    {
+      "percentil": 86.0,
+      "threshold": 0.180816,
+      "precision": 0.7389,
+      "recall": 0.6049,
+      "f1": 0.6652,
+      "taxa_flag": 0.324
+    },
+    {
+      "percentil": 87.0,
+      "threshold": 0.191186,
+      "precision": 0.7446,
+      "recall": 0.5787,
+      "f1": 0.6513,
+      "taxa_flag": 0.3076
+    },
+    {
+      "percentil": 88.0,
+      "threshold": 0.203647,
+      "precision": 0.7496,
+      "recall": 0.5482,
+      "f1": 0.6333,
+      "taxa_flag": 0.2895
+    },
+    {
+      "percentil": 89.0,
+      "threshold": 0.216921,
+      "precision": 0.7571,
+      "recall": 0.5235,
+      "f1": 0.619,
+      "taxa_flag": 0.2737
+    },
+    {
+      "percentil": 90.0,
+      "threshold": 0.232152,
+      "precision": 0.7651,
+      "recall": 0.4971,
+      "f1": 0.6027,
+      "taxa_flag": 0.2572
+    },
+    {
+      "percentil": 91.0,
+      "threshold": 0.250197,
+      "precision": 0.7724,
+      "recall": 0.4666,
+      "f1": 0.5817,
+      "taxa_flag": 0.2391
+    },
+    {
+      "percentil": 92.0,
+      "threshold": 0.274066,
+      "precision": 0.781,
+      "recall": 0.4357,
+      "f1": 0.5594,
+      "taxa_flag": 0.2208
+    },
+    {
+      "percentil": 93.0,
+      "threshold": 0.299236,
+      "precision": 0.7918,
+      "recall": 0.4067,
+      "f1": 0.5374,
+      "taxa_flag": 0.2033
+    },
+    {
+      "percentil": 94.0,
+      "threshold": 0.325957,
+      "precision": 0.8039,
+      "recall": 0.3758,
+      "f1": 0.5122,
+      "taxa_flag": 0.185
+    },
+    {
+      "percentil": 95.0,
+      "threshold": 0.359552,
+      "precision": 0.817,
+      "recall": 0.3408,
+      "f1": 0.481,
+      "taxa_flag": 0.1651
+    },
+    {
+      "percentil": 96.0,
+      "threshold": 0.415198,
+      "precision": 0.8237,
+      "recall": 0.2854,
+      "f1": 0.424,
+      "taxa_flag": 0.1372
+    },
+    {
+      "percentil": 97.0,
+      "threshold": 0.478626,
+      "precision": 0.8313,
+      "recall": 0.2258,
+      "f1": 0.3552,
+      "taxa_flag": 0.1075
+    }
+  ]
+}

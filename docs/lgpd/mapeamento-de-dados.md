@@ -81,7 +81,7 @@ Onde: `app/data/recovery_cycles.db` (SQLite local, fora do git). Origem:
 | `ciclos_recuperacao.tenure_months`, `avg_ticket`, `payment_history_score`, `failure_count_90d`, `ltv_estimated` | sim (financeiro/comportamento) — **hoje vêm de `_perfil_simulado`, sintéticos** | não | contrato | 5 anos | — (só o SHAP local) |
 | `ciclos_recuperacao.invoice_amount`, `amount` | sim (financeiro) | não | contrato | 5 anos | HubSpot (`amount`); Anthropic (valor, no prompt); Pagar.me (`amount`, no reenvio) |
 | `ciclos_recuperacao.day_of_month`, `hour_of_day`, `day_of_week`, `attempt_count` | fraco (deriváveis da transação) | não | contrato | 5 anos | — |
-| `ciclos_recuperacao.gateway_error_code`, `card_brand`, `failure_cause` | sim (situação financeira: "sem saldo") | não | contrato | 5 anos | HubSpot (`failure_cause`); Anthropic (`failure_cause`, no prompt) |
+| `ciclos_recuperacao.gateway_error_code`, `metodo_pagamento`, `card_brand` (legada, NULL desde 22/09/2026), `failure_cause` | sim (situação financeira: "sem saldo") | não | contrato | 5 anos | HubSpot (`failure_cause`); Anthropic (`failure_cause`, no prompt) |
 | `ciclos_recuperacao.recovery_score`, `p_recovery`, `eprofit`, `estrategia`, `tentativas_planejadas` | sim (perfilamento, art. 20) | não | legítimo interesse | 5 anos | HubSpot (`recovery_score`) |
 | `ciclos_recuperacao.recovered`, `desfecho_em`, `tentativas_usadas`, `custo_total`, `success_fee` | sim (desfecho financeiro) | não | contrato | 5 anos | HubSpot (estágio) |
 
@@ -140,7 +140,7 @@ preciso casar por `timestamp`.
 
 | pipeline | vetor de entrada | contém CPF / telefone / e-mail / chave Pix? |
 |---|---|---|
-| `failure_classifier` (XGB + RF) | 9 numéricas + `gateway_error_code`, `card_brand` (`ALL_FEATURES`) | **não** |
+| `failure_classifier` (XGB + RF) | 9 numéricas + `gateway_error_code`, `metodo_pagamento` (`ALL_FEATURES_V2`; artefato da base v2 desde 22/09/2026) | **não** |
 | `anomaly_detector` (autoencoder) | `BEHAVIORAL_FEATURES` (12: tenure, mrr, seats, logins, adoção, sessão, api calls, dias sem login, tickets, falhas de pagamento, nps) | **não** |
 | `payday_inference` (LSTM + Prophet) | série de liquidez sintética por cliente (`generate_liquidity_series`) | **não** |
 | `voluntary_risk` (candidato) e `risk_scorer` (regras / régua da base) | `FEATURES_DE_RISCO`: dias sem login, funcionalidades, mrr, 3 one-hots de evento | **não** |

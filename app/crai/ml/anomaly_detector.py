@@ -52,23 +52,40 @@ MODELS_DIR = BASE_DIR / "models"
 # diferentes e se separavam ~6x no erro; em p95 o detector media recall 0,97
 # e precisão 0,93 — o percentil nem era uma escolha.
 THRESHOLD_PERCENTIL_V1 = 95.0
-# Base v2 (Bloco B, medido em 20/09/2026): p83. Na v2 o perfil de conta vem
-# da mesma população para os dois grupos, a anomalia está só no
-# comportamento, a separação cai para ~3,5x e p95 deixa o recall em 0,35
-# (precisão 0,82) — dois terços dos anômalos passam. A curva precisão x
-# recall x F1 varrida em `curva_limiar` (p75..p97, gravada em
-# models/v2/curva_limiar_anomalia.json) dá, na base v2 de 120.000 clientes:
-#   p75  rec 0,848  prec 0,690  F1 0,761  (melhor F1, mas marca 49% da avaliação)
-#   p83  rec 0,706  prec 0,731  F1 0,719
-#   p85  rec 0,657  prec 0,742  F1 0,697
-#   p90  rec 0,518  prec 0,772  F1 0,620
-#   p95  rec 0,351  prec 0,821  F1 0,492
-# CRITÉRIO: o MAIOR percentil cujo recall fica acima de 0,70 (`escolher_percentil`,
-# recall_minimo=0,70). Maior percentil = limiar mais alto = menos falsos
-# positivos; o piso de recall impede o detector de "acertar" ficando calado.
-# O critério era uma sugestão a confirmar com a curva; a curva confirmou que
-# ele é alcançável, e p83 é o ponto. Ver RELATORIO_B.md §5.
-THRESHOLD_PERCENTIL_V2 = 83.0
+# Base v2: o percentil NÃO é uma constante escolhida — é a SAÍDA de um
+# critério aplicado à curva do artefato que está em produção. Na v2 o perfil
+# de conta vem da mesma população para os dois grupos, a anomalia está só no
+# comportamento, a separação cai para ~3,3x e p95 deixa o recall em ~0,34
+# (precisão ~0,82) — dois terços dos anômalos passam.
+#
+# CRITÉRIO (`escolher_percentil`, recall_minimo=RECALL_MINIMO_LIMIAR_V2): o
+# MAIOR percentil da curva precisão x recall x F1 (`curva_limiar`, p75..p97,
+# gravada em models/curva_limiar_anomalia.json) cujo recall fica acima de
+# 0,70. Maior percentil = limiar mais alto = menos falsos positivos; o piso de
+# recall impede o detector de "acertar" ficando calado.
+#
+# O critério é o mesmo em qualquer máquina; o percentil que ele devolve NÃO
+# é. O autoencoder (Adam + dropout + early stopping com tolerância 1e-5) é
+# sensível à ordem de acumulação de ponto flutuante, que muda com o BLAS e o
+# conjunto de instruções da CPU — mesma base (sha256 conferidos), mesma
+# semente e mesmas versões de torch/numpy/sklearn deram ROC-AUC 0,8684 e
+# 0,8694 nas rodadas de 20/09/2026 e 0,8582 na máquina que treinou o
+# artefato promovido em 22/09/2026 (determinístico dentro de cada máquina:
+# quatro rodadas idênticas aqui, com 1, 6 e 12 threads). Classificador,
+# liquidez e voluntário reproduzem na quarta casa entre as mesmas máquinas.
+# Fixar versões no requirements.txt não basta para o autoencoder.
+#
+# Na curva do artefato promovido (22/09/2026, 120.000 clientes):
+#   p75  rec 0,809  prec 0,680
+#   p81  rec 0,712  prec 0,711   <- maior percentil com recall >= 0,70
+#   p82  rec 0,694  prec 0,716
+#   p83  rec 0,670  prec 0,721   (era a saída do critério na máquina de 20/09)
+#   p90  rec 0,497  prec 0,765
+#   p95  rec 0,341  prec 0,817
+# Quem retreinar em outra máquina deve reaplicar o critério à curva nova e
+# regravar esta constante e `docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura.json`;
+# `test_populacao_compartilhada.py::TestLimiarAnomaliaV2` cobra a coerência.
+THRESHOLD_PERCENTIL_V2 = 81.0
 RECALL_MINIMO_LIMIAR_V2 = 0.70
 PERCENTIS_CURVA_LIMIAR = tuple(range(75, 98))       # 75, 76, ..., 97
 

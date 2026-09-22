@@ -95,3 +95,6 @@ htmlcov/
 # compartilhado.
 .claude/
 /RELATORIO_*.md
+/TAREFA_*.md
+/ADENDO_*.md
+/Claude outputs/

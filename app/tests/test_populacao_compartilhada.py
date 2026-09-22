@@ -448,12 +448,22 @@ class TestFeaturesDoArtefato:
 class TestLimiarAnomaliaV2:
 
     def test_constante_v2_e_o_maior_percentil_com_recall_acima_do_piso(self):
+        """A constante é a SAÍDA do critério sobre a curva publicada — não um número.
+
+        A curva em `docs/evidencia_base_v2/` é a do artefato promovido
+        (22/09/2026, p81). O autoencoder não reproduz entre máquinas (ver
+        `docs/LIMITACOES.md`): quem retreinar noutra máquina reaplica o
+        critério, regrava a curva e a constante, e este teste é o que obriga
+        as três coisas a andarem juntas (na máquina de 20/09 o critério dava
+        p83; o `curva_limiar_anomalia_v2_varredura_20_09_p83.json` ao lado
+        guarda essa curva).
+        """
         if not CURVA_MEDIDA.exists():
             pytest.skip(f"{CURVA_MEDIDA} ausente")
         curva = json.loads(CURVA_MEDIDA.read_text(encoding="utf-8"))["curva_limiar"]
         escolhido = anomaly_module.AnomalyDetector.escolher_percentil(
             curva, anomaly_module.RECALL_MINIMO_LIMIAR_V2)
-        assert escolhido["percentil"] == anomaly_module.THRESHOLD_PERCENTIL_V2 == 83.0
+        assert escolhido["percentil"] == anomaly_module.THRESHOLD_PERCENTIL_V2 == 81.0
         assert escolhido["recall"] >= anomaly_module.RECALL_MINIMO_LIMIAR_V2
         # p95 (a constante da v1) deixa dois terços dos anômalos passarem na v2.
         p95 = next(c for c in curva if c["percentil"] == anomaly_module.THRESHOLD_PERCENTIL_V1)

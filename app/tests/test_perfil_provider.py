@@ -132,7 +132,9 @@ class TestSubstituibilidade:
         assert features["ltv_estimated"] == 12345.0
         # E o resto do caminho de features segue intacto.
         assert features["gateway_error_code"] == "insufficient_funds"
-        assert features["card_brand"] == "n/a"
+        # Bloco H: o artefato v2 declara `metodo_pagamento`, não `card_brand`.
+        assert features["metodo_pagamento"] == "pix_automatico"
+        assert "card_brand" not in features
         assert features["attempt_count"] == 1
 
     def test_qualquer_objeto_com_o_metodo_satisfaz_o_protocolo(self):
@@ -242,9 +244,9 @@ class TestPipelineIntacto:
              "codigo_falha": "AM04"},
             VALOR, customer_id="RN_intacto",
         )
-        from crai.ml.failure_classifier import ALL_FEATURES
+        from crai.ml.failure_classifier import ALL_FEATURES_V2
 
-        faltando = set(ALL_FEATURES) - set(features)
+        faltando = set(ALL_FEATURES_V2) - set(features)
         assert not faltando, f"features ausentes após o refactor: {sorted(faltando)}"
         assert features["ltv_estimated"] > 0
 

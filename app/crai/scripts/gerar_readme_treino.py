@@ -228,7 +228,8 @@ def gerar() -> str:
         ("ROC-AUC (saudaveis held-out + anomalos)", "roc_auc"), ("Average precision", "average_precision"),
         ("Precisao @ p95", "precision"), ("Recall @ p95", "recall"), ("F1", "f1"),
         ("Threshold (p95 do erro saudavel)", "threshold"), ("Separacao anomalo/saudavel", "separation_ratio"),
-        ("Epocas", "epochs_trained"), ("Saudaveis no treino", "n_train_healthy")]))
+        ("Epocas", "epochs_trained"), ("Saudaveis no treino", "n_train_healthy"),
+        ("Saudaveis held-out na avaliacao (n)", "n_val_healthy"), ("Anomalos na avaliacao (n)", "n_anomalous")]))
     w("### 3.3 PaydayInference (LSTM 0,6 + Prophet 0,4)\n")
     w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "payday", [
@@ -236,13 +237,15 @@ def gerar() -> str:
         ("ROC-AUC diario — ensemble", "roc_auc_ensemble"), ("MAE da janela otima (dias) — ensemble", "mae_dias_ensemble"),
         ("MAE da janela otima (dias) — heuristica de dia fixo", "mae_dias_heuristica"),
         ("Acerto exato", "hit_exato_ensemble"), ("Acerto +-1 dia", "hit_1d_ensemble"),
-        ("Janelas de treino", "n_janelas_treino"), ("Clientes de teste", "n_clientes_teste")]))
+        ("Janelas de treino", "n_janelas_treino"), ("Clientes de teste", "n_clientes_teste"),
+        ("Janelas de teste (n da AUC diaria)", "n_janelas_teste")]))
     w("### 3.4 risk_scorer voluntario — candidato (GradientBoosting sobre `FEATURES_DE_RISCO`)\n")
     w(marca_rodada)
     w(tabela_rodadas(baixa, alta, "voluntario", [
         ("AUC vs rotulo ruidoso", "auc_vs_rotulo"), ("AUC das PROPRIAS REGRAS vs rotulo (teto)", "auc_regra_vs_rotulo"),
         ("Brier", "brier"), ("MAE entre p(modelo) e regra", "mae_vs_regra"),
-        ("Correlacao p(modelo) x regra", "corr_vs_regra"), ("Eventos de treino", "n_treino")]))
+        ("Correlacao p(modelo) x regra", "corr_vs_regra"), ("Eventos de treino", "n_treino"),
+        ("Eventos de teste (n da AUC)", "n_teste")]))
     w("O candidato **nao esta ativo**: o treino grava `voluntary_risk_candidato.joblib`, que "
       "`carregar_modelo()` nao le. Promover ao nome que o scorer carrega "
       "(`voluntary_risk.joblib`) e um passo explicito — `VoluntaryRiskModel.ativar()` ou "
@@ -290,11 +293,11 @@ def gerar() -> str:
       "com dado real. Resultado completo em `docs/evidencia/treino/fora_do_dominio.json`.\n")
     w("| Modelo | Em dominio (sintetico calibrado, holdout novo) | Fora do dominio (dado real) | Rotulo real | Leitura |")
     w("|---|---|---|---|---|")
-    w(f"| AnomalyDetector | ROC-AUC {_f(an_ed['roc_auc'])} (flag {_f(an_ed['taxa_flag'] * 100, 1)}%) | ROC-AUC {_f(an_fd['roc_auc_erro_vs_churn'])} (flag {_f(an_fd['taxa_flag'] * 100, 1)}%, recall de churn {_f(an_fd['recall_churn_no_flag'] * 100, 1)}%) | `Churn` da Fonte E, {an_fd['dataset'].split(',')[1].strip()} | {an_fd['nota']} |")
-    w(f"| risk_scorer — regras fixas | (as regras nao tem holdout) | ROC-AUC {_f(vo['regras_fixas']['roc_auc_vs_churn'])} vs churn; risco medio {_f(vo['regras_fixas']['risco_medio'], 3)} | `Churn` da Fonte E | abaixo de 0,5: no doador quem cancela pediu MAIS recentemente, o inverso da regra de inatividade — a regra e de SaaS por assinatura, o dado e de e-commerce |")
-    w(f"| risk_scorer — candidato | AUC {_f(vo['candidato']['em_dominio_auc_vs_rotulo'])} vs rotulo ruidoso | ROC-AUC {_f(vo['candidato']['fora_do_dominio_auc_vs_churn'])} vs churn | `Churn` da Fonte E | {vo['candidato']['nota']} |")
+    w(f"| AnomalyDetector | ROC-AUC {_f(an_ed['roc_auc'])} (flag {_f(an_ed['taxa_flag'] * 100, 1)}%; {an_ed['dataset']}) | ROC-AUC {_f(an_fd['roc_auc_erro_vs_churn'])} ({an_fd['dataset']}; flag {_f(an_fd['taxa_flag'] * 100, 1)}%, recall de churn {_f(an_fd['recall_churn_no_flag'] * 100, 1)}%) | `Churn` da Fonte E, {an_fd['dataset'].split(',')[1].strip()} | {an_fd['nota']} |")
+    w(f"| risk_scorer — regras fixas | (as regras nao tem holdout) | ROC-AUC {_f(vo['regras_fixas']['roc_auc_vs_churn'])} vs churn ({vo['regras_fixas']['dataset']}); risco medio {_f(vo['regras_fixas']['risco_medio'], 3)} | `Churn` da Fonte E | abaixo de 0,5: no doador quem cancela pediu MAIS recentemente, o inverso da regra de inatividade — a regra e de SaaS por assinatura, o dado e de e-commerce |")
+    w(f"| risk_scorer — candidato | AUC {_f(vo['candidato']['em_dominio_auc_vs_rotulo'])} vs rotulo ruidoso (treino {vo['candidato']['n_amostras_treino']} eventos, holdout {alta['voluntario']['n_teste']}) | ROC-AUC {_f(vo['candidato']['fora_do_dominio_auc_vs_churn'])} vs churn ({vo['regras_fixas']['dataset']}) | `Churn` da Fonte E | {vo['candidato']['nota']} |")
     w(f"| FailureClassifier | p_recovery mediana {_f(cl['em_dominio']['p_recovery']['mediana'])} (p25-p75 {_f(cl['em_dominio']['p_recovery']['p25'])}-{_f(cl['em_dominio']['p_recovery']['p75'])}) | p_recovery mediana {_f(cl['fora_do_dominio']['p_recovery']['mediana'])} (p25-p75 {_f(cl['fora_do_dominio']['p_recovery']['p25'])}-{_f(cl['fora_do_dominio']['p_recovery']['p75'])}) nas 300 transacoes reais da Olist | **nao existe** | {cl['fora_do_dominio']['nota']} |")
-    w("| PaydayInference | ROC-AUC diario " + _f(alta['payday']['roc_auc_ensemble']) + " | nao aplicavel | nao existe doador de serie de saldo | fica so a metrica em dominio, declarada como tal |")
+    w("| PaydayInference | ROC-AUC diario " + _f(alta['payday']['roc_auc_ensemble']) + f" ({alta['payday']['n_clientes_teste']} clientes de teste, {alta['payday']['n_janelas_teste']} janelas) | nao aplicavel | nao existe doador de serie de saldo | fica so a metrica em dominio, declarada como tal |")
     w("")
     w("**A queda e o teste funcionando.** Um autoencoder que caisse de 0,98 para 0,90 num "
       "rotulo real de outro dominio seria suspeito; cair para ~0,5 e o que se espera de um "
@@ -384,6 +387,13 @@ def gerar() -> str:
       "python -m crai.scripts.sanity_check_fora_do_dominio --saida fora.json\n"
       "python -m crai.scripts.gerar_readme_treino            # regera este arquivo\n"
       "pytest tests/ -q\n```\n")
+    w("O que \"reproduzir\" quer dizer aqui: com as versoes fixadas, a mesma base e a mesma "
+      "semente, classificador, liquidez e voluntario devolvem a mesma metrica na quarta casa "
+      "em outra maquina (medido em tres). O **autoencoder nao**: early stopping sensivel a "
+      "ordem de acumulacao de float, que muda com BLAS e conjunto de instrucoes — mesma "
+      "base v2, mesma semente e mesmas versoes deram ROC-AUC 0,8684 / 0,8694 (20/09/2026) e "
+      "0,8582 (22/09/2026). Fixar versao nao basta para ele; o percentil do limiar e "
+      "recalculado pelo criterio declarado em cada maquina (`docs/LIMITACOES.md`).\n")
     w("Dado bruto (Olist, E-Commerce) fica em `data/real/` fora do git e e baixado de "
       "espelhos publicos com SHA-256 conferido; `data/real/PROVENIENCIA.json` (copia em "
       "`docs/evidencia/treino/`) registra hashes, contagens, nulos e o `describe()` de cada "

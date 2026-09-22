@@ -451,8 +451,18 @@ def main(argv=None):
     anomaly = treinar_anomaly(args.anomaly_samples, args.fonte, b.get("comportamental"), percentil)
     if v2:
         with open(models_dir / CURVA_LIMIAR_ARQUIVO, "w", encoding="utf-8") as f:
+            escolhido = anomaly_module.AnomalyDetector.escolher_percentil(
+                anomaly["curva_limiar"], anomaly_module.RECALL_MINIMO_LIMIAR_V2)
             json.dump({"base": "v2", "percentil_usado": anomaly["threshold_percentile"],
-                       "criterio": "ver THRESHOLD_PERCENTIL_V2 em crai/ml/anomaly_detector.py",
+                       "criterio": (f"maior percentil da curva com recall >= "
+                                    f"{anomaly_module.RECALL_MINIMO_LIMIAR_V2} "
+                                    "(AnomalyDetector.escolher_percentil); o percentil e "
+                                    "DERIVADO da curva deste artefato, nao uma constante — "
+                                    "outra maquina pode dar outro percentil pelo mesmo criterio"),
+                       "percentil_pelo_criterio_nesta_curva": escolhido["percentil"],
+                       "recall_no_percentil_usado": next(
+                           (c["recall"] for c in anomaly["curva_limiar"]
+                            if c["percentil"] == anomaly["threshold_percentile"]), None),
                        "curva": anomaly["curva_limiar"]},
                       f, ensure_ascii=False, indent=2)
         print(f"[ANOMALY] Curva de limiar gravada em {models_dir / CURVA_LIMIAR_ARQUIVO}")

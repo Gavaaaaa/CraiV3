@@ -51,7 +51,23 @@ pyarrow==25.0.1
 # com outra carrega com aviso, carrega errado em silencio ou nao carrega. As
 # versoes usadas em cada treino ficam gravadas no meta.json do artefato
 # (`crai/ml/calibracao.versoes_bibliotecas`), e `load()` avisa nominalmente
-# quando o ambiente diverge. Os valores abaixo sao os do requirements-lock.txt.
+# quando o ambiente diverge.
+#
+# ESTE ARQUIVO E A FONTE DA VERDADE das versoes. Os valores de ML abaixo sao os
+# gravados nos meta.json dos artefatos promovidos (22/09/2026) e das duas
+# rodadas de evidencia de 20/09/2026 — as tres com numpy 1.26.4, scikit-learn
+# 1.5.2, xgboost 2.1.1, torch 2.13.0+cpu, shap 0.46.0, joblib 1.4.2, prophet
+# 1.4.0. O `requirements-lock.txt` fixa numpy 2.4.6 / shap 0.52.0 / joblib
+# 1.5.3: e um freeze de outro ambiente (Python 3.12) que nenhum artefato
+# publicado usou; esta la como registro, com cabecalho dizendo isso, e nao
+# deve ser instalado. Onde os dois divergem, vale este.
+#
+# O que versao fixada NAO garante: reproduzir o TREINO do autoencoder em outra
+# maquina. Com exatamente estas versoes, mesma base e mesma semente, o
+# autoencoder deu ROC-AUC 0,8684 / 0,8694 (20/09/2026) e 0,8582 (22/09/2026):
+# early stopping sensivel a ordem de acumulacao de float, que muda com BLAS e
+# conjunto de instrucoes. Classificador, liquidez e voluntario reproduzem na
+# quarta casa nas mesmas maquinas. Ver docs/LIMITACOES.md.
 torch==2.13.0
 prophet==1.4.0
 

@@ -1,0 +1,13 @@
+{
+  "o_que_e": "hash canonico (sha256 do conteudo, nao do arquivo) das cinco tabelas da base v2 de producao, calculado em 22/09/2026 com crai.scripts.gerar_bases_v2.hash_canonico_de_pasta sobre os parquets cujos sha256 batem com MANIFESTO.json. O MANIFESTO.json ao lado NAO tem este campo porque a base foi gerada em 20/09/2026, antes de o campo existir, e nao foi regenerada de proposito (regenerar trocaria os sha256 da cadeia de auditoria). A partir da proxima geracao o gerador grava hash_canonico dentro do proprio manifesto.",
+  "metodo": "sha256 do CSV canonico: colunas na ordem do DataFrame, cabecalho, sem indice, float com '%.6f', datetime como ISO-8601 'YYYY-MM-DDTHH:MM:SS.ffffff', inteiro como inteiro, booleano como True/False, fim de linha '\\n', UTF-8; blocos de 200.000 linhas (crai.scripts.gerar_bases_v2.hash_canonico)",
+  "como_conferir": "python -c \"from crai.scripts.gerar_bases_v2 import hash_canonico_de_pasta; print(hash_canonico_de_pasta('data/v2'))\" (de app/); uma base regenerada em outro pandas tem outros sha256 e ESTES hashes",
+  "semente": 42,
+  "hash_canonico": {
+    "populacao": "1cd4a2d65ef8ba28d4c3561beebd6c6aa801771dc7ec26de9a2c734684f294d8",
+    "classificador": "e4a5f45c5ed83584c3c74683257fb8a18a5d1e725da962d13ef8ab5bfa7baa8a",
+    "comportamental": "0e85c8c487ea18752e4b05ccb893fa3ecb3c9b464e35ce3274dcced41521ddf1",
+    "liquidez": "64769169f2b12320b39bffbea2854511cdc630307038a230d7a2360da5b26ae5",
+    "voluntario": "d60d3f9ac9da87de6f95b63bd3cb985cce624046dbc05400d02a6774033a94a5"
+  }
+}

@@ -44,7 +44,7 @@ from crai.dunning.recovery_log import (
     registrar_ciclo,
     registrar_recuperacao,
 )
-from crai.ml.failure_classifier import ALL_FEATURES
+from crai.ml.failure_classifier import ALL_FEATURES, ALL_FEATURES_V2
 
 VALOR = 299.90
 TENANT = "empresa_log"
@@ -83,7 +83,7 @@ def _state(customer_id="RN_log", e2e="E_log", **extra) -> dict:
             "avg_ticket": 310.0, "payment_history_score": 0.83,
             "failure_count_90d": 1, "hour_of_day": 10, "day_of_week": 2,
             "attempt_count": 1, "gateway_error_code": "insufficient_funds",
-            "card_brand": "n/a", "ltv_estimated": 2100.0,
+            "metodo_pagamento": "pix_automatico", "ltv_estimated": 2100.0,
         },
     }
     base.update(extra)
@@ -95,10 +95,13 @@ class TestOContratoDoDataset:
     def test_as_features_do_log_cobrem_as_do_classificador(self):
         """Se o classificador ganhar uma feature e o log não, o treino recebe
         uma coluna a menos — e ninguém percebe até o `fit` reclamar de shape."""
-        faltando = set(ALL_FEATURES) - set(FEATURES_DO_DATASET)
-        assert not faltando, (
-            f"features consumidas pelo classificador e ausentes do dataset: "
-            f"{sorted(faltando)}")
+        # As duas listas: a v2 é a do artefato em produção (Bloco H), a v1 é
+        # a que `train_all --base v1` ainda consome.
+        for lista in (ALL_FEATURES_V2, ALL_FEATURES):
+            faltando = set(lista) - set(FEATURES_DO_DATASET)
+            assert not faltando, (
+                f"features consumidas pelo classificador e ausentes do dataset: "
+                f"{sorted(faltando)}")
 
     def test_o_ltv_entra_mesmo_nao_sendo_feature_de_treino(self):
         """LTV não é X do modelo, mas é o que faz o e-Profit — sem ele a linha

@@ -60,6 +60,11 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   pipeline Pix a bandeira entra como `"n/a"` (`workflow.py`), e as causas
   `limit_exceeded` / `authorization_revoked`, que não existem no treino, caem no
   índice "desconhecido" do encoder (`len(classes_)`, `failure_classifier.py`).
+  *(Resolvido em 22/09/2026, Bloco H: o artefato em `app/models/` passou a ser o da
+  base v2, cujo vocabulário é o de Pix — `metodo_pagamento` no lugar de `card_brand`,
+  e `limit_exceeded` / `authorization_revoked` presentes no treino. O caminho de servir
+  fornece `metodo_pagamento` e um teste de ponta a ponta com o artefato real,
+  `app/tests/test_servir_v2.py`, garante que nada chega ao `predict` como ausente.)*
 - *(rodada de 11/09/2026)* AUC medida: **0,6669** (n=6.000, `rodada_alta.json`) e 0,6695 (n=3.000,
   `rodada_baixa.json`) — **abaixo do piso de 0,70** que o repositório exigia
   na época (faixa [0,70; 0,92] em `app/tests/test_metricas_declaradas.py`). Desde
@@ -72,15 +77,19 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   acurácia é 0,526 e o recall 0,919; a acurácia baixa é aceita porque quem decide
   é a regra de e-Profit, com recall operacional 1,0 no teste (0 recuperáveis
   perdidos em 1.200). Fora do domínio não existe rótulo e, portanto, não existe AUC.
-- *(rodada de 11/09/2026)* Autoencoder (ROC-AUC 0,981) e Payday Engine (ROC-AUC do ensemble 0,952; MAE
-  da janela 0,68 dia, contra 4,55 da heurística) foram avaliados dentro das
+- *(rodada de 11/09/2026)* Autoencoder (ROC-AUC 0,981; n=11.000 clientes, avaliado em
+  1.502 saudáveis held-out + 990 anômalos) e Payday Engine (ROC-AUC do ensemble 0,952; MAE
+  da janela 0,68 dia, contra 4,55 da heurística; n=1.200 clientes, 240 de teste, 2.400
+  janelas) foram avaliados dentro das
   próprias simulações de treino, não em produção (`rodada_alta.json`). No dado
-  real do E-Commerce Customer Churn o autoencoder cai para ROC-AUC 0,506; o
+  real do E-Commerce Customer Churn o autoencoder cai para ROC-AUC 0,506 (5.068
+  clientes com as 4 features presentes); o
   payday não tem doador público para ser checado (`fora_do_dominio.json`).
 - *(rodada de 11/09/2026)* O risco de churn voluntário ativo são **regras fixas** (`risk_scorer.py`). O
   candidato treinado não está ativo e não tem o que acrescentar hoje: o rótulo
   do dataset é gerado pelas próprias regras, com ruído. Por isso o candidato
-  chega a AUC 0,752 contra teto de 0,758 das regras (`rodada_alta.json`). No dado
+  chega a AUC 0,752 contra teto de 0,758 das regras (n=4.000 eventos, 800 de teste;
+  `rodada_alta.json`). No dado
   real, regras 0,405 e candidato 0,430 (`fora_do_dominio.json`).
 - O bandit de ofertas tem warm start de uma simulação de 6.000 rodadas, não de
   clientes reais (`app/crai/churn_voluntary/offer_bandit.py`).
@@ -90,6 +99,41 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   `Base-de-dados`** (NÃO VERIFICADO aqui) —, Olist (e-commerce) e E-Commerce
   Customer Churn (e-commerce, licença não declarada no Kaggle, uso acadêmico
   apenas, `PROVENIENCIA.json`).
+
+**Reprodutibilidade do autoencoder entre máquinas (medido em 22/09/2026, Bloco H):**
+
+- Mesma base v2 (cinco sha256 conferidos contra o `MANIFESTO.json`), mesma
+  semente 42, mesmas versões de biblioteca (torch 2.13.0+cpu, numpy 1.26.4,
+  scikit-learn 1.5.2, xgboost 2.1.1, prophet 1.4.0), e o autoencoder deu
+  **ROC-AUC 0,8684 e 0,8694** nas rodadas de 20/09/2026 e **0,8582** na máquina
+  que treinou o artefato promovido em 22/09/2026 (n=120.000 clientes nas três:
+  92.872 saudáveis de treino, 16.390 de validação, 10.738 anômalos). Classificador
+  (0,7096; 120.000 cobranças, holdout de 24.089), liquidez (0,9639; 10.000 clientes,
+  2.000 de teste) e voluntário (0,8288; 120.000 eventos, holdout de 24.061)
+  reproduziram **na quarta casa** nas três.
+- **A causa é hardware, não biblioteca.** O autoencoder treina com Adam,
+  dropout e early stopping com tolerância de 1e-5 na perda de validação. O
+  early stopping é sensível à ordem de acumulação de ponto flutuante, que muda
+  com o BLAS e o conjunto de instruções da CPU; uma diferença na décima casa
+  numa época decide se o treino para na época 60, 64 ou 68, e o modelo final é
+  outro. Dentro de cada máquina o treino é determinístico: quatro rodadas na
+  máquina de 22/09, com 1, 6 e 12 threads, deram exatamente 0,8582. A LSTM da
+  liquidez também é torch, mas treina 40 épocas fixas e reproduz.
+- **Fixar versões no `requirements.txt` NÃO é suficiente** para reproduzir o
+  autoencoder: as versões da máquina de 22/09 são exatamente as fixadas, e o
+  resultado ainda diverge. O que as versões fixadas garantem é que o artefato
+  gravado **recarrega** igual (`load()` + `conferir_meta`), e que classificador,
+  liquidez e voluntário treinam igual.
+- **Consequência, e a regra que segue dela:** o percentil do limiar do
+  autoencoder (`THRESHOLD_PERCENTIL_V2`) não é uma constante escolhida — é a
+  SAÍDA do critério "maior percentil da curva com recall acima de 0,70",
+  aplicado à curva do artefato em produção. Na máquina de 20/09 o critério deu
+  p83; na de 22/09, p81 (recall 0,7121, precisão 0,7106; p83 daria 0,6695,
+  abaixo do piso). Recalibrar ao trocar de máquina é o critério funcionando,
+  não uma concessão. Quem retreinar em outra máquina reaplica o critério e
+  regrava a constante e `docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura.json`;
+  `test_populacao_compartilhada.py::TestLimiarAnomaliaV2` e
+  `test_servir_v2.py::TestOLimiarDoAutoencoderPromovido` cobram a coerência.
 
 **Reprodutibilidade da amostra real (achado de 12/09/2026, pendência):**
 
@@ -127,7 +171,9 @@ regra que gerou os dados. Ruído deliberado no rótulo limita a AUC por constru�
 Uma execução anterior, com 6.000 amostras, deu AUC 0,669. Multiplicar a base por 6,7
 moveu a AUC em 0,0261. O achatamento indica que o limite não é falta de
 amostra. As duas execuções com 40.000 amostras, em máquinas e versões de Python
-diferentes, deram o mesmo valor — o treino é reproduzível.
+diferentes, deram o mesmo valor — o treino **do classificador** é reproduzível
+(o mesmo vale para liquidez e voluntário, na quarta casa, em três máquinas; **não**
+vale para o autoencoder — ver "Reprodutibilidade do autoencoder entre máquinas").
 
 **O gate de 0,70 exige uma precisão que a medição não sustenta.** Com 8.000 linhas
 de teste, o erro padrão da AUC é da ordem de 0,006: 0,6951 e 0,70 não são
@@ -140,9 +186,24 @@ metade do próprio erro da medida.
 caro é deixar de tentar quando valia a pena.
 
 **O modelo de risco voluntário mede o próprio teto.** O candidato treinado alcança AUC
-0,7503 contra um teto das regras de 0,7527, com correlação
-0,9938 com a fórmula que gerou os rótulos. Ele aprendeu a reproduzir a regra, e
-não há mais informação a extrair. Por isso não foi promovido.
+0,7503 contra um teto das regras de 0,7527 (base v1, 30.000 eventos, holdout de 6.000),
+com correlação 0,9938 com a fórmula que gerou os rótulos. Ele aprendeu a reproduzir a
+regra, e não há mais informação a extrair. Por isso não foi promovido.
+*(Base v2, 22/09/2026, 120.000 eventos, holdout por cliente de 24.061: AUC 0,8288 contra
+teto das regras 0,8295, correlação 0,9974 — `RELATORIO_OVERFITTING.md` §9. A v2 deixou
+o problema **mais** circular, não menos: a correlação de `risk_regra` com o rótulo subiu
+de 0,455 na v1 para 0,587 na v2, porque `days_since_last` e `features_used_30d` passaram
+a derivar do retrato comportamental do mesmo cliente e a regra ficou mais preditiva do
+rótulo que ela própria gera. A saída continua sendo o desfecho observado pelo
+`DELETE /clientes/{id}`, não mais dado sintético.)*
+
+**`metodo_pagamento` não carrega sinal nesta base — lacuna declarada da base, não
+defeito do modelo (22/09/2026).** Na base v2 a feature que substituiu `card_brand`
+tem AUC 0,5007 sozinha e removê-la não custa nada, porque o gerador sorteia o método
+do cliente sem que o rótulo `recovered` dependa dele. No mundo real ela é causalmente
+relevante — boleto e Pix Automático não se retentam do mesmo jeito. É uma feature
+causalmente correta cuja relevância a base sintética não modela, e candidata ao
+trabalho de features entre módulos (`RELATORIO_OVERFITTING.md` §5.1).
 
 **O que não foi feito, de propósito:** o ruído do rótulo não foi removido para alcançar
 o gate, e os hiperparâmetros não foram ajustados contra o conjunto de teste.

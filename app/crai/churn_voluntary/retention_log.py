@@ -596,6 +596,7 @@ ROTULOS_DE_FEATURE = {
     "tenure_days":        lambda v: f"{_inteiro(v)} dias como cliente",
     "attempt_count":      lambda v: f"{_inteiro(v)}ª tentativa da cobrança",
     "card_brand":         lambda v: f"bandeira {v}",
+    "metodo_pagamento":   lambda v: f"meio de pagamento {ROTULOS_DE_METODO.get(v, v)}",
     "ltv_estimated":      lambda v: f"valor estimado do cliente R$ {_reais(v)}",
     "customer_ltv":       lambda v: f"valor estimado do cliente R$ {_reais(v)}",
     "failed_payments_90d": lambda v: f"{_inteiro(v)} falhas de pagamento nos últimos 90 dias",

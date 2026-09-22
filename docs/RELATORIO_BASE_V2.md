@@ -166,7 +166,8 @@ comparável.
 
 **Duas leituras, e a segunda é a importante.**
 
-A primeira: a AUC subiu de 0,6940 para 0,7095. É melhora real, mas pequena — e
+A primeira: a AUC subiu de 0,6940 (40.000 linhas, holdout de 8.000) para 0,7095
+(120.000 linhas, holdout de 24.089 por cliente). É melhora real, mas pequena — e
 **a maior parte dela é volume, não população**. Só sair de 40k para 120k na base
 v1, sem mexer em mais nada, já dá 0,7054. A população compartilhada, a escala
 corrigida, as contagens de verdade e o vocabulário de Pix acrescentam 0,0041 em
@@ -206,7 +207,8 @@ uma feature por cliente ficar mais informativa.
 | **v2, 120k** | 120.000 | linha | 0,2560 | **0,8279** | 0,8281 | 0,1249 |
 | **v2, 120k** | 120.000 | **cliente** | 0,2560 | **0,8287** | 0,8295 | 0,1248 |
 
-A AUC saltou de 0,75 para 0,83 — e **isso não é mérito do modelo**. Olhe a
+A AUC saltou de 0,75 (20.000 eventos, holdout de 4.000) para 0,83 (120.000 eventos,
+holdout de 24.061 por cliente) — e **isso não é mérito do modelo**. Olhe a
 coluna ao lado: a regra sozinha dá 0,8295. O modelo continua empatando com a
 regra na terceira casa decimal, exatamente como na v1. O que subiu foi a
 **separabilidade da própria regra**, porque `days_since_last` e
@@ -225,8 +227,9 @@ cancelamento observado para usar como rótulo.
 | v1, 120k | 92.820 | **0,9723** | 0,9507 | 0,916 | 0,827 | 0,869 | 6,01× |
 | **v2, 120k** | 92.872 | **0,8684** | 0,7566 | 0,810 | **0,326** | 0,465 | 3,25× |
 
-**A AUC caiu, e a queda é a notícia boa.** O 0,995 que o `app/README.md` marca
-como bandeira vermelha (e o 0,9723 a que ele desce com 120k) existia porque as
+**A AUC caiu, e a queda é a notícia boa.** O 0,995 que o `app/README.md` marcava
+como bandeira vermelha (rodada de 26/08, volume não registrado; 0,9886 com 25.000
+clientes em 14/09; e o 0,9723 a que ele desce com 120.000 na v1) existia porque as
 duas populações eram desenhadas separadas: o cliente anômalo tinha outro perfil
 de conta, não só outro comportamento. Na v2 o perfil de conta (`tenure_days`,
 `mrr_brl`, `seats`) vem da mesma população para os dois grupos, e `seats` é
@@ -307,7 +310,11 @@ isso na banca se perguntarem sobre metodologia de validação.
 ## 6. O que ainda falta
 
 - **Recalibrar o `threshold_percentile` do autoencoder** na base v2. Está na
-  especificação do Bloco B.
+  especificação do Bloco B. *(Feito em 20/09 — p83 naquela máquina — e refeito em
+  22/09 na máquina do artefato promovido — p81. O percentil é a saída do critério
+  "maior percentil com recall acima de 0,70" aplicado à curva de cada artefato, e
+  o autoencoder não reproduz entre máquinas com as mesmas versões; ver
+  `docs/LIMITACOES.md`, "Reprodutibilidade do autoencoder entre máquinas".)*
 - **Split por cliente no `train_all`** para os Módulos 1 e 4. Hoje não há
   vazamento medido, mas a garantia não pode depender de sorte.
 - **Rótulo latente.** Os quatro latentes (`satisfacao`, `fit_produto`,

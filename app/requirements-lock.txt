@@ -1,4 +1,28 @@
-﻿annotated-doc==0.0.4
+# requirements-lock.txt — NAO E A FONTE DA VERDADE. Leia antes de instalar.
+#
+# A fonte da verdade e `requirements.txt`: e ele que fixa as versoes com que
+# TODOS os artefatos publicados foram treinados — as tres rodadas registradas
+# (20/09/2026 x2 e 22/09/2026, a do artefato em producao) gravaram nos
+# meta.json exatamente numpy 1.26.4, pandas 2.2.3, scikit-learn 1.5.2,
+# xgboost 2.1.1, torch 2.13.0+cpu, shap 0.46.0, joblib 1.4.2, prophet 1.4.0.
+#
+# Este arquivo e um `pip freeze` de OUTRO ambiente (Python 3.12), que fixa
+# numpy 2.4.6, shap 0.52.0 e joblib 1.5.3 — versoes que nenhum artefato
+# publicado usou — e que nao instala em Python 3.11 (shap 0.52 exige >= 3.12;
+# `docs/ESTADO_12SET.md`, 12/09/2026). Foi gerado antes das medicoes que
+# valem hoje, num ambiente que deixou de ser o de referencia, e ficou aqui
+# como REGISTRO das versoes transitivas (fastapi, langgraph, cmdstanpy...)
+# daquela maquina. Nao e regenerado de proposito: um freeze do ambiente atual
+# so seria "a verdade" ate a proxima maquina — e o que reproduz um treino nao e
+# o freeze, e o meta.json de cada artefato (`calibracao.versoes_bibliotecas`),
+# conferido nominalmente por `load()`.
+#
+# Onde `requirements.txt` e este arquivo divergem (numpy, shap, joblib), vale
+# `requirements.txt`. E mesmo `requirements.txt` nao reproduz o TREINO do
+# autoencoder em outra maquina — ver `docs/LIMITACOES.md`,
+# "Reprodutibilidade do autoencoder entre maquinas".
+#
+annotated-doc==0.0.4
 annotated-types==0.7.0
 anthropic==0.34.2
 anyio==4.14.0

@@ -72,12 +72,20 @@ TENANT_PADRAO = "default_tenant"
 # dataset: se o classificador ganhar uma feature e esta lista não ganhar, o
 # treino com dados reais recebe uma coluna a menos e ninguém percebe até o
 # `fit` reclamar de shape. `README_treino.md` (Sprint 7) referencia esta lista.
+#
+# Bloco H (22/09/2026): o artefato em produção passou a ser o da base v2, que
+# trocou `card_brand` por `metodo_pagamento`. A coluna nova entra aqui e no
+# schema (com migração para bancos já criados, ver `_conectar`). `card_brand`
+# FICA na lista e no schema: as linhas gravadas antes a têm preenchida, e um
+# retreino v1 (`train_all --base v1`) ainda a consome. Nas linhas novas ela
+# vai NULL, porque o caminho de servir não a monta mais.
 FEATURES_DO_DATASET = (
     "tenure_months", "day_of_month", "invoice_amount", "avg_ticket",
     "payment_history_score", "failure_count_90d", "hour_of_day",
-    "day_of_week", "attempt_count", "gateway_error_code", "card_brand",
-    "ltv_estimated",
+    "day_of_week", "attempt_count", "gateway_error_code", "metodo_pagamento",
+    "card_brand", "ltv_estimated",
 )
+FEATURES_TEXTO = ("gateway_error_code", "metodo_pagamento", "card_brand")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ciclos_recuperacao (
@@ -98,6 +106,7 @@ CREATE TABLE IF NOT EXISTS ciclos_recuperacao (
     day_of_week           REAL,
     attempt_count         REAL,
     gateway_error_code    TEXT,
+    metodo_pagamento      TEXT,
     card_brand            TEXT,
     ltv_estimated         REAL,
 
@@ -130,12 +139,29 @@ def caminho_do_banco() -> Path:
     return Path(override) if override else DB_PATH
 
 
+# Colunas acrescentadas DEPOIS do schema original, com o tipo de cada uma.
+# `CREATE TABLE IF NOT EXISTS` não altera uma tabela que já existe: um banco
+# criado antes do Bloco H não teria `metodo_pagamento`, o INSERT falharia e —
+# como toda escrita aqui é best-effort — o ciclo sumiria do dataset em
+# silêncio. A migração é idempotente e barata (um PRAGMA por conexão).
+_COLUNAS_ACRESCENTADAS = (("metodo_pagamento", "TEXT"),)
+
+
+def _migrar(conn: sqlite3.Connection):
+    existentes = {linha[1] for linha in conn.execute("PRAGMA table_info(ciclos_recuperacao)")}
+    for coluna, tipo in _COLUNAS_ACRESCENTADAS:
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE ciclos_recuperacao ADD COLUMN {coluna} {tipo}")
+    conn.commit()
+
+
 def _conectar() -> sqlite3.Connection:
     caminho = caminho_do_banco()
     caminho.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(caminho)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    _migrar(conn)
     return conn
 
 
@@ -207,7 +233,7 @@ def registrar_ciclo(state: dict, tentativas_usadas: int = 0) -> Optional[int]:
         "customer_id": _texto(state.get("customer_id")) or "",
         "e2e_id": e2e,
         "registrado_em": _agora(),
-        **{f: (_num(features.get(f)) if f not in ("gateway_error_code", "card_brand")
+        **{f: (_num(features.get(f)) if f not in FEATURES_TEXTO
                else _texto(features.get(f)))
            for f in FEATURES_DO_DATASET},
         "failure_cause": _texto(state.get("failure_cause")),

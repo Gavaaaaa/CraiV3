@@ -137,6 +137,12 @@ véspera da apresentação custa a apresentação.
    própria: o `requirements-lock.txt` trava as versões usadas nas medições já
    publicadas (sklearn 1.5.2, xgboost 2.1.1, torch 2.13.0, prophet 1.4.0), e
    mudar uma delas invalida a comparação com a evidência do repositório de dados.
+   *(Nota de 22/09/2026: a fonte da verdade das versões é `requirements.txt`, não o
+   lock — o lock é um freeze de outro ambiente (numpy 2.4.6, shap 0.52.0) que nenhum
+   artefato publicado usou, e ganhou cabeçalho dizendo isso. As versões fixadas
+   reproduzem classificador, liquidez e voluntário na quarta casa em três máquinas;
+   o autoencoder não reproduz entre máquinas mesmo com elas — causa é hardware, ver
+   `docs/LIMITACOES.md`.)*
 
 2. Rodar a suíte inteira:
        cd app && pytest tests/ -q

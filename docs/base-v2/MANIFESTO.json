@@ -1,0 +1,166 @@
+{
+  "base": "CRAI v2 — população compartilhada",
+  "gerado_por": "crai.scripts.gerar_bases_v2",
+  "semente": 42,
+  "end_date": "2026-09-14",
+  "janela_dias": 180,
+  "fonte_de_parametros": "sintetico_calibrado",
+  "populacao": {
+    "clientes": 120000,
+    "mrr_mediana": 1789.3,
+    "mrr_p90": 7914.79,
+    "mrr_media": 3507.8,
+    "tenure_mediana": 8.0,
+    "seats_mediana": 15.0,
+    "perfis": {
+      "CLT": 60100,
+      "PJ": 35877,
+      "freelancer": 24023
+    }
+  },
+  "verificacoes": {
+    "clientes_na_populacao": 120000,
+    "todos_os_ids_existem_na_populacao": true,
+    "intersecao_das_quatro_tabelas": 1330,
+    "intersecao_classificador_comportamental": 33177,
+    "intersecao_comportamental_liquidez": 10000,
+    "mrr_identico_em_todas_as_tabelas": true,
+    "mediana_mrr": 1789.3,
+    "mediana_invoice_amount": 1818.29,
+    "razao_invoice_sobre_mrr_mediana": 1.0162,
+    "fator_ciclo_min": 0.15,
+    "fator_ciclo_max": 10.0,
+    "fator_ciclo_dentro_da_faixa": true,
+    "cobrancas_por_cliente_media": 3.617,
+    "eventos_por_cliente_media": 2.998,
+    "failure_count_90d_e_contado": true,
+    "card_brand_presente": false,
+    "codigos_de_cartao_presentes": [],
+    "nulos_por_tabela": {
+      "populacao": 0,
+      "classificador": 0,
+      "comportamental": 0,
+      "liquidez": 0,
+      "voluntario": 0
+    }
+  },
+  "arquivos": {
+    "populacao": {
+      "arquivo": "populacao.parquet",
+      "linhas": 120000,
+      "colunas": 9,
+      "lista_de_colunas": [
+        "customer_id",
+        "mrr",
+        "billing_profile",
+        "tenure_months",
+        "seats",
+        "satisfacao",
+        "fit_produto",
+        "pressao_preco",
+        "saude_financeira"
+      ],
+      "bytes": 2775192,
+      "sha256": "750c2d06aeb7ee14ceb844d29bbba2daf3f3b14b2536824b0c202fdbde559ba0",
+      "clientes_distintos": 120000
+    },
+    "classificador": {
+      "arquivo": "classificador.parquet",
+      "linhas": 120000,
+      "colunas": 16,
+      "lista_de_colunas": [
+        "customer_id",
+        "data_cobranca",
+        "tenure_months",
+        "day_of_month",
+        "day_of_week",
+        "hour_of_day",
+        "invoice_amount",
+        "avg_ticket",
+        "ciclo",
+        "gateway_error_code",
+        "metodo_pagamento",
+        "payment_history_score",
+        "failure_count_90d",
+        "attempt_count",
+        "ltv_estimated",
+        "recovered"
+      ],
+      "bytes": 2365914,
+      "sha256": "4a635d9b96821397b16291d33e2eb87ac0b3a3dbd71065e64f84d4986ca93924",
+      "clientes_distintos": 33177
+    },
+    "comportamental": {
+      "arquivo": "comportamental.parquet",
+      "linhas": 120000,
+      "colunas": 14,
+      "lista_de_colunas": [
+        "customer_id",
+        "tenure_days",
+        "mrr_brl",
+        "seats",
+        "logins_7d",
+        "logins_30d",
+        "feature_adoption",
+        "avg_session_min",
+        "api_calls_7d",
+        "days_since_last_login",
+        "tickets_30d",
+        "failed_pay_90d",
+        "nps_last",
+        "is_anomalous"
+      ],
+      "bytes": 3038602,
+      "sha256": "164d50a3a8348c2969b1143711798fc1b0fe6db93539d96044825b0b5b0332fe",
+      "clientes_distintos": 120000
+    },
+    "liquidez": {
+      "arquivo": "liquidez.parquet",
+      "linhas": 1800000,
+      "colunas": 8,
+      "lista_de_colunas": [
+        "customer_id",
+        "profile",
+        "date",
+        "day_of_month",
+        "weekday",
+        "bday_idx",
+        "balance_norm",
+        "has_liquidity"
+      ],
+      "bytes": 5275372,
+      "sha256": "15624740571a4b7593796bdb0a5045371bfef15ad5cb3ac846cd7b8581199fe4",
+      "clientes_distintos": 10000
+    },
+    "voluntario": {
+      "arquivo": "voluntario.parquet",
+      "linhas": 120000,
+      "colunas": 10,
+      "lista_de_colunas": [
+        "customer_id",
+        "days_since_last",
+        "features_used_30d",
+        "mrr",
+        "evento_cancelamento",
+        "evento_downgrade",
+        "evento_sessao",
+        "event",
+        "risk_regra",
+        "churn"
+      ],
+      "bytes": 1191107,
+      "sha256": "92717f1024cb7c954c65e6b9d2cae3d14b9a49a20f69ab76599d96c7211715ad",
+      "clientes_distintos": 40029
+    }
+  },
+  "versoes": {
+    "python": "3.11.15",
+    "numpy": "2.4.4",
+    "pandas": "3.0.2",
+    "scikit-learn": "1.8.0",
+    "xgboost": "3.2.0",
+    "torch": null,
+    "prophet": null,
+    "pyarrow": "25.0.1"
+  }
+}

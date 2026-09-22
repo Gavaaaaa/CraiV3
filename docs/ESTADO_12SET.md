@@ -13,7 +13,7 @@
 | 6 — DECISOES.md | existe com 3 seções e arquivos por cenário; nenhum valor alterado | **passou** |
 | 7 — LGPD | dois arquivos com todos os campos preenchidos ou NÃO VERIFICADO; checagem de PII em ML | **entregue, gate é revisão humana**; checagem de PII: nenhuma linha mostra CPF, telefone, e-mail ou chave Pix entrando em ML |
 
-Suíte final: **2 failed, 1096 passed** (as duas de `test_metricas_declaradas`, o gate de honestidade: AUC 0,669 abaixo do piso 0,70). Sem modelos em `app/models/` a suíte fica em 1093 passed / 5 skipped. Nenhum teste existente foi alterado; 54 testes novos em `tests/test_regua_da_base.py`.
+Suíte final: **2 failed, 1096 passed** (as duas de `test_metricas_declaradas`, o gate de honestidade: AUC 0,669 — n=6.000, holdout de 1.200 — abaixo do piso 0,70). Sem modelos em `app/models/` a suíte fica em 1093 passed / 5 skipped. Nenhum teste existente foi alterado; 54 testes novos em `tests/test_regua_da_base.py`.
 
 ## 2. AUCs e tempos das duas rodadas (CPU, torch 2.13.0+cpu, calibração versionada)
 
@@ -33,7 +33,7 @@ Nenhuma. Observação: o `requirements-lock.txt` não instala em Python 3.11 (sh
 
 ## 4. O que quebrou e não foi consertado
 
-- **As duas falhas de `test_metricas_declaradas.py`**: AUC medida 0,669 abaixo do piso [0,70; 0,92]. É o gate de honestidade funcionando; não tocar.
+- **As duas falhas de `test_metricas_declaradas.py`**: AUC medida 0,669 (n=6.000, holdout de 1.200) abaixo do piso [0,70; 0,92]. É o gate de honestidade funcionando; não tocar.
 - **`preparar_amostra_real` não é determinístico como declara**: na primeira execução reescreveu `app/models/calibracao.json` (API do BACEN respondeu; SHA-256 da amostra Olist saiu `d800c60f…` em vez de `39485c22…`) e derrubou `test_readme_treino`. Resolvido por decisão sua: `calibracao.json` restaurado do git, rodadas refeitas sem a preparação, teste voltou a passar. **A causa do SHA divergente não foi investigada**; está em `docs/LIMITACOES.md` como pendência.
 - `PROMPT_POS_MIGRACAO.md` foi movido para `docs/planos/` e este fechamento para `docs/`, para a raiz ficar como a ETAPA 3 da migração definiu.
 

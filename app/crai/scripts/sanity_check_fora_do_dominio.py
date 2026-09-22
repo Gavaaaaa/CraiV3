@@ -216,8 +216,16 @@ def checar_classifier(amostra: pd.DataFrame) -> dict:
         "failure_count_90d": int(sint["failure_count_90d"].median()),
         "attempt_count": 1,
         "gateway_error_code": "insufficient_funds",
-        "card_brand": "visa",
     }
+    # A segunda categórica segue o ARTEFATO carregado, não o gerador: o modelo
+    # v2 (Bloco H) declara `metodo_pagamento` e não tem `card_brand`; o
+    # gerador v1 usado acima tem o contrário. Sem isto, o `predict` receberia
+    # a feature ausente como 0 em silêncio.
+    if "metodo_pagamento" in clf.feature_names:
+        base["metodo_pagamento"] = "pix_automatico"
+        sint = sint.assign(metodo_pagamento="pix_automatico")
+    else:
+        base["card_brand"] = "visa"
     real = pd.DataFrame({
         **{k: [v] * len(amostra) for k, v in base.items()},
         "invoice_amount": amostra["payment_value"].to_numpy(dtype=float),

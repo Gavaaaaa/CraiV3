@@ -325,8 +325,9 @@ coisas, e as duas são não-visuais.
          (b) CONFIRA TODOS OS NÚMEROS contra a evidência do repositório de
              dados que você acabou de clonar na etapa 4 (se já apagou, clone de
              novo só para conferir). Já sei de uma divergência: o texto do
-             mvp-crai diz "AUC 0,703", de uma rodada antiga; a medição atual em
-             `evidencia/rodada_alta.json` é 0,6669, e o piso que o próprio
+             mvp-crai diz "AUC 0,703", de uma rodada antiga (n=15.000, 01/09/2026);
+             a medição atual em `evidencia/rodada_alta.json` é 0,6669 (n=6.000,
+             holdout de 1.200), e o piso que o próprio
              repositório exige é 0,70. Citar 0,703 na apresentação e ter 0,667
              no repositório aberto é o tipo de contradição que derruba a
              credibilidade de todo o resto. Número sem fonte na evidência vira

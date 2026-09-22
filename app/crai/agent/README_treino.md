@@ -21,7 +21,7 @@ que é o critério de decisão do agente.
 | `invoice_amount` | num | evento Pagar.me (`valor` da cobrança) | **real** |
 | `attempt_count` | num | evento Pagar.me | fixo em `1` para Pix¹ |
 | `gateway_error_code` | cat | evento Pagar.me → `PIX_CODE_MAP` | **real** |
-| `card_brand` | cat | não existe em Pix — `"n/a"` | constante |
+| `metodo_pagamento` | cat | atributo do cliente (`pix_automatico` / `boleto`); hoje deduzido do canal do evento² | **deduzido** |
 | `day_of_month` | num | relógio no momento da falha | **real** |
 | `hour_of_day` | num | relógio no momento da falha | **real** |
 | `day_of_week` | num | relógio no momento da falha | **real** |
@@ -34,6 +34,13 @@ que é o critério de decisão do agente.
 ¹ As duas janelas automáticas do dia do vencimento são do PSP do pagador e não
 contam como tentativa do recebedor — por isso `attempt_count = 1` na entrada.
 As retentativas da CRAI são contadas pelo checkpoint, não por este campo.
+
+² Desde o Bloco H (22/09/2026) o artefato em `models/` é o da base v2, que
+trocou `card_brand` (sempre `"n/a"` em Pix) por `metodo_pagamento`. Nenhuma
+fonte de perfil tem esse campo — a base importada tem `billing_profile`, que é
+outra coisa —, então `_features_pix` o deduz do canal: uma recorrência de Pix
+Automático que falhou é de um cliente cobrado por Pix Automático. `boleto`
+passará a vir do evento no dia em que houver webhook de boleto falhado.
 
 **Quatro features são fabricadas.** É a limitação central desta fase, e ela está
 declarada aqui e no log (`[PERFIL]`), não escondida. As quatro vêm do negócio —

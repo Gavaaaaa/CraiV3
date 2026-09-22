@@ -96,7 +96,8 @@ ROTULO_FEATURE = {
     "avg_ticket": "Ticket medio R$", "day_of_month": "Dia do mes",
     "hour_of_day": "Hora da cobranca", "day_of_week": "Dia da semana",
     "failure_count_90d": "Falhas (90 dias)", "attempt_count": "Tentativas anteriores",
-    "card_brand": "Bandeira do cartao", "ltv_estimated": "LTV estimado R$",
+    "card_brand": "Bandeira do cartao", "metodo_pagamento": "Metodo de pagamento",
+    "ltv_estimated": "LTV estimado R$",
 }
 
 # Cenarios de entrada. Sao ENTRADAS, nao resultados: tudo o que aparece no

@@ -160,6 +160,8 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 | Separacao anomalo/saudavel | 4,4600 | 5,4600 | +1,0000 |
 | Epocas | 100 | 100 | +0 |
 | Saudaveis no treino | 4254 | 8508 | +4254 |
+| Saudaveis held-out na avaliacao (n) | 751 | 1502 | +751 |
+| Anomalos na avaliacao (n) | 495 | 990 | +495 |
 | `fonte_usada` | `sintetico_calibrado` | `sintetico_calibrado` | |
 | recarregou via `load()` | sim | sim | |
 
@@ -178,6 +180,7 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 | Acerto +-1 dia | 0,8974 | 0,8707 | -0,0267 |
 | Janelas de treino | 8160 | 16320 | +8160 |
 | Clientes de teste | 120 | 240 | +120 |
+| Janelas de teste (n da AUC diaria) | 1200 | 2400 | +1200 |
 | `fonte_usada` | `sintetico_calibrado` | `sintetico_calibrado` | |
 | recarregou via `load()` | sim | sim | |
 
@@ -193,6 +196,7 @@ Recall OPERACIONAL (regra de e-Profit, que e quem decide): 1,0000 -> 1,0000.
 | MAE entre p(modelo) e regra | 0,0561 | 0,0413 | -0,0148 |
 | Correlacao p(modelo) x regra | 0,9415 | 0,9705 | +0,0290 |
 | Eventos de treino | 1600 | 3200 | +1600 |
+| Eventos de teste (n da AUC) | 400 | 800 | +400 |
 | `fonte_usada` | `sintetico_calibrado` | `sintetico_calibrado` | |
 | recarregou via `load()` | sim | sim | |
 
@@ -247,11 +251,11 @@ Cada decisao esta comentada no codigo, no ponto exato (`synthetic_data.py`, bloc
 
 | Modelo | Em dominio (sintetico calibrado, holdout novo) | Fora do dominio (dado real) | Rotulo real | Leitura |
 |---|---|---|---|---|
-| AnomalyDetector | ROC-AUC 0,9860 (flag 12,9%) | ROC-AUC 0,5058 (flag 0,1%, recall de churn 0,0%) | `Churn` da Fonte E, 5068 clientes com as 4 features presentes | queda esperada: o doador tem direcao INVERTIDA em dias/satisfacao (quem cancela pediu mais recentemente e esta mais satisfeito) e o modelo so ve 4 das 12 features; um AUC ~0,5 aqui e o resultado honesto, nao um bug |
-| risk_scorer — regras fixas | (as regras nao tem holdout) | ROC-AUC 0,4053 vs churn; risco medio 0,263 | `Churn` da Fonte E | abaixo de 0,5: no doador quem cancela pediu MAIS recentemente, o inverso da regra de inatividade — a regra e de SaaS por assinatura, o dado e de e-commerce |
-| risk_scorer — candidato | AUC 0,7517 vs rotulo ruidoso | ROC-AUC 0,4295 vs churn | `Churn` da Fonte E | o candidato aprendeu as REGRAS com ruido, nao churn observado — fora do dominio ele so pode ser tao bom quanto as regras |
+| AnomalyDetector | ROC-AUC 0,9860 (flag 12,9%; sintetico_calibrado, 3000 clientes, seed 7 (nunca visto)) | ROC-AUC 0,5058 (E-Commerce Churn, 5068 clientes com as 4 features presentes; flag 0,1%, recall de churn 0,0%) | `Churn` da Fonte E, 5068 clientes com as 4 features presentes | queda esperada: o doador tem direcao INVERTIDA em dias/satisfacao (quem cancela pediu mais recentemente e esta mais satisfeito) e o modelo so ve 4 das 12 features; um AUC ~0,5 aqui e o resultado honesto, nao um bug |
+| risk_scorer — regras fixas | (as regras nao tem holdout) | ROC-AUC 0,4053 vs churn (E-Commerce Churn, 5065 clientes); risco medio 0,263 | `Churn` da Fonte E | abaixo de 0,5: no doador quem cancela pediu MAIS recentemente, o inverso da regra de inatividade — a regra e de SaaS por assinatura, o dado e de e-commerce |
+| risk_scorer — candidato | AUC 0,7517 vs rotulo ruidoso (treino 4000 eventos, holdout 800) | ROC-AUC 0,4295 vs churn (E-Commerce Churn, 5065 clientes) | `Churn` da Fonte E | o candidato aprendeu as REGRAS com ruido, nao churn observado — fora do dominio ele so pode ser tao bom quanto as regras |
 | FailureClassifier | p_recovery mediana 0,4473 (p25-p75 0,3095-0,5912) | p_recovery mediana 0,6271 (p25-p75 0,5878-0,6664) nas 300 transacoes reais da Olist | **nao existe** | sem rotulo nao ha AUC; o que se mede e se a distribuicao de score no dado real e plausivel e parecida com a do holdout — nao prova acerto |
-| PaydayInference | ROC-AUC diario 0,9519 | nao aplicavel | nao existe doador de serie de saldo | fica so a metrica em dominio, declarada como tal |
+| PaydayInference | ROC-AUC diario 0,9519 (240 clientes de teste, 2400 janelas) | nao aplicavel | nao existe doador de serie de saldo | fica so a metrica em dominio, declarada como tal |
 
 **A queda e o teste funcionando.** Um autoencoder que caisse de 0,98 para 0,90 num rotulo real de outro dominio seria suspeito; cair para ~0,5 e o que se espera de um modelo que aprendeu a geometria de um gerador — ele nao esta artificialmente perfeito, esta honestamente limitado ao dominio em que foi treinado. Nada foi ajustado para os numeros subirem.
 
@@ -303,5 +307,7 @@ python -m crai.scripts.sanity_check_fora_do_dominio --saida fora.json
 python -m crai.scripts.gerar_readme_treino            # regera este arquivo
 pytest tests/ -q
 ```
+
+O que "reproduzir" quer dizer aqui: com as versoes fixadas, a mesma base e a mesma semente, classificador, liquidez e voluntario devolvem a mesma metrica na quarta casa em outra maquina (medido em tres). O **autoencoder nao**: early stopping sensivel a ordem de acumulacao de float, que muda com BLAS e conjunto de instrucoes — mesma base v2, mesma semente e mesmas versoes deram ROC-AUC 0,8684 / 0,8694 (20/09/2026) e 0,8582 (22/09/2026). Fixar versao nao basta para ele; o percentil do limiar e recalculado pelo criterio declarado em cada maquina (`docs/LIMITACOES.md`).
 
 Dado bruto (Olist, E-Commerce) fica em `data/real/` fora do git e e baixado de espelhos publicos com SHA-256 conferido; `data/real/PROVENIENCIA.json` (copia em `docs/evidencia/treino/`) registra hashes, contagens, nulos e o `describe()` de cada coluna usada. Se a API do BACEN estiver fora de alcance, o script usa o cache local ou, na falta dele, os valores declarados no `DATA_CARD.md` — e grava qual dos tres usou.

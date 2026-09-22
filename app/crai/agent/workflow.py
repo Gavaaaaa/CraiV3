@@ -620,6 +620,12 @@ def _extract_features(
     `customer_id` é a semente do perfil sintético. Ele vem de fora, e não de
     dentro do evento, porque é o mesmo id que identifica o checkpoint do
     LangGraph — ver `crai/api/app.py::_thread_id` (P0-6b).
+
+    A lista que o artefato em `models/` declara (Bloco H, 22/09/2026) é a da
+    base v2: `card_brand` saiu e `metodo_pagamento` entrou. Quem monta o
+    dicionário aqui tem que fornecer TODAS as features dessa lista — o
+    `predict` substitui feature ausente por 0 em silêncio, e é exatamente o
+    defeito que `tests/test_servir_v2.py` existe para pegar.
     """
     if payment_method == "pix_automatico":
         return _features_pix(event, amount, customer_id)
@@ -636,7 +642,13 @@ def _features_cartao(event: dict, amount: float) -> dict:
     return {
         **perfil,
         "gateway_error_code": charge.get("failure_code") or "processing_error",
-        "card_brand": (charge.get("payment_method_details") or {}).get("brand") or "visa",
+        # O classificador v2 não vê bandeira (`card_brand` saiu na base v2:
+        # era "n/a" em 100% das linhas servidas). O que ele vê é o método de
+        # pagamento do cliente, cujo vocabulário de treino é `pix_automatico`
+        # / `boleto`. Cartão está FORA desse vocabulário de propósito — este
+        # caminho não recebe evento desde a Fase 3 — e o encoder mapeia o
+        # valor desconhecido para a categoria "outro", sem quebrar.
+        "metodo_pagamento": "cartao",
         "attempt_count": charge.get("attempt_count", 1),
     }
 
@@ -652,6 +664,17 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
     (P0-6b): para um pagador anônimo o id da recorrência é string vazia
     enquanto o resto do pipeline usa o id derivado do evento, e o mesmo webhook
     acabava gerando dois perfis sintéticos diferentes.
+
+    DE ONDE VEM `metodo_pagamento` (Bloco H, 22/09/2026). É atributo do
+    cliente, não da cobrança — na base v2 cada cliente é `pix_automatico`
+    (85%) ou `boleto` (15%). Nenhuma fonte de perfil tem esse campo: o
+    `PerfilProvider` devolve tenure/histórico/LTV, e a base importada do
+    self-service tem `billing_profile` (CLT/PJ/freelancer), que é outra coisa.
+    A escolha declarada: o método vem do CANAL DO EVENTO. Este caminho só
+    recebe webhooks de Pix Automático, e uma recorrência de Pix Automático que
+    falhou é, por definição, de um cliente cobrado por Pix Automático — não é
+    default, é dedução. `boleto` passa a aparecer no dia em que houver webhook
+    de boleto falhado, e aí o valor vem do evento, não daqui.
     """
     invoice_amount = event.get("valor") or amount
     perfil = _perfil_simulado(customer_id or event.get("id_recorrencia", ""), invoice_amount)
@@ -663,8 +686,9 @@ def _features_pix(event: dict, amount: float, customer_id: str = "") -> dict:
         # cai no default seguro do mapa, que é `processing_error` — e não mais
         # `insufficient_funds`, que afirmava falta de saldo sem saber.
         "gateway_error_code": causa_do_codigo(event.get("codigo_falha")),
-        # Não existe bandeira em Pix; o encoder trata valor desconhecido.
-        "card_brand": "n/a",
+        # Atributo do cliente, deduzido do canal do evento (ver docstring).
+        # É um valor do vocabulário de treino, não a categoria "desconhecido".
+        "metodo_pagamento": "pix_automatico",
         # As duas janelas automáticas do dia são do PSP do pagador e não contam
         # como tentativa do recebedor.
         "attempt_count": 1,

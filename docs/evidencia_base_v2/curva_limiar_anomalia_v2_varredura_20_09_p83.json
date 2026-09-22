@@ -1,212 +1,212 @@
 {
-  "roc_auc": 0.8582,
-  "average_precision": 0.7526,
-  "precision": 0.7106,
-  "recall": 0.7121,
-  "f1": 0.7113,
-  "threshold": 0.144647,
-  "threshold_percentile": 81.0,
+  "roc_auc": 0.8694,
+  "average_precision": 0.7664,
+  "precision": 0.8214,
+  "recall": 0.3511,
+  "f1": 0.4919,
+  "threshold": 0.366947,
+  "threshold_percentile": 95.0,
   "confusion_matrix": [
     [
-      13276,
-      3114
+      15570,
+      820
     ],
     [
-      3092,
-      7646
+      6968,
+      3770
     ]
   ],
-  "mean_error_healthy": 0.1102,
-  "mean_error_anomalous": 0.366,
-  "separation_ratio": 3.32,
-  "epochs_trained": 68,
-  "best_val_loss": 0.11016,
+  "mean_error_healthy": 0.1111,
+  "mean_error_anomalous": 0.3842,
+  "separation_ratio": 3.46,
+  "epochs_trained": 64,
+  "best_val_loss": 0.111065,
   "n_val_healthy": 16390,
   "n_anomalous": 10738,
   "curva_limiar": [
     {
       "percentil": 75.0,
-      "threshold": 0.116078,
-      "precision": 0.6796,
-      "recall": 0.8094,
-      "f1": 0.7388,
-      "taxa_flag": 0.4714
+      "threshold": 0.116752,
+      "precision": 0.6895,
+      "recall": 0.8476,
+      "f1": 0.7605,
+      "taxa_flag": 0.4866
     },
     {
       "percentil": 76.0,
-      "threshold": 0.120358,
-      "precision": 0.6844,
-      "recall": 0.7944,
-      "f1": 0.7353,
-      "taxa_flag": 0.4595
+      "threshold": 0.120804,
+      "precision": 0.695,
+      "recall": 0.8349,
+      "f1": 0.7586,
+      "taxa_flag": 0.4755
     },
     {
       "percentil": 77.0,
-      "threshold": 0.124448,
-      "precision": 0.6896,
-      "recall": 0.7801,
-      "f1": 0.7321,
-      "taxa_flag": 0.4478
+      "threshold": 0.124631,
+      "precision": 0.7005,
+      "recall": 0.8213,
+      "f1": 0.7561,
+      "taxa_flag": 0.4641
     },
     {
       "percentil": 78.0,
-      "threshold": 0.128526,
-      "precision": 0.6948,
-      "recall": 0.7646,
-      "f1": 0.728,
-      "taxa_flag": 0.4356
+      "threshold": 0.128631,
+      "precision": 0.7066,
+      "recall": 0.8088,
+      "f1": 0.7543,
+      "taxa_flag": 0.4531
     },
     {
       "percentil": 79.0,
-      "threshold": 0.133712,
-      "precision": 0.7001,
-      "recall": 0.7483,
-      "f1": 0.7234,
-      "taxa_flag": 0.4231
+      "threshold": 0.133666,
+      "precision": 0.7116,
+      "recall": 0.7907,
+      "f1": 0.7491,
+      "taxa_flag": 0.4399
     },
     {
       "percentil": 80.0,
-      "threshold": 0.139183,
-      "precision": 0.7048,
-      "recall": 0.729,
-      "f1": 0.7167,
-      "taxa_flag": 0.4094
+      "threshold": 0.138863,
+      "precision": 0.7164,
+      "recall": 0.771,
+      "f1": 0.7427,
+      "taxa_flag": 0.426
     },
     {
       "percentil": 81.0,
-      "threshold": 0.144647,
-      "precision": 0.7106,
-      "recall": 0.7121,
-      "f1": 0.7113,
-      "taxa_flag": 0.3966
+      "threshold": 0.144688,
+      "precision": 0.7208,
+      "recall": 0.7487,
+      "f1": 0.7345,
+      "taxa_flag": 0.4112
     },
     {
       "percentil": 82.0,
-      "threshold": 0.150245,
-      "precision": 0.7164,
-      "recall": 0.6943,
-      "f1": 0.7052,
-      "taxa_flag": 0.3836
+      "threshold": 0.150783,
+      "precision": 0.7263,
+      "recall": 0.7292,
+      "f1": 0.7277,
+      "taxa_flag": 0.3974
     },
     {
       "percentil": 83.0,
-      "threshold": 0.157317,
-      "precision": 0.7206,
-      "recall": 0.6695,
-      "f1": 0.6941,
-      "taxa_flag": 0.3677
+      "threshold": 0.15763,
+      "precision": 0.7313,
+      "recall": 0.7063,
+      "f1": 0.7186,
+      "taxa_flag": 0.3823
     },
     {
       "percentil": 84.0,
-      "threshold": 0.164105,
-      "precision": 0.7264,
-      "recall": 0.6484,
-      "f1": 0.6852,
-      "taxa_flag": 0.3534
+      "threshold": 0.16527,
+      "precision": 0.7361,
+      "recall": 0.6812,
+      "f1": 0.7076,
+      "taxa_flag": 0.3663
     },
     {
       "percentil": 85.0,
-      "threshold": 0.17215,
-      "precision": 0.733,
-      "recall": 0.6287,
-      "f1": 0.6769,
-      "taxa_flag": 0.3395
+      "threshold": 0.173343,
+      "precision": 0.7416,
+      "recall": 0.6573,
+      "f1": 0.6969,
+      "taxa_flag": 0.3508
     },
     {
       "percentil": 86.0,
-      "threshold": 0.180816,
-      "precision": 0.7389,
-      "recall": 0.6049,
-      "f1": 0.6652,
-      "taxa_flag": 0.324
+      "threshold": 0.183827,
+      "precision": 0.7464,
+      "recall": 0.6292,
+      "f1": 0.6828,
+      "taxa_flag": 0.3336
     },
     {
       "percentil": 87.0,
-      "threshold": 0.191186,
-      "precision": 0.7446,
-      "recall": 0.5787,
-      "f1": 0.6513,
-      "taxa_flag": 0.3076
+      "threshold": 0.193983,
+      "precision": 0.7525,
+      "recall": 0.6033,
+      "f1": 0.6697,
+      "taxa_flag": 0.3173
     },
     {
       "percentil": 88.0,
-      "threshold": 0.203647,
-      "precision": 0.7496,
-      "recall": 0.5482,
-      "f1": 0.6333,
-      "taxa_flag": 0.2895
+      "threshold": 0.205582,
+      "precision": 0.7583,
+      "recall": 0.5746,
+      "f1": 0.6538,
+      "taxa_flag": 0.2999
     },
     {
       "percentil": 89.0,
-      "threshold": 0.216921,
-      "precision": 0.7571,
-      "recall": 0.5235,
-      "f1": 0.619,
-      "taxa_flag": 0.2737
+      "threshold": 0.218198,
+      "precision": 0.766,
+      "recall": 0.5497,
+      "f1": 0.6401,
+      "taxa_flag": 0.2841
     },
     {
       "percentil": 90.0,
-      "threshold": 0.232152,
-      "precision": 0.7651,
-      "recall": 0.4971,
-      "f1": 0.6027,
-      "taxa_flag": 0.2572
+      "threshold": 0.235084,
+      "precision": 0.7724,
+      "recall": 0.518,
+      "f1": 0.6201,
+      "taxa_flag": 0.2654
     },
     {
       "percentil": 91.0,
-      "threshold": 0.250197,
-      "precision": 0.7724,
-      "recall": 0.4666,
-      "f1": 0.5817,
-      "taxa_flag": 0.2391
+      "threshold": 0.254958,
+      "precision": 0.7794,
+      "recall": 0.4856,
+      "f1": 0.5983,
+      "taxa_flag": 0.2466
     },
     {
       "percentil": 92.0,
-      "threshold": 0.274066,
-      "precision": 0.781,
-      "recall": 0.4357,
-      "f1": 0.5594,
-      "taxa_flag": 0.2208
+      "threshold": 0.27765,
+      "precision": 0.7877,
+      "recall": 0.4533,
+      "f1": 0.5755,
+      "taxa_flag": 0.2278
     },
     {
       "percentil": 93.0,
-      "threshold": 0.299236,
-      "precision": 0.7918,
-      "recall": 0.4067,
-      "f1": 0.5374,
-      "taxa_flag": 0.2033
+      "threshold": 0.303445,
+      "precision": 0.7967,
+      "recall": 0.4189,
+      "f1": 0.5491,
+      "taxa_flag": 0.2081
     },
     {
       "percentil": 94.0,
-      "threshold": 0.325957,
-      "precision": 0.8039,
-      "recall": 0.3758,
-      "f1": 0.5122,
-      "taxa_flag": 0.185
+      "threshold": 0.331071,
+      "precision": 0.8097,
+      "recall": 0.3898,
+      "f1": 0.5263,
+      "taxa_flag": 0.1906
     },
     {
       "percentil": 95.0,
-      "threshold": 0.359552,
-      "precision": 0.817,
-      "recall": 0.3408,
-      "f1": 0.481,
-      "taxa_flag": 0.1651
+      "threshold": 0.366947,
+      "precision": 0.8214,
+      "recall": 0.3511,
+      "f1": 0.4919,
+      "taxa_flag": 0.1692
     },
     {
       "percentil": 96.0,
-      "threshold": 0.415198,
-      "precision": 0.8237,
-      "recall": 0.2854,
-      "f1": 0.424,
-      "taxa_flag": 0.1372
+      "threshold": 0.414735,
+      "precision": 0.8322,
+      "recall": 0.3029,
+      "f1": 0.4442,
+      "taxa_flag": 0.1441
     },
     {
       "percentil": 97.0,
-      "threshold": 0.478626,
-      "precision": 0.8313,
-      "recall": 0.2258,
-      "f1": 0.3552,
-      "taxa_flag": 0.1075
+      "threshold": 0.479306,
+      "precision": 0.8407,
+      "recall": 0.2418,
+      "f1": 0.3755,
+      "taxa_flag": 0.1138
     }
   ],
   "n_train_healthy": 92872,
@@ -336,7 +336,7 @@
     ]
   },
   "versoes": {
-    "python": "3.11.9",
+    "python": "3.12.10",
     "scikit-learn": "1.5.2",
     "xgboost": "2.1.1",
     "torch": "2.13.0+cpu",
@@ -346,6 +346,6 @@
     "shap": "0.46.0",
     "prophet": "1.4.0"
   },
-  "treinado_em": "2026-09-22T11:44:43",
-  "nota": "Curva do autoencoder do artefato PROMOVIDO (treinado em 22/09/2026, Bloco H; ROC-AUC 0,8582). O criterio 'maior percentil com recall >= 0,70' da p81 nesta curva. Na maquina de 20/09 dava p83 (ver curva_limiar_anomalia_v2_varredura_20_09_p83.json): o percentil e derivado do criterio, nao uma constante, e o autoencoder nao reproduz entre maquinas — docs/LIMITACOES.md, 'Reprodutibilidade do autoencoder entre maquinas'."
+  "treinado_em": "2026-09-20T00:31:58",
+  "nota": "Curva do autoencoder treinado em 20/09/2026 noutra maquina (ROC-AUC 0,8694; o criterio 'maior percentil com recall >= 0,70' dava p83). Preservada como registro de que o autoencoder NAO reproduz entre maquinas com a mesma base, semente e versoes. A curva do artefato promovido esta em curva_limiar_anomalia_v2_varredura.json."
 }
