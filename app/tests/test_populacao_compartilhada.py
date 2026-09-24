@@ -28,9 +28,10 @@ Bloco B (20/09/2026). O que este arquivo trava, por seção:
   cada um a sua lista de features e `predict` funciona com os dois sem o
   encoder de um contaminar o outro.
 
-  LIMIAR DO AUTOENCODER (B.4): `THRESHOLD_PERCENTIL_V2` é o que o critério
-  declarado escolhe na curva medida (docs/evidencia_base_v2/), não um número
-  solto.
+  LIMIAR DO AUTOENCODER (B.4): o percentil gravado na evidência publicada
+  (docs/evidencia_base_v2/) é o que o critério declarado escolhe na própria
+  curva — não um número solto. Não existe constante: o treino aplica o
+  critério (`AnomalyDetector.train(recall_minimo=...)`) e grava a saída.
 
 Todo treino aqui vai para `tmp_path` (MODELS_DIR monkeypatched): os binários
 reais de `models/` são o gate de honestidade do README (`tests/conftest.py`).
@@ -233,7 +234,12 @@ from crai.scripts.gerar_bases import DADOS_V2_DIR  # noqa: E402
 
 CODIGOS_CARTAO = {"expired_card", "card_declined", "do_not_honor"}
 RAIZ_REPO = Path(__file__).resolve().parent.parent.parent
-CURVA_MEDIDA = RAIZ_REPO / "docs" / "evidencia_base_v2" / "curva_limiar_anomalia_v2_varredura.json"
+EVIDENCIA_V2 = RAIZ_REPO / "docs" / "evidencia_base_v2"
+CURVA_MEDIDA = EVIDENCIA_V2 / "curva_limiar_anomalia_v2_varredura.json"
+# Toda curva "final" publicada (uma por artefato promovido, nome datado): a de
+# 22/09 (p81), a de 20/09 (p83, outra máquina) e a de 23/09 (p83, esta máquina).
+CURVAS_FINAIS = sorted(EVIDENCIA_V2.glob("curva_limiar_anomalia_v2_final_*.json"))
+CURVA_PROMOVIDA_23_09 = EVIDENCIA_V2 / "curva_limiar_anomalia_v2_final_23_09_p83.json"
 
 
 @pytest.fixture(scope="module")
@@ -447,24 +453,32 @@ class TestFeaturesDoArtefato:
 
 class TestLimiarAnomaliaV2:
 
-    def test_constante_v2_e_o_maior_percentil_com_recall_acima_do_piso(self):
-        """A constante é a SAÍDA do critério sobre a curva publicada — não um número.
+    def test_a_evidencia_publicada_registra_a_saida_do_criterio(self):
+        """O percentil gravado na evidência é a SAÍDA do critério sobre a curva
+        publicada — não um número.
 
-        A curva em `docs/evidencia_base_v2/` é a do artefato promovido
-        (22/09/2026, p81). O autoencoder não reproduz entre máquinas (ver
-        `docs/LIMITACOES.md`): quem retreinar noutra máquina reaplica o
-        critério, regrava a curva e a constante, e este teste é o que obriga
-        as três coisas a andarem juntas (na máquina de 20/09 o critério dava
-        p83; o `curva_limiar_anomalia_v2_varredura_20_09_p83.json` ao lado
-        guarda essa curva).
+        A curva em `docs/evidencia_base_v2/` é a do artefato de 22/09/2026
+        (p81, ROC-AUC 0,8582). O autoencoder não reproduz entre máquinas (ver
+        `docs/LIMITACOES.md`): na máquina de 20/09 o critério dava p83
+        (`curva_limiar_anomalia_v2_varredura_20_09_p83.json` ao lado), e na de
+        23/09 voltou a p83. Não há constante para "regravar": o treino aplica o
+        critério e grava a saída no meta; este teste cobra que a evidência
+        publicada obedeça ao mesmo critério inteiro — o percentil registrado é
+        o escolhido, ele passa no piso, e o seguinte já não passa (é o MAIOR).
         """
         if not CURVA_MEDIDA.exists():
             pytest.skip(f"{CURVA_MEDIDA} ausente")
-        curva = json.loads(CURVA_MEDIDA.read_text(encoding="utf-8"))["curva_limiar"]
-        escolhido = anomaly_module.AnomalyDetector.escolher_percentil(
-            curva, anomaly_module.RECALL_MINIMO_LIMIAR_V2)
-        assert escolhido["percentil"] == anomaly_module.THRESHOLD_PERCENTIL_V2 == 81.0
-        assert escolhido["recall"] >= anomaly_module.RECALL_MINIMO_LIMIAR_V2
+        medido = json.loads(CURVA_MEDIDA.read_text(encoding="utf-8"))
+        curva = medido["curva_limiar"]
+        piso = anomaly_module.RECALL_MINIMO_LIMIAR_V2
+        escolhido = anomaly_module.AnomalyDetector.escolher_percentil(curva, piso)
+        assert escolhido["percentil"] == medido["threshold_percentile"], (
+            f"a evidência registra p{medido['threshold_percentile']}, o critério na "
+            f"curva dela dá p{escolhido['percentil']}")
+        assert escolhido["recall"] >= piso
+        seguinte = min((c for c in curva if c["percentil"] > escolhido["percentil"]),
+                       key=lambda c: c["percentil"])
+        assert seguinte["recall"] < piso, seguinte
         # p95 (a constante da v1) deixa dois terços dos anômalos passarem na v2.
         p95 = next(c for c in curva if c["percentil"] == anomaly_module.THRESHOLD_PERCENTIL_V1)
         assert p95["recall"] < 0.40
@@ -474,3 +488,44 @@ class TestLimiarAnomaliaV2:
                  {"percentil": 90.0, "recall": 0.3, "precision": 0.8, "f1": 0.44}]
         assert anomaly_module.AnomalyDetector.escolher_percentil(curva, 0.70)["percentil"] == 80.0
         assert anomaly_module.AnomalyDetector.escolher_percentil(curva, 0.30)["percentil"] == 90.0
+
+    @pytest.mark.parametrize("arquivo", CURVAS_FINAIS, ids=[a.name for a in CURVAS_FINAIS])
+    def test_toda_curva_final_publicada_obedece_ao_criterio(self, arquivo):
+        """Cada curva "final" em `docs/evidencia_base_v2/` registra em
+        `percentil_usado` a saída do critério na própria curva — o escolhido
+        passa no piso e o seguinte não. Vale para os três artefatos publicados
+        (20/09 p83, 22/09 p81, 23/09 p83) e para qualquer um que se publique
+        depois com o mesmo padrão de nome."""
+        d = json.loads(arquivo.read_text(encoding="utf-8"))
+        curva, piso = d["curva"], anomaly_module.RECALL_MINIMO_LIMIAR_V2
+        escolhido = anomaly_module.AnomalyDetector.escolher_percentil(curva, piso)
+        assert d["percentil_usado"] == escolhido["percentil"], arquivo.name
+        assert escolhido["recall"] >= piso
+        seguinte = min((c for c in curva if c["percentil"] > escolhido["percentil"]),
+                       key=lambda c: c["percentil"])
+        assert seguinte["recall"] < piso, (arquivo.name, seguinte)
+
+    def test_a_curva_publicada_de_23_09_e_a_do_artefato_promovido(self):
+        """`app/models/` está fora do git; a cópia publicada é o que permite a quem
+        clona verificar a declaração do README §4.6. Aqui: a cópia existe, se
+        identifica (nota + artefato), traz o `criterio_limiar` do meta, e — quando
+        há artefato em `app/models/` — é idêntica, ponto a ponto, à curva dele."""
+        assert CURVA_PROMOVIDA_23_09.exists(), CURVA_PROMOVIDA_23_09
+        d = json.loads(CURVA_PROMOVIDA_23_09.read_text(encoding="utf-8"))
+        assert "23/09/2026" in d["nota"] and "p83" in d["nota"] and "0,8694" in d["nota"]
+        assert d["artefato"]["threshold_percentil"] == d["percentil_usado"] == 83.0
+        assert d["artefato"]["roc_auc"] == 0.8694
+        assert d["criterio_limiar"]["percentil"] == 83.0
+        assert d["criterio_limiar"]["recall_minimo"] == anomaly_module.RECALL_MINIMO_LIMIAR_V2
+
+        curva_local = anomaly_module.MODELS_DIR / "curva_limiar_anomalia.json"
+        meta_local = anomaly_module.MODELS_DIR / "autoencoder_meta.json"
+        if not (curva_local.exists() and meta_local.exists()):
+            pytest.skip("app/models/ sem artefato — a cópia publicada é a única evidência aqui")
+        local = json.loads(curva_local.read_text(encoding="utf-8"))
+        meta = json.loads(meta_local.read_text(encoding="utf-8"))
+        if meta["treinado_em"] != d["artefato"]["treinado_em"]:
+            pytest.skip("app/models/ tem outro artefato (retreinado depois de 23/09); "
+                        "publique a curva dele com nome datado")
+        assert local["curva"] == d["curva"]
+        assert local["criterio_limiar"] == d["criterio_limiar"] == meta["criterio_limiar"]

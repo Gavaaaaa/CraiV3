@@ -45,7 +45,10 @@ Desde o trabalho de base de dados/treino, aceita também:
     --dados PASTA                           pasta da base persistida
     --sem-dados                             (v1) ignora a base em disco
     --percentil-limiar P                    percentil do limiar do autoencoder
-                                            (default: constante da base)
+                                            (default: p95 na v1; na v2 o treino
+                                            APLICA o critério — maior percentil
+                                            com recall >= RECALL_MINIMO_LIMIAR_V2
+                                            — e o flag explícito o desliga)
 
 Uso:
     python -m crai.scripts.train_all
@@ -132,10 +135,12 @@ def treinar_classifier(n_samples: int, fonte: str = "sintetico", dados=None,
 
 
 def treinar_anomaly(n_samples: int, fonte: str = "sintetico", dados=None,
-                    threshold_percentile: float = None) -> dict:
+                    threshold_percentile: float = None, recall_minimo: float = None) -> dict:
     _cabecalho("MODULO 2/3 -- Anomaly Detector (Autoencoder PyTorch)")
     det = AnomalyDetector()
     extra = {} if threshold_percentile is None else {"threshold_percentile": threshold_percentile}
+    if recall_minimo is not None:
+        extra["recall_minimo"] = recall_minimo
     metrics = det.train(n_samples=n_samples, fonte=fonte, dados=dados, **extra)
     metrics["recarregavel"] = AnomalyDetector().load()
     return metrics
@@ -405,8 +410,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="(v1) Ignora a base em disco e gera os datasets em memoria")
     parser.add_argument("--percentil-limiar", type=float, default=None,
                         help="Percentil do erro dos saudaveis que vira limiar do autoencoder "
-                             "(default: THRESHOLD_PERCENTIL_V1 na v1; na v2, o ponto escolhido "
-                             "pela curva, ou o mesmo da v1 enquanto nao houver)")
+                             "(default: THRESHOLD_PERCENTIL_V1 na v1; na v2 o treino aplica o "
+                             "criterio 'maior percentil com recall >= RECALL_MINIMO_LIMIAR_V2' "
+                             "a curva deste treino). Passar um valor DESLIGA o criterio na v2 "
+                             "e o meta fica com criterio_limiar=null")
     parser.add_argument("--ativar-voluntario", action="store_true",
                         help="Promove o candidato a voluntary_risk.joblib (o scorer passa "
                              "a usar o modelo — muda o pipeline voluntario)")
@@ -435,8 +442,10 @@ def main(argv=None):
     models_dir = apontar_models_dir(SUBPASTA_MODELOS_V2 if v2 else None)
     grupos = (lambda nome: b[nome]["customer_id"].to_numpy()) if v2 else (lambda nome: None)
     percentil = args.percentil_limiar
-    if percentil is None and v2:
-        percentil = anomaly_module.THRESHOLD_PERCENTIL_V2 or anomaly_module.THRESHOLD_PERCENTIL_V1
+    # v2: o percentil e a SAIDA do criterio (escolher_percentil) aplicado a
+    # curva DESTE treino — nao ha constante para copiar. Um --percentil-limiar
+    # explicito desliga o criterio, e o meta registra isso (criterio_limiar=null).
+    recall_minimo = anomaly_module.RECALL_MINIMO_LIMIAR_V2 if (v2 and percentil is None) else None
 
     print(f"\n{'=' * LARGURA}")
     print("  CRAI -- TREINO COMPLETO DOS MODELOS DE ML")
@@ -448,7 +457,8 @@ def main(argv=None):
     inicio = time.perf_counter()
     classifier = treinar_classifier(args.classifier_samples, args.fonte,
                                     b.get("classificador"), grupos("classificador") if v2 else None)
-    anomaly = treinar_anomaly(args.anomaly_samples, args.fonte, b.get("comportamental"), percentil)
+    anomaly = treinar_anomaly(args.anomaly_samples, args.fonte, b.get("comportamental"),
+                              percentil, recall_minimo)
     if v2:
         with open(models_dir / CURVA_LIMIAR_ARQUIVO, "w", encoding="utf-8") as f:
             escolhido = anomaly_module.AnomalyDetector.escolher_percentil(
@@ -456,9 +466,11 @@ def main(argv=None):
             json.dump({"base": "v2", "percentil_usado": anomaly["threshold_percentile"],
                        "criterio": (f"maior percentil da curva com recall >= "
                                     f"{anomaly_module.RECALL_MINIMO_LIMIAR_V2} "
-                                    "(AnomalyDetector.escolher_percentil); o percentil e "
-                                    "DERIVADO da curva deste artefato, nao uma constante — "
-                                    "outra maquina pode dar outro percentil pelo mesmo criterio"),
+                                    "(AnomalyDetector.escolher_percentil), APLICADO PELO "
+                                    "TREINO a curva deste artefato; o percentil e derivado, "
+                                    "nao uma constante — outra maquina pode dar outro "
+                                    "percentil pelo mesmo criterio"),
+                       "criterio_limiar": anomaly.get("criterio_limiar"),
                        "percentil_pelo_criterio_nesta_curva": escolhido["percentil"],
                        "recall_no_percentil_usado": next(
                            (c["recall"] for c in anomaly["curva_limiar"]

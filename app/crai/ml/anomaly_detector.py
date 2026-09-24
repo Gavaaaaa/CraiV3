@@ -52,11 +52,14 @@ MODELS_DIR = BASE_DIR / "models"
 # diferentes e se separavam ~6x no erro; em p95 o detector media recall 0,97
 # e precisão 0,93 — o percentil nem era uma escolha.
 THRESHOLD_PERCENTIL_V1 = 95.0
-# Base v2: o percentil NÃO é uma constante escolhida — é a SAÍDA de um
-# critério aplicado à curva do artefato que está em produção. Na v2 o perfil
-# de conta vem da mesma população para os dois grupos, a anomalia está só no
-# comportamento, a separação cai para ~3,3x e p95 deixa o recall em ~0,34
-# (precisão ~0,82) — dois terços dos anômalos passam.
+# Base v2: o percentil NÃO é uma constante — é a SAÍDA de um critério
+# aplicado à curva do artefato que está em produção, e é o TREINO quem aplica
+# o critério (`train(recall_minimo=...)` chama `escolher_percentil` sobre a
+# curva recém-calculada e grava o resultado em `threshold_percentil` no
+# `autoencoder_meta.json`). Na v2 o perfil de conta vem da mesma população
+# para os dois grupos, a anomalia está só no comportamento, a separação cai
+# para ~3,3x e p95 deixa o recall em ~0,34 (precisão ~0,82) — dois terços dos
+# anômalos passam.
 #
 # CRITÉRIO (`escolher_percentil`, recall_minimo=RECALL_MINIMO_LIMIAR_V2): o
 # MAIOR percentil da curva precisão x recall x F1 (`curva_limiar`, p75..p97,
@@ -65,27 +68,34 @@ THRESHOLD_PERCENTIL_V1 = 95.0
 # recall impede o detector de "acertar" ficando calado.
 #
 # O critério é o mesmo em qualquer máquina; o percentil que ele devolve NÃO
-# é. O autoencoder (Adam + dropout + early stopping com tolerância 1e-5) é
-# sensível à ordem de acumulação de ponto flutuante, que muda com o BLAS e o
-# conjunto de instruções da CPU — mesma base (sha256 conferidos), mesma
-# semente e mesmas versões de torch/numpy/sklearn deram ROC-AUC 0,8684 e
-# 0,8694 nas rodadas de 20/09/2026 e 0,8582 na máquina que treinou o
-# artefato promovido em 22/09/2026 (determinístico dentro de cada máquina:
-# quatro rodadas idênticas aqui, com 1, 6 e 12 threads). Classificador,
-# liquidez e voluntário reproduzem na quarta casa entre as mesmas máquinas.
-# Fixar versões no requirements.txt não basta para o autoencoder.
+# é. A CAUSA é a ordem de acumulação em ponto flutuante, que depende do BLAS
+# e do conjunto de instruções da CPU — NÃO o early stopping: a LSTM da
+# liquidez não tem early stopping e varia mesmo assim (0,0004 de ROC-AUC).
+# O early stopping (Adam + dropout + tolerância 1e-5) é AMPLIFICADOR: uma
+# acumulação diferente muda a época em que o treino para, e aí muda o modelo
+# inteiro (0,0112 de ROC-AUC) em vez de só o último dígito. Mesma base
+# (sha256 conferidos), mesma semente e mesmas versões de torch/numpy/sklearn
+# deram ROC-AUC 0,8684 e 0,8694 nas rodadas de 20/09/2026, 0,8582 na máquina
+# de 22/09/2026 e 0,8694 na de 23/09/2026 (determinístico dentro de cada
+# máquina: quatro rodadas idênticas, com 1, 6 e 12 threads). Classificador e
+# voluntário reproduzem na quarta casa entre todas. Fixar versões no
+# requirements.txt não basta para o autoencoder. Ver docs/LIMITACOES.md.
 #
-# Na curva do artefato promovido (22/09/2026, 120.000 clientes):
-#   p75  rec 0,809  prec 0,680
-#   p81  rec 0,712  prec 0,711   <- maior percentil com recall >= 0,70
-#   p82  rec 0,694  prec 0,716
-#   p83  rec 0,670  prec 0,721   (era a saída do critério na máquina de 20/09)
-#   p90  rec 0,497  prec 0,765
-#   p95  rec 0,341  prec 0,817
-# Quem retreinar em outra máquina deve reaplicar o critério à curva nova e
-# regravar esta constante e `docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura.json`;
-# `test_populacao_compartilhada.py::TestLimiarAnomaliaV2` cobra a coerência.
-THRESHOLD_PERCENTIL_V2 = 81.0
+# Por isso NÃO existe uma constante `THRESHOLD_PERCENTIL_V2`. Existiu até
+# 23/09/2026, congelada em 81,0: o treino copiava o número em vez de aplicar o
+# critério, meta e constante concordavam por serem a mesma leitura, e a curva
+# gravada pelo mesmo treino dizia p83. A fonte da verdade é o
+# `threshold_percentil` do `autoencoder_meta.json` do artefato, gravado pelo
+# treino a partir de `escolher_percentil`; quem precisa do percentil lê o meta.
+#
+# Valores de REFERÊNCIA, só documentação — nenhum caminho de decisão os lê:
+#   máquina de 20/09/2026 -> p83  (docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura_20_09_p83.json)
+#   máquina de 22/09/2026 -> p81  (docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura.json)
+#     p75 rec 0,809 prec 0,680 | p81 rec 0,712 prec 0,711 | p82 rec 0,694 prec 0,716
+#     p83 rec 0,670 prec 0,721 | p90 rec 0,497 prec 0,765 | p95 rec 0,341 prec 0,817
+# `test_servir_v2.py::TestOLimiarDoAutoencoderPromovido` cobra que o meta do
+# artefato promovido seja a saída do critério na curva dele — inclusive que o
+# percentil seguinte já fique abaixo do piso (é o que prova "maior").
 RECALL_MINIMO_LIMIAR_V2 = 0.70
 PERCENTIS_CURVA_LIMIAR = tuple(range(75, 98))       # 75, 76, ..., 97
 
@@ -148,6 +158,7 @@ class AnomalyDetector:
         seed: int = 42,
         fonte: str = "sintetico",
         dados: "pd.DataFrame | None" = None,
+        recall_minimo: "float | None" = None,
     ) -> dict:
         """
         Treina o autoencoder em dataset comportamental sintético e retorna métricas.
@@ -168,8 +179,14 @@ class AnomalyDetector:
             bottleneck: Dimensão do gargalo do autoencoder
             patience: Épocas sem melhora antes do early stopping
             threshold_percentile: Percentil do erro dos saudáveis que vira threshold
-                   (default `THRESHOLD_PERCENTIL_V1`; a base v2 usa o ponto
-                   escolhido pela curva — ver as constantes no topo do módulo)
+                   (default `THRESHOLD_PERCENTIL_V1`). IGNORADO quando
+                   `recall_minimo` vem: aí o percentil é a saída do critério.
+            recall_minimo: piso de recall do CRITÉRIO da base v2. Quando vem,
+                   o treino calcula a curva precisão x recall por percentil e
+                   usa `escolher_percentil(curva, recall_minimo)` — o MAIOR
+                   percentil com recall acima do piso — para definir o limiar
+                   e gravar `threshold_percentil` no meta. O treino APLICA o
+                   critério; não copia um número. `None` = caminho v1.
             seed: Seed para reprodutibilidade
             fonte: "sintetico" (default, inalterado) ou "sintetico_calibrado"
                    (parâmetros medidos em doadores reais + exceções ao rótulo)
@@ -230,14 +247,37 @@ class AnomalyDetector:
 
         # ── Threshold calibrado nos saudáveis de validação (held-out) ────
         erros_val = self._reconstruction_error(X_val_s)
+        # Curva precisão x recall x F1 por percentil, sempre calculada, e
+        # ANTES do limiar: na base v2 é dela que o critério tira o percentil;
+        # em qualquer base é o que permite auditar a escolha sem retreinar.
+        erros_anom = self._reconstruction_error(
+            self.scaler.transform(X_anomalous).astype(np.float32))
+        curva = self.curva_limiar(erros_val, erros_anom)
+        criterio = None
+        if recall_minimo is not None:
+            escolhido = self.escolher_percentil(curva, recall_minimo)
+            threshold_percentile = escolhido["percentil"]
+            criterio = {
+                "regra": "maior percentil da curva com recall >= recall_minimo "
+                         "(AnomalyDetector.escolher_percentil)",
+                "recall_minimo": recall_minimo,
+                "percentil": escolhido["percentil"],
+                "recall": escolhido["recall"],
+                "precision": escolhido["precision"],
+            }
+            if escolhido["recall"] < recall_minimo:
+                print(f"[ANOMALY] AVISO: nenhum percentil da curva atinge recall "
+                      f">= {recall_minimo}; usando o de maior recall "
+                      f"(p{threshold_percentile:g}, recall {escolhido['recall']:.4f})")
+            else:
+                print(f"[ANOMALY] Limiar pelo critério: p{threshold_percentile:g} "
+                      f"(recall {escolhido['recall']:.4f} >= {recall_minimo}, "
+                      f"precisão {escolhido['precision']:.4f})")
         self.threshold = float(np.percentile(erros_val, threshold_percentile))
 
         metrics = self._evaluate(X_val_s, X_anomalous, threshold_percentile, historico)
-        # Curva precisão x recall x F1 por percentil, sempre calculada: é o que
-        # permite escolher (e auditar) o limiar de uma base nova sem retreinar.
-        erros_anom = self._reconstruction_error(
-            self.scaler.transform(X_anomalous).astype(np.float32))
-        metrics["curva_limiar"] = self.curva_limiar(erros_val, erros_anom)
+        metrics["curva_limiar"] = curva
+        metrics["criterio_limiar"] = criterio
         metrics["n_train_healthy"] = int(len(X_train))
         metrics["fonte_usada"] = fonte
         metrics["n_amostras"] = int(n_samples)
@@ -426,6 +466,10 @@ class AnomalyDetector:
             "bottleneck": bottleneck,
             "threshold": self.threshold,
             "threshold_percentil": metrics["threshold_percentile"],
+            # None no caminho v1 (percentil fixo); na v2, o critério que o
+            # treino aplicou e o ponto que ele escolheu — é o que o teste do
+            # artefato promovido confere contra a curva gravada ao lado.
+            "criterio_limiar": metrics.get("criterio_limiar"),
             "epochs_treinadas": metrics["epochs_trained"],
             "melhor_val_loss": metrics["best_val_loss"],
             "n_treino_saudaveis": metrics["n_train_healthy"],

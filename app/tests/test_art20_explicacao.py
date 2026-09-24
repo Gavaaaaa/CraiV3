@@ -357,8 +357,18 @@ class TestDecreto11034:
 class TestOperadora:
     def test_a_rota_do_titular_exige_tenant_e_nao_ha_outra(self):
         rotas = [r for r in app_module.app.routes if "titular" in getattr(r, "path", "")]
+        # Não-vazia ANTES de comparar: a igualdade abaixo já reprovaria com
+        # lista vazia, mas com a mensagem errada ("esperava uma rota, veio
+        # nenhuma" é outro defeito que "veio a rota errada").
+        assert rotas, ("nenhuma rota com 'titular' em app.routes — a catraca não tem "
+                       "o que verificar (include_router deixou de achatar as rotas?)")
         assert [r.path for r in rotas] == ["/titular/explicacao/{sujeito_id}"]
         deps = {getattr(d.call, "__name__", "") for d in rotas[0].dependant.dependencies}
         assert "get_tenant_id" in deps
         assert "Art. 20 §1º" in titular_api.explicacao_do_titular.__doc__
         assert "segredo comercial" in titular_api.explicacao_do_titular.__doc__
+
+    def test_a_catraca_reprova_quando_nao_ha_rota_para_verificar(self, monkeypatch):
+        monkeypatch.setattr(app_module.app.router, "routes", [])
+        with pytest.raises(AssertionError):
+            self.test_a_rota_do_titular_exige_tenant_e_nao_ha_outra()

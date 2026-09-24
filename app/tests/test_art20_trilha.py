@@ -591,8 +591,19 @@ class TestRetencaoEBestEffort:
 
 class TestOperadora:
     def test_toda_rota_do_titular_exige_tenant(self):
-        for rota in app_module.app.routes:
-            if "titular" in getattr(rota, "path", ""):
-                deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
-                nomes = {getattr(d.call, "__name__", "") for d in deps}
-                assert nomes & {"get_tenant_id", "get_conta"}, rota.path
+        # CATRACA QUE NÃO ENCONTRA O QUE VERIFICAR REPROVA. Com um
+        # `_IncludedRouter` sem `.path` em `app.routes` (FastAPI mais novo), o
+        # `getattr(..., "")` nunca casa "titular" e o teste passava sem olhar
+        # rota nenhuma — a lista tem que ser não-vazia antes de iterar.
+        rotas = [r for r in app_module.app.routes if "titular" in getattr(r, "path", "")]
+        assert rotas, ("nenhuma rota com 'titular' em app.routes — a catraca não tem "
+                       "o que verificar (include_router deixou de achatar as rotas?)")
+        for rota in rotas:
+            deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
+            nomes = {getattr(d.call, "__name__", "") for d in deps}
+            assert nomes & {"get_tenant_id", "get_conta"}, rota.path
+
+    def test_a_catraca_reprova_quando_nao_ha_rota_para_verificar(self, monkeypatch):
+        monkeypatch.setattr(app_module.app.router, "routes", [])
+        with pytest.raises(AssertionError):
+            self.test_toda_rota_do_titular_exige_tenant()

@@ -206,29 +206,89 @@ class TestOGrafoServeOArtefatoV2:
 @requer_artefato_v2
 class TestOLimiarDoAutoencoderPromovido:
     """O percentil do autoencoder em `models/` é o que o critério devolve na
-    curva DESSE artefato — não a constante de outra máquina.
+    curva DESSE artefato — não uma constante.
 
     O autoencoder não reproduz entre máquinas (`docs/LIMITACOES.md`): o p83 de
-    20/09 virou p81 em 22/09 pelo mesmo critério. Se alguém retreinar e não
-    reaplicar o critério, este teste reprova antes de o limiar errado servir.
+    20/09 virou p81 em 22/09 e voltou a p83 em 23/09, pelo mesmo critério. O
+    TREINO é quem aplica o critério (`AnomalyDetector.train(recall_minimo=...)`)
+    e grava a saída no meta; aqui se confere o critério INTEIRO sobre o artefato
+    promovido:
+
+      (a) `meta["threshold_percentil"]` == `escolher_percentil(curva, piso)`;
+      (b) o recall no percentil escolhido é >= piso;
+      (c) o recall no percentil SEGUINTE da curva é < piso — é o que prova que
+          é o MAIOR percentil que passa, e não apenas um que passa.
+
+    Um percentil vizinho gravado no meta — que "também passa", ou que não
+    passa — reprova (teste de adulteração abaixo).
     """
 
-    def test_o_percentil_gravado_e_a_saida_do_criterio_na_curva_do_artefato(self):
-        from crai.ml import anomaly_detector as am
-
+    @staticmethod
+    def _artefato() -> tuple:
         curva_path = MODELS_DIR / "curva_limiar_anomalia.json"
         meta_path = MODELS_DIR / "autoencoder_meta.json"
         if not (curva_path.exists() and meta_path.exists()):
             pytest.skip("models/ sem curva_limiar_anomalia.json ou autoencoder_meta.json")
-        curva = json.loads(curva_path.read_text(encoding="utf-8"))["curva"]
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return (json.loads(curva_path.read_text(encoding="utf-8"))["curva"],
+                json.loads(meta_path.read_text(encoding="utf-8")))
 
-        escolhido = am.AnomalyDetector.escolher_percentil(curva, am.RECALL_MINIMO_LIMIAR_V2)
-        assert escolhido["recall"] >= am.RECALL_MINIMO_LIMIAR_V2
-        assert meta["threshold_percentil"] == am.THRESHOLD_PERCENTIL_V2 == escolhido["percentil"], (
-            f"artefato gravado com p{meta['threshold_percentil']}, constante "
-            f"p{am.THRESHOLD_PERCENTIL_V2}, critério na curva deste artefato "
-            f"p{escolhido['percentil']}: as três têm que coincidir")
+    @staticmethod
+    def _conferir_criterio(meta: dict, curva: list, piso: float) -> dict:
+        """As três afirmações (a), (b), (c). Devolve o ponto escolhido e o seguinte."""
+        from crai.ml import anomaly_detector as am
+
+        escolhido = am.AnomalyDetector.escolher_percentil(curva, piso)
+        # (a) o meta gravou a saída do critério, não outro número
+        assert meta["threshold_percentil"] == escolhido["percentil"], (
+            f"artefato gravado com p{meta['threshold_percentil']}; o critério na curva "
+            f"deste artefato dá p{escolhido['percentil']}. O treino tem que APLICAR o "
+            "critério, não copiar um número")
+        # (b) o recall no percentil escolhido atinge o piso
+        assert escolhido["recall"] >= piso, escolhido
+        # (c) é o MAIOR: o percentil seguinte da curva já fica abaixo do piso
+        seguintes = [c for c in curva if c["percentil"] > escolhido["percentil"]]
+        assert seguintes, (
+            f"p{escolhido['percentil']} é o último ponto da curva — a varredura é "
+            "curta demais para provar que ele é o maior que passa")
+        seguinte = min(seguintes, key=lambda c: c["percentil"])
+        assert seguinte["recall"] < piso, (
+            f"p{seguinte['percentil']} ainda tem recall {seguinte['recall']} >= {piso}: "
+            f"p{escolhido['percentil']} passa, mas não é o MAIOR que passa")
+        # e o limiar gravado é o da curva nesse percentil (a curva arredonda a 6 casas)
+        assert abs(meta["threshold"] - escolhido["threshold"]) < 1e-6, (
+            f"threshold do meta {meta['threshold']} não é o da curva em "
+            f"p{escolhido['percentil']} ({escolhido['threshold']})")
+        return {"escolhido": escolhido, "seguinte": seguinte}
+
+    def test_o_percentil_gravado_e_a_saida_do_criterio_na_curva_do_artefato(self):
+        from crai.ml import anomaly_detector as am
+
+        curva, meta = self._artefato()
+        self._conferir_criterio(meta, curva, am.RECALL_MINIMO_LIMIAR_V2)
+
+    def test_o_meta_declara_o_criterio_que_o_treino_aplicou(self):
+        """`criterio_limiar` no meta é a prova de que o treino aplicou o critério
+        (e não recebeu um `--percentil-limiar` à mão)."""
+        from crai.ml import anomaly_detector as am
+
+        _, meta = self._artefato()
+        criterio = meta.get("criterio_limiar")
+        assert criterio, ("meta sem `criterio_limiar`: o artefato foi treinado com "
+                          "percentil fixo, não pelo critério")
+        assert criterio["recall_minimo"] == am.RECALL_MINIMO_LIMIAR_V2
+        assert criterio["percentil"] == meta["threshold_percentil"]
+        assert criterio["recall"] >= am.RECALL_MINIMO_LIMIAR_V2
+
+    @pytest.mark.parametrize("delta", [-1.0, +1.0], ids=["um_abaixo", "um_acima"])
+    def test_um_percentil_adulterado_no_meta_reprova(self, delta):
+        """Adultera o meta em memória: o vizinho de baixo "também passa" no
+        piso mas não é o maior; o de cima não passa. Os dois têm que reprovar."""
+        from crai.ml import anomaly_detector as am
+
+        curva, meta = self._artefato()
+        adulterado = {**meta, "threshold_percentil": meta["threshold_percentil"] + delta}
+        with pytest.raises(AssertionError):
+            self._conferir_criterio(adulterado, curva, am.RECALL_MINIMO_LIMIAR_V2)
 
 
 class TestMigracaoDoLogDeCiclos:

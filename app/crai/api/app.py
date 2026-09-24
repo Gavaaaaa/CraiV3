@@ -814,9 +814,9 @@ async def simulate_churn_risk(request: Request,
 
 
 @app.get("/metrics/recovery")
-async def metricas_de_recuperacao(tenant_id: Optional[str] = None,
-                                  desde: Optional[str] = None) -> JSONResponse:
-    """O agregado de negócio do churn involuntário (Gap 7).
+async def metricas_de_recuperacao(desde: Optional[str] = None,
+                                  tenant_id: str = Depends(get_tenant_id)) -> JSONResponse:
+    """O agregado de negócio do churn involuntário (Gap 7) — DA EMPRESA AUTENTICADA.
 
     MRR recuperado, taxa de recuperação, custo total, custo médio POR
     RECUPERAÇÃO e margem (fee − custo). É o número que sustenta o modelo
@@ -828,13 +828,14 @@ async def metricas_de_recuperacao(tenant_id: Optional[str] = None,
     de ciclos (`dunning/recovery_log.py`), e não o checkpoint do grafo: o
     checkpoint é memória de processo e some no restart.
 
-    ⚠️ SEM AUTENTICAÇÃO nesta fase, e declarado em vez de escondido: o projeto
-    não tem camada de auth além da assinatura dos webhooks, e este endpoint
-    expõe números de negócio agregados. Em produção ele fica atrás do mesmo
-    controle de acesso do dashboard; `tenant_id` aqui é FILTRO, não permissão.
+    O `tenant_id` vem do claim do JWT (`get_tenant_id`), como em todo o
+    self-service — e NÃO da URL. Aceitar `?tenant_id=` do chamador era o
+    defeito: qualquer pessoa lia o agregado de qualquer empresa escrevendo o
+    nome dela na query; a falta de autenticação era só o sintoma. Um
+    `?tenant_id=` que ainda chegue por compatibilidade é ignorado — a resposta
+    é sempre a da empresa do token. Não existe mais "ausente = todas".
 
     Args:
-        tenant_id: restringe a uma empresa cliente. Ausente = todas.
         desde: ISO-8601 (`2026-09-01` ou `2026-09-01T00:00:00+00:00`).
     """
     return JSONResponse(recovery_log.metricas(tenant_id=tenant_id, desde=desde))

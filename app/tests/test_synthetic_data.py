@@ -46,7 +46,25 @@ HASH_LIQUIDITY_20x90 = "80af6a12437aadac646e0bcbb367b5912d76d8cf3d725cfad872abe8
 
 
 def _hash(df: pd.DataFrame) -> str:
-    return hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()
+    """sha256 do DataFrame com os timestamps normalizados para `datetime64[ns]`.
+
+    A normalização fica AQUI, no teste, e não no gerador: mexer no gerador
+    mudaria a saída que este hash existe para travar. O que mudou entre o
+    pandas 2 e o 3 foi a UNIDADE do timestamp (`ns` → `us`) ao construir uma
+    coluna de datas — o dado é idêntico, e o hash de `hash_pandas_object`
+    varia com a unidade. Mesma ideia do hash canônico de `gerar_bases_v2.py`.
+
+    A seleção é por `is_datetime64_any_dtype` e a conversão por `dt.as_unit`:
+    `select_dtypes(include=["datetime64[us]"])` é recusado pelo pandas 2.2
+    ("too specific of a frequency"), e o objetivo é justamente rodar igual
+    nas duas versões.
+    """
+    d = df.copy()
+    for col in d.columns:
+        if pd.api.types.is_datetime64_any_dtype(d[col]):
+            d[col] = d[col].dt.as_unit("ns")
+    return hashlib.sha256(
+        pd.util.hash_pandas_object(d, index=True).values.tobytes()).hexdigest()
 
 
 requer_calibracao = pytest.mark.skipif(
@@ -71,6 +89,26 @@ class TestDefaultNaoMudou:
     def test_generate_liquidity_identico_ao_baseline(self):
         df = generate_liquidity_series(20, 90, seed=42, end_date="2026-09-01")
         assert _hash(df) == HASH_LIQUIDITY_20x90
+
+    def test_o_hash_nao_depende_da_unidade_do_timestamp(self):
+        """A trava é do DADO, não da versão do pandas.
+
+        O pandas 3 constrói a coluna `date` em `datetime64[us]`; o 2, em `ns`.
+        Reproduz-se as duas unidades a partir do mesmo DataFrame e o hash tem
+        que ser o mesmo — e o travado — nas duas. Se um dia o pandas passar a
+        usar uma terceira unidade, este teste é o que reprova primeiro.
+        """
+        df = generate_liquidity_series(20, 90, seed=42, end_date="2026-09-01")
+        colunas_de_data = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+        assert colunas_de_data, "o gerador de liquidez deixou de ter coluna de data"
+
+        em_ns, em_us = df.copy(), df.copy()
+        for col in colunas_de_data:
+            em_ns[col] = em_ns[col].dt.as_unit("ns")
+            em_us[col] = em_us[col].dt.as_unit("us")
+        assert str(em_us[colunas_de_data[0]].dtype) == "datetime64[us]"
+        assert str(em_ns[colunas_de_data[0]].dtype) == "datetime64[ns]"
+        assert _hash(em_ns) == _hash(em_us) == HASH_LIQUIDITY_20x90
 
     def test_fonte_sintetico_explicita_e_o_default(self):
         pd.testing.assert_frame_equal(generate_dataset(300, seed=7),

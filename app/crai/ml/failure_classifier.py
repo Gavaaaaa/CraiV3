@@ -177,6 +177,19 @@ STRIPE_CODE_MAP = {
 }
 
 
+# Casas decimais do `p_recovery` DA RESPOSTA. É o único `p` que existe depois
+# do ensemble: o e-Profit, o score e o canal ótimo são calculados a partir dele,
+# e por isso o e-Profit recalculado a partir da resposta bate com o devolvido.
+# Seis casas porque o erro máximo de reconciliação é `0.5e-6 * LTV`: R$ 0,025
+# só a partir de um LTV de R$ 50 mil — abaixo do centavo em que o e-Profit sai.
+P_RECOVERY_CASAS = 6
+
+
+def _p_reconciliavel(p) -> float:
+    """O `p_recovery` arredondado UMA vez — o valor que sai E que entra nas contas."""
+    return round(float(p), P_RECOVERY_CASAS)
+
+
 class FailureClassifier:
     """
     Ensemble XGBoost + Random Forest para classificar falhas de pagamento.
@@ -509,16 +522,23 @@ class FailureClassifier:
         # Preparar input
         X = self._preprocess_single(features)
 
-        # Ensemble: 70% XGBoost + 30% Random Forest
+        # Ensemble: 70% XGBoost + 30% Random Forest.
+        #
+        # Arredondado UMA vez, para 6 casas, e é ESTE valor que sai na resposta
+        # e que entra no e-Profit, no score e no canal ótimo. Antes a resposta
+        # levava o `p` com 4 casas e o e-Profit era calculado com o `p` cheio:
+        # quem recalculasse `p_recovery * ltv - custo` a partir da resposta
+        # chegava a outro número, e o erro escalava com o LTV (até R$ 2,50 em
+        # R$ 50 mil). Com um único `p`, a reconciliação é exata por construção.
         xgb_proba = self.xgb.predict_proba(X)[0, 1]
         rf_proba = self.rf.predict_proba(X)[0, 1]
-        p_recovery = 0.7 * xgb_proba + 0.3 * rf_proba
+        p_recovery = _p_reconciliavel(0.7 * xgb_proba + 0.3 * rf_proba)
 
         # Score de recuperabilidade (0-100)
         recovery_score = int(round(p_recovery * 100))
 
-        # e-Profit
-        eprofit = round(float(p_recovery * ltv - cost), 2)
+        # e-Profit — a partir do MESMO `p_recovery` que vai na resposta
+        eprofit = round(p_recovery * ltv - cost, 2)
         recommend_action = bool(eprofit > 0)
 
         # Explicação SHAP
@@ -529,7 +549,7 @@ class FailureClassifier:
 
         result = {
             "recovery_score": recovery_score,
-            "p_recovery": round(float(p_recovery), 4),
+            "p_recovery": p_recovery,
             "eprofit": eprofit,
             "recommend_action": recommend_action,
             "channel": channel,
@@ -786,13 +806,16 @@ class FailureClassifier:
         elif tenure < 3:
             p_recovery = max(p_recovery - 0.10, 0.05)
 
+        # Mesma regra do caminho treinado: um único `p_recovery`, o da resposta.
+        p_recovery = _p_reconciliavel(p_recovery)
+
         ltv = features.get("ltv_estimated", features.get("invoice_amount", features.get("amount", 100)) * 6)
         cost = custo_intervencao(channel)
         eprofit = round(p_recovery * ltv - cost, 2)
 
         return {
             "recovery_score": int(round(p_recovery * 100)),
-            "p_recovery": round(p_recovery, 4),
+            "p_recovery": p_recovery,
             "eprofit": eprofit,
             "recommend_action": eprofit > 0,
             "channel": channel,

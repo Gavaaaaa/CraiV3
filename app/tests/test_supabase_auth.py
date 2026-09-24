@@ -322,16 +322,38 @@ class TestWebhooksIntocados:
         # `/insights/enviar`). Não é `startswith` puro: um `/clientes-webhook`
         # ou `/insights_admin` criado daqui a meses tem que cair na catraca,
         # não passar por ela.
-        SELF_SERVICE = ("/clientes", "/insights", "/titular")
+        # `/metrics` entrou aqui quando `/metrics/recovery` passou a tirar o
+        # tenant do token em vez da query — é dado de negócio da empresa
+        # autenticada, e só dela.
+        SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")
                        for p in SELF_SERVICE)
 
-        for rota in app_module.app.routes:
+        # CATRACA QUE NÃO ENCONTRA O QUE VERIFICAR REPROVA. A partir de certa
+        # versão do FastAPI, `include_router` deixa de achatar as rotas e
+        # `app.routes` traz um `_IncludedRouter` sem `.path` — iterar uma lista
+        # vazia (ou sem rota de self-service) passaria sem olhar nada.
+        rotas = list(app_module.app.routes)
+        assert rotas, "app.routes veio vazio — a catraca não tem o que verificar"
+        caminhos = [rota.path for rota in rotas]          # AttributeError é reprovação alta
+        assert any(_e_self_service(c) for c in caminhos), (
+            f"nenhuma rota de self-service em app.routes ({caminhos}) — "
+            "a catraca passaria sem verificar nada")
+
+        for rota in rotas:
             deps = getattr(getattr(rota, "dependant", None), "dependencies", [])
             nomes = {getattr(d.call, "__name__", "") for d in deps}
             usa = bool(nomes & {"get_tenant_id", "get_conta"})
             e_self_service = _e_self_service(rota.path)
             assert usa == e_self_service, (
                 f"{rota.path}: usa get_tenant_id={usa}, self-service={e_self_service}")
+
+    def test_a_catraca_reprova_quando_nao_ha_rota_para_verificar(self, monkeypatch):
+        """Sem rotas, a catraca acima tem que REPROVAR, nunca passar em silêncio."""
+        from crai.api import app as app_module
+
+        monkeypatch.setattr(app_module.app.router, "routes", [])
+        with pytest.raises(AssertionError):
+            self.test_so_as_rotas_do_self_service_dependem_de_get_tenant_id()

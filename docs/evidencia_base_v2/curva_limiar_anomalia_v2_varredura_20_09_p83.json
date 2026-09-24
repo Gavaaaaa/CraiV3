@@ -347,5 +347,5 @@
     "prophet": "1.4.0"
   },
   "treinado_em": "2026-09-20T00:31:58",
-  "nota": "Curva do autoencoder treinado em 20/09/2026 noutra maquina (ROC-AUC 0,8694; o criterio 'maior percentil com recall >= 0,70' dava p83). Preservada como registro de que o autoencoder NAO reproduz entre maquinas com a mesma base, semente e versoes. A curva do artefato promovido esta em curva_limiar_anomalia_v2_varredura.json."
+  "nota": "Curva do autoencoder treinado em 20/09/2026 noutra maquina (ROC-AUC 0,8694; o criterio 'maior percentil com recall >= 0,70' dava p83). Preservada como registro de que o autoencoder NAO reproduz entre maquinas com a mesma base, semente e versoes. A curva do artefato de 22/09/2026 (promovido naquela data, p81) esta em curva_limiar_anomalia_v2_varredura.json; o artefato promovido em 23/09/2026 e o desta maquina (p83, ROC-AUC 0,8694), com a curva em app/models/, fora do git."
 }

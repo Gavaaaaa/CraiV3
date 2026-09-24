@@ -40,7 +40,12 @@ from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
 from . import retention_log as trilha
-from .risk_scorer import REGRA_DE_RISCO, identidade_do_modelo
+from .risk_scorer import (
+    EVENTO_DADO_ESTATICO,
+    FIXED_RISK,
+    REGRA_DE_RISCO,
+    identidade_do_modelo,
+)
 from .retention_log import (
     TENANT_PADRAO,
     ciclo_aberto,
@@ -377,6 +382,31 @@ def _instrucao_de_assinatura(idioma: str = "pt") -> str:
     return f'Assine na última linha, exatamente assim: "{linha}".'
 
 
+# ── O `event` no prompt: vocabulário fechado ─────────────────────────────
+# O prompt de retenção carrega três campos. `channel` e `offer_label` vêm de
+# vocabulário fechado; `event` vem do webhook do SDK e é TEXTO LIVRE — é a única
+# porta por onde um texto de fora entraria no prompt. Fora do vocabulário, o
+# prompt recebe este rótulo fixo, NUNCA o texto recebido.
+#
+# Só o prompt é filtrado: o risco (`calculate_risk`) e a trilha do Art. 20
+# continuam vendo o `event` cru, porque lá ele é dado, não instrução.
+#
+# Não é um sanitizador genérico de prompt, de propósito: a superfície é UM
+# campo, e uma lista fechada é verificável — um sanitizador, não.
+EVENTOS_CONHECIDOS = frozenset({
+    *FIXED_RISK,                # "Cancellation Page Viewed", "Downgrade Clicked"
+    EVENTO_DADO_ESTATICO,       # "Session Started"
+    "Disparo em lote",          # `disparo_lote.EVENTO_LOTE` — importar seria circular;
+                                # `test_voluntary_tone` confere a igualdade
+})
+EVENTO_NAO_RECONHECIDO = "evento não reconhecido"
+
+
+def evento_para_o_prompt(event) -> str:
+    """O `event` como ele entra no prompt: ele mesmo se conhecido, senão o rótulo fixo."""
+    return event if event in EVENTOS_CONHECIDOS else EVENTO_NAO_RECONHECIDO
+
+
 def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str,
                         idioma: str = "pt") -> str:
     """O prompt muda com a criticidade; o resto do nó, não.
@@ -386,7 +416,7 @@ def _prompt_de_retencao(state: ChurnVoluntaryState, offer_label: str,
     para que a diferença fique no que se pede, não no que se informa.
     """
     lingua = _LINGUA_DA_SAIDA[_idioma_do_texto(idioma)]
-    contexto = (f"Evento: {state['event']} | Canal: {state['channel']} "
+    contexto = (f"Evento: {evento_para_o_prompt(state['event'])} | Canal: {state['channel']} "
                 f"| Oferta: {offer_label}")
     fecho = (f"Sem culpar o cliente, no máximo 3 frases, {lingua}.\n"
              "Retorne APENAS a mensagem.")

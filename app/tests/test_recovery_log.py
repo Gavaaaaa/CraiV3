@@ -327,19 +327,72 @@ class TestOPipelineGravaDeVerdade:
             "constante em zero, que é o defeito do Sprint 1 de volta")
         assert linha["success_fee"] > 0
 
-    def test_o_endpoint_de_metricas_responde(self, cliente):
+    def test_o_endpoint_de_metricas_responde(self, cliente, supabase_falso):
         rec = "RN_log_metrica"
         corpo = _corpo(rec, f"E_{rec}")
         cliente.post("/webhooks/pix-automatico", content=corpo,
                      headers={**_assinar(corpo), "x-tenant-id": TENANT})
 
-        resposta = cliente.get(f"/metrics/recovery?tenant_id={TENANT}")
+        resposta = cliente.get("/metrics/recovery", headers=supabase_falso.bearer(TENANT))
         assert resposta.status_code == 200, resposta.text
         corpo_json = resposta.json()
         assert corpo_json["ciclos"] == 1
         assert set(corpo_json) >= {"mrr_recuperado", "taxa_recuperacao",
                                    "custo_total", "custo_medio_por_recuperacao",
                                    "fee_total", "margem"}
+
+
+class TestMetricasSaoDaEmpresaDoToken:
+    """`/metrics/recovery` lê o tenant do JWT, nunca da URL.
+
+    O defeito não era a rota sem senha — era aceitar `?tenant_id=` do chamador:
+    qualquer pessoa lia o agregado de qualquer empresa escrevendo o nome dela
+    na query. Aqui: sem token é 401; com token de A e `?tenant_id=B`, a
+    resposta é a de A; e A e B não se misturam.
+    """
+
+    OUTRA = "empresa_outra"
+
+    def _um_ciclo(self, cliente, tenant, rec, valor=VALOR):
+        corpo = _corpo(rec, f"E_{rec}", valor=valor)
+        r = cliente.post("/webhooks/pix-automatico", content=corpo,
+                         headers={**_assinar(corpo), "x-tenant-id": tenant})
+        assert r.status_code == 200, r.text
+
+    def test_sem_token_e_401(self, cliente, supabase_falso):
+        r = cliente.get("/metrics/recovery")
+        assert r.status_code == 401, r.text
+        r = cliente.get(f"/metrics/recovery?tenant_id={TENANT}")
+        assert r.status_code == 401, r.text
+
+    def test_token_de_a_com_tenant_de_b_na_url_devolve_a(self, cliente, supabase_falso):
+        self._um_ciclo(cliente, TENANT, "RN_metrica_a1")
+        self._um_ciclo(cliente, TENANT, "RN_metrica_a2")
+        self._um_ciclo(cliente, self.OUTRA, "RN_metrica_b1", valor=1000.0)
+
+        de_a = cliente.get("/metrics/recovery", headers=supabase_falso.bearer(TENANT)).json()
+        de_b = cliente.get("/metrics/recovery", headers=supabase_falso.bearer(self.OUTRA)).json()
+        assert (de_a["ciclos"], de_b["ciclos"]) == (2, 1)
+        assert de_a["volume_total"] != de_b["volume_total"]
+
+        forjado = cliente.get(f"/metrics/recovery?tenant_id={self.OUTRA}",
+                              headers=supabase_falso.bearer(TENANT))
+        assert forjado.status_code == 200, forjado.text
+        assert forjado.json() == de_a
+        assert forjado.json() != de_b
+
+    def test_nao_existe_mais_ausente_igual_a_todas(self, cliente, supabase_falso):
+        self._um_ciclo(cliente, TENANT, "RN_metrica_a3")
+        self._um_ciclo(cliente, self.OUTRA, "RN_metrica_b2")
+        assert recovery_log.metricas()["ciclos"] == 2          # a função ainda agrega tudo...
+        r = cliente.get("/metrics/recovery", headers=supabase_falso.bearer(TENANT))
+        assert r.json()["ciclos"] == 1                          # ...a rota, nunca
+
+    def test_a_rota_nao_aceita_tenant_id_na_assinatura(self):
+        import inspect
+
+        params = inspect.signature(app_module.metricas_de_recuperacao).parameters
+        assert params["tenant_id"].default.dependency is app_module.get_tenant_id
 
     def test_as_tentativas_disparadas_vem_do_retry_state(self):
         """O custo conta o que SAIU, não o que foi planejado."""

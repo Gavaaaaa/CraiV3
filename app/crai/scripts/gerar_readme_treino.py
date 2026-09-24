@@ -388,12 +388,16 @@ def gerar() -> str:
       "python -m crai.scripts.gerar_readme_treino            # regera este arquivo\n"
       "pytest tests/ -q\n```\n")
     w("O que \"reproduzir\" quer dizer aqui: com as versoes fixadas, a mesma base e a mesma "
-      "semente, classificador, liquidez e voluntario devolvem a mesma metrica na quarta casa "
-      "em outra maquina (medido em tres). O **autoencoder nao**: early stopping sensivel a "
-      "ordem de acumulacao de float, que muda com BLAS e conjunto de instrucoes — mesma "
-      "base v2, mesma semente e mesmas versoes deram ROC-AUC 0,8684 / 0,8694 (20/09/2026) e "
-      "0,8582 (22/09/2026). Fixar versao nao basta para ele; o percentil do limiar e "
-      "recalculado pelo criterio declarado em cada maquina (`docs/LIMITACOES.md`).\n")
+      "semente, classificador e voluntario devolvem a mesma metrica na quarta casa em outra "
+      "maquina (medido em quatro). O **autoencoder nao**: mesma base v2, mesma semente e "
+      "mesmas versoes deram ROC-AUC 0,8684 / 0,8694 (20/09/2026), 0,8582 (22/09/2026) e "
+      "0,8694 (23/09/2026). A causa e a ordem de acumulacao em ponto flutuante, que depende "
+      "do BLAS e do conjunto de instrucoes da CPU — nao o early stopping: a LSTM da liquidez "
+      "nao tem early stopping e varia mesmo assim (0,0004 de ROC-AUC, 0,9639 -> 0,9643, sem "
+      "mover a janela operacional: acerto +-1d 90,8%). O early stopping e amplificador: muda "
+      "a epoca em que o autoencoder para, e ai muda o modelo inteiro (0,0112). Fixar versao "
+      "nao basta para ele; o percentil do limiar e a saida do criterio, aplicado pelo treino "
+      "em cada maquina (`docs/LIMITACOES.md`).\n")
     w("Dado bruto (Olist, E-Commerce) fica em `data/real/` fora do git e e baixado de "
       "espelhos publicos com SHA-256 conferido; `data/real/PROVENIENCIA.json` (copia em "
       "`docs/evidencia/treino/`) registra hashes, contagens, nulos e o `describe()` de cada "

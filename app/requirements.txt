@@ -62,12 +62,14 @@ pyarrow==25.0.1
 # publicado usou; esta la como registro, com cabecalho dizendo isso, e nao
 # deve ser instalado. Onde os dois divergem, vale este.
 #
-# O que versao fixada NAO garante: reproduzir o TREINO do autoencoder em outra
+# O que versao fixada NAO garante: reproduzir o TREINO das redes torch em outra
 # maquina. Com exatamente estas versoes, mesma base e mesma semente, o
-# autoencoder deu ROC-AUC 0,8684 / 0,8694 (20/09/2026) e 0,8582 (22/09/2026):
-# early stopping sensivel a ordem de acumulacao de float, que muda com BLAS e
-# conjunto de instrucoes. Classificador, liquidez e voluntario reproduzem na
-# quarta casa nas mesmas maquinas. Ver docs/LIMITACOES.md.
+# autoencoder deu ROC-AUC 0,8684 / 0,8694 (20/09/2026), 0,8582 (22/09/2026) e
+# 0,8694 (23/09/2026); a LSTM da liquidez, 0,9639 e 0,9643. A causa e a ordem
+# de acumulacao de float, que muda com BLAS e conjunto de instrucoes — nao o
+# early stopping (a LSTM nao tem e varia mesmo assim); o early stopping so
+# amplifica no autoencoder. Classificador e voluntario reproduzem na quarta
+# casa. Ver docs/LIMITACOES.md.
 torch==2.13.0
 prophet==1.4.0
 

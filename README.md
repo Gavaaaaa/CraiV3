@@ -256,8 +256,8 @@ fallbacks — e a ausência aparece na tela, não em silêncio.
 | Grupo | Rotas |
 |---|---|
 | Webhooks | `/webhooks/pix-automatico`, `/webhooks/stripe`, `/webhooks/segment`, `/webhooks/retention-outcome` |
-| Self-service (com JWT) | `POST /clientes/importar`, `GET /insights`, `POST /insights/enviar` |
-| Operação | `GET /metrics/recovery`, `GET /health` |
+| Self-service (com JWT) | `POST /clientes/importar`, `GET /insights`, `POST /insights/enviar`, `GET /metrics/recovery` (tenant do token, nunca da URL) |
+| Operação | `GET /health` |
 | Simulação | `/simulate/pix-falhado`, `/simulate/pix-pago`, `/simulate/payment-failed`, `/simulate/churn-risk` |
 | Painel | `/simulate/painel/` + `ambiente`, `cobranca-falhada`, `evento-risco`, `disparo-lote`, `importar`, `insights` |
 

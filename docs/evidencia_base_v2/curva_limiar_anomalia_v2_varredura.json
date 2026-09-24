@@ -347,5 +347,5 @@
     "prophet": "1.4.0"
   },
   "treinado_em": "2026-09-22T11:44:43",
-  "nota": "Curva do autoencoder do artefato PROMOVIDO (treinado em 22/09/2026, Bloco H; ROC-AUC 0,8582). O criterio 'maior percentil com recall >= 0,70' da p81 nesta curva. Na maquina de 20/09 dava p83 (ver curva_limiar_anomalia_v2_varredura_20_09_p83.json): o percentil e derivado do criterio, nao uma constante, e o autoencoder nao reproduz entre maquinas — docs/LIMITACOES.md, 'Reprodutibilidade do autoencoder entre maquinas'."
+  "nota": "Curva do autoencoder do artefato treinado e promovido em 22/09/2026 (Bloco H; ROC-AUC 0,8582; Python 3.11.9). Descreve SO esse artefato: em 23/09/2026 ele foi substituido em app/models/ pelo artefato treinado nesta maquina (p83 pelo mesmo criterio, ROC-AUC 0,8694), cuja curva fica em app/models/curva_limiar_anomalia.json, fora do git. O criterio 'maior percentil com recall >= 0,70' da p81 nesta curva. Na maquina de 20/09 dava p83 (ver curva_limiar_anomalia_v2_varredura_20_09_p83.json): o percentil e derivado do criterio, nao uma constante, e o autoencoder nao reproduz entre maquinas — docs/LIMITACOES.md, 'Reprodutibilidade do autoencoder entre maquinas'."
 }

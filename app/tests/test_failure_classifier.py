@@ -161,6 +161,16 @@ class TestFailureClassifierHeuristic:
         expected = round(result["p_recovery"] * 1000.00 - INTERVENTION_COSTS["bot_whatsapp"], 2)
         assert result["eprofit"] == expected
 
+    def test_heuristic_eprofit_reconcilia_em_ltv_alto(self):
+        """A heurística segue a mesma regra do ensemble: um só `p_recovery`."""
+        result = self.clf.predict({
+            "gateway_error_code": "insufficient_funds", "tenure_months": 24,
+            "ltv_estimated": 50_000.00,
+        }, channel="email_auto")
+        p = result["p_recovery"]
+        assert p == round(p, classifier_module.P_RECOVERY_CASAS)
+        assert abs(result["eprofit"] - round(p * 50_000.00 - INTERVENTION_COSTS["email_auto"], 2)) < 0.01
+
     def test_heuristic_tenure_adjustment(self):
         """Tenure alto aumenta score, tenure baixo diminui."""
         result_high = self.clf.predict({
@@ -214,7 +224,15 @@ class TestFailureClassifierTrained:
         assert 0 <= result["recovery_score"] <= 100
 
     def test_eprofit_formula(self, classificador_treinado):
-        """e-Profit = P_recovery * LTV - custo do canal."""
+        """e-Profit = P_recovery * LTV - custo do canal, a partir do `p_recovery` DA RESPOSTA.
+
+        A tolerância não é um número escolhido: o `eprofit` sai com 2 casas,
+        então dois valores que difiram de verdade diferem em pelo menos
+        R$ 0,01 — qualquer diferença abaixo disso é ruído de ponto flutuante,
+        e qualquer diferença real reprova. Antes a tolerância era R$ 0,02 e o
+        teste passava ou não por sorte de arredondamento (reprovou por R$ 0,12
+        na auditoria, com o `p` da resposta em 4 casas e o da conta cheio).
+        """
         clf, _, _ = classificador_treinado
         features = {
             "tenure_months": 12, "day_of_month": 5, "invoice_amount": 150.00,
@@ -225,7 +243,29 @@ class TestFailureClassifierTrained:
         }
         result = clf.predict(features, channel="email_auto")
         expected = round(result["p_recovery"] * 5000.00 - INTERVENTION_COSTS["email_auto"], 2)
-        assert abs(result["eprofit"] - expected) <= 0.02
+        assert abs(result["eprofit"] - expected) < 0.01
+
+    @pytest.mark.parametrize("ltv", [500.0, 5_000.0, 50_000.0])
+    def test_eprofit_reconcilia_com_o_p_recovery_da_resposta(self, classificador_treinado, ltv):
+        """Reconciliação exata em qualquer LTV — inclusive o canal ótimo.
+
+        O erro antigo escalava com o LTV (R$ 0,03 em 500; R$ 2,50 em 50 mil).
+        Agora há UM `p_recovery`, o da resposta, e todas as contas saem dele.
+        """
+        clf, _, _ = classificador_treinado
+        result = clf.predict({
+            "tenure_months": 24, "day_of_month": 28, "invoice_amount": 300.00,
+            "avg_ticket": 300.00, "gateway_error_code": "insufficient_funds",
+            "card_brand": "master", "payment_history_score": 0.60,
+            "failure_count_90d": 2, "hour_of_day": 14, "day_of_week": 4,
+            "attempt_count": 2, "ltv_estimated": ltv,
+        }, channel="bot_whatsapp")
+        p = result["p_recovery"]
+        assert p == round(p, classifier_module.P_RECOVERY_CASAS)
+        assert abs(result["eprofit"] - round(p * ltv - INTERVENTION_COSTS["bot_whatsapp"], 2)) < 0.01
+        assert result["recovery_score"] == int(round(p * 100))
+        for canal, ep in result["optimal_channel"]["all_channels"].items():
+            assert abs(ep - round(p * ltv - INTERVENTION_COSTS[canal], 2)) < 0.01, canal
 
     def test_shap_explanation_present(self, classificador_treinado):
         """Predição inclui explicação SHAP com features."""

@@ -107,31 +107,52 @@ base importada vive num SQLite local (`CRAI_CLIENTES_DB`); o destino de produç�
   scikit-learn 1.5.2, xgboost 2.1.1, prophet 1.4.0), e o autoencoder deu
   **ROC-AUC 0,8684 e 0,8694** nas rodadas de 20/09/2026 e **0,8582** na máquina
   que treinou o artefato promovido em 22/09/2026 (n=120.000 clientes nas três:
-  92.872 saudáveis de treino, 16.390 de validação, 10.738 anômalos). Classificador
-  (0,7096; 120.000 cobranças, holdout de 24.089), liquidez (0,9639; 10.000 clientes,
-  2.000 de teste) e voluntário (0,8288; 120.000 eventos, holdout de 24.061)
-  reproduziram **na quarta casa** nas três.
-- **A causa é hardware, não biblioteca.** O autoencoder treina com Adam,
-  dropout e early stopping com tolerância de 1e-5 na perda de validação. O
-  early stopping é sensível à ordem de acumulação de ponto flutuante, que muda
-  com o BLAS e o conjunto de instruções da CPU; uma diferença na décima casa
-  numa época decide se o treino para na época 60, 64 ou 68, e o modelo final é
-  outro. Dentro de cada máquina o treino é determinístico: quatro rodadas na
-  máquina de 22/09, com 1, 6 e 12 threads, deram exatamente 0,8582. A LSTM da
-  liquidez também é torch, mas treina 40 épocas fixas e reproduz.
+  92.872 saudáveis de treino, 16.390 de validação, 10.738 anômalos), e **0,8694**
+  de novo na máquina de 23/09/2026. Classificador (0,7096; 120.000 cobranças,
+  holdout de 24.089) e voluntário (0,8288; 120.000 eventos, holdout de 24.061)
+  reproduziram **na quarta casa** em todas. A liquidez (10.000 clientes, 2.000 de
+  teste) reproduziu na quarta casa entre as máquinas de 20/09 e 22/09 (0,9639) e
+  **mexeu na quarta casa** na de 23/09: ensemble 0,9643, LSTM 0,9745 contra
+  0,9743, MAE 0,62 contra 0,61 dia. Esta afirmação dizia, até 23/09, que a LSTM
+  "treina 40 épocas fixas e reproduz"; a medição de 23/09 a contradiz.
+- **A causa é hardware, não biblioteca — e não é o early stopping.** A causa é
+  a **ordem de acumulação em ponto flutuante**, que depende do BLAS e do
+  conjunto de instruções da CPU: a mesma soma dá resultados que diferem na
+  décima casa, e uma rede treinada por gradiente propaga essa diferença por
+  todas as épocas. A prova de que a causa não é o early stopping é a LSTM da
+  liquidez: ela treina 40 épocas fixas, sem early stopping, e varia mesmo assim.
+  O early stopping é **amplificador**, não causa: no autoencoder (Adam, dropout,
+  tolerância de 1e-5 na perda de validação), uma acumulação diferente muda a
+  época em que o treino para — 60, 64 ou 68 —, e aí muda o modelo inteiro, em
+  vez de só o último dígito. Ordem de grandeza medida: **LSTM 0,0004** de ROC-AUC
+  (0,9639 → 0,9643), **autoencoder 0,0112** (0,8582 → 0,8694). A variação da LSTM
+  **não move a janela operacional**: acerto ±1 dia 90,8 % (90,6 % no artefato de
+  22/09) e acerto exato 84,4 % nos dois. Dentro de cada máquina o treino é
+  determinístico: quatro rodadas na máquina de 22/09, com 1, 6 e 12 threads,
+  deram exatamente 0,8582.
 - **Fixar versões no `requirements.txt` NÃO é suficiente** para reproduzir o
   autoencoder: as versões da máquina de 22/09 são exatamente as fixadas, e o
   resultado ainda diverge. O que as versões fixadas garantem é que o artefato
   gravado **recarrega** igual (`load()` + `conferir_meta`), e que classificador,
   liquidez e voluntário treinam igual.
 - **Consequência, e a regra que segue dela:** o percentil do limiar do
-  autoencoder (`THRESHOLD_PERCENTIL_V2`) não é uma constante escolhida — é a
-  SAÍDA do critério "maior percentil da curva com recall acima de 0,70",
-  aplicado à curva do artefato em produção. Na máquina de 20/09 o critério deu
-  p83; na de 22/09, p81 (recall 0,7121, precisão 0,7106; p83 daria 0,6695,
-  abaixo do piso). Recalibrar ao trocar de máquina é o critério funcionando,
-  não uma concessão. Quem retreinar em outra máquina reaplica o critério e
-  regrava a constante e `docs/evidencia_base_v2/curva_limiar_anomalia_v2_varredura.json`;
+  autoencoder (`threshold_percentil` no `autoencoder_meta.json`) não é uma
+  constante escolhida — é a SAÍDA do critério "maior percentil da curva com
+  recall acima de 0,70", aplicado à curva do artefato em produção. Na máquina
+  de 20/09 o critério deu p83; na de 22/09, p81 (recall 0,7121, precisão
+  0,7106; p83 daria 0,6695, abaixo do piso); na de 23/09, p83 de novo.
+  Recalibrar ao trocar de máquina é o critério funcionando, não uma concessão.
+  **Desde 23/09/2026 é o treino quem aplica o critério**
+  (`AnomalyDetector.train(recall_minimo=...)` chama `escolher_percentil` sobre
+  a curva recém-calculada e grava o resultado, com o critério, no meta). A
+  constante `THRESHOLD_PERCENTIL_V2` deixou de existir: enquanto existiu, o
+  treino copiava o número dela em vez de aplicar o critério, e a curva gravada
+  pelo mesmo treino discordava (p83) do meta (p81). Quem retreinar em outra
+  máquina só retreina e promove, e publica a curva do artefato promovido em
+  `docs/evidencia_base_v2/` com nome datado (a de 23/09/2026 é
+  `curva_limiar_anomalia_v2_final_23_09_p83.json`; a de 22/09 continua em
+  `curva_limiar_anomalia_v2_varredura.json`) — `app/models/` está fora do git e
+  sem a cópia quem clona não consegue verificar a declaração do README §4.6;
   `test_populacao_compartilhada.py::TestLimiarAnomaliaV2` e
   `test_servir_v2.py::TestOLimiarDoAutoencoderPromovido` cobram a coerência.
 
@@ -227,3 +248,38 @@ que exige que o número do README seja o do arquivo em disco.
 
 **Em aberto:** ajuste de hiperparâmetros por validação cruzada dentro do conjunto de
 treino, com medição única no teste.
+
+### A fronteira de confiança dos webhooks é compartilhada entre inquilinos
+
+Declarado aqui em 23/09/2026. Até então isso existia só no docstring de
+`_tenant_da_requisicao` (`app/crai/api/app.py`) e na mecânica descrita em
+`docs/CONFIGURACAO.md` ("o tenant chega por requisição, no header `x-tenant-id`
+ou no campo `tenant_id` do corpo").
+
+**O que é.** Os quatro webhooks (`/webhooks/pix-automatico`, `/webhooks/stripe`,
+`/webhooks/segment`, `/webhooks/retention-outcome`) e os quatro simuladores
+`/simulate/*` autenticam a **origem** (assinatura HMAC do payload com um segredo
+por integração; `ENV` de simulação nos `/simulate/*`), mas o **inquilino** é
+afirmado pelo próprio chamador: header `x-tenant-id`, senão `tenant_id` no corpo,
+senão `default_tenant`. Nada confere se quem assina tem direito ao tenant que
+declara. Consequência direta: **quem tem o segredo de um webhook grava eventos
+em qualquer tenant** — abre ciclos de cobrança, registra desfechos que movem o
+posterior do bandit, roda o pipeline — bastando escrever o nome dele no header.
+A fronteira de confiança é por integração, não por inquilino.
+
+**Por que está assim.** É MVP declarado: a CRAI ainda é operada para um cliente
+por instalação, o segredo de cada integração pertence a esse único cliente, e
+exigir tenant assinado quebraria os webhooks já integrados. O que o código
+garante hoje é só a forma: `default_tenant` explícito e identificador fora de
+`[A-Za-z0-9._-]{1,64}` são 422, para ninguém cair no balde do "não declarado"
+de propósito.
+
+**O que não está afetado.** As rotas autenticadas por JWT (`/clientes*`,
+`/insights*`, `/titular/*`, `/metrics/recovery`) tiram o tenant do claim do
+token e ignoram qualquer `tenant_id` do chamador; `test_supabase_auth.py::
+TestWebhooksIntocados` trava que só elas dependem de `get_tenant_id`.
+
+**O dia em que houver dois clientes na mesma instalação**, esta é a linha que
+vira obrigatória: segredo por tenant (o header passa a ser derivado de qual
+segredo assinou, não lido do request), ou tenant dentro do payload assinado.
+Sem uma das duas, multi-tenant nos webhooks é multi-tenant só no banco.
