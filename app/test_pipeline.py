@@ -22,18 +22,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# A DEMO RODA EM MODO SIMULAÇÃO, e isso é uma escolha, não um descuido.
-#
-# Em produção o grafo termina no envio e o desfecho chega depois, por
-# `POST /webhooks/retention-outcome` (Sprint 4). Uma demo assim mostraria quatro
-# clientes "aguardando retorno" e nenhum resultado — não dá para demonstrar
-# retenção sem o desfecho. Com a env ligada, `track_outcome` sorteia o aceite
-# pela taxa histórica do bandit e a demo fecha o ciclo na hora.
-#
-# `setdefault` e não atribuição: quem quiser ver o comportamento de produção
-# roda `CRAI_SIMULATE_OUTCOMES=0 python test_pipeline.py` e o script respeita.
-os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
-
 from crai.agent.main_agent import crai_agent
 from crai.agent.state import AgentState
 from crai.api.app import _fechar_ciclo_recuperado, _registrar_cartao_desativado
@@ -373,5 +361,36 @@ async def main():
     print(f"\n✅ Pipeline CRAI v2 (involuntário + voluntário + HubSpot) funcionando!\n")
 
 
+def ligar_modo_simulacao() -> None:
+    """A DEMO RODA EM MODO SIMULAÇÃO, e isso é uma escolha, não um descuido.
+
+    Em produção o grafo termina no envio e o desfecho chega depois, por
+    `POST /webhooks/retention-outcome` (Sprint 4). Uma demo assim mostraria
+    quatro clientes "aguardando retorno" e nenhum resultado — não dá para
+    demonstrar retenção sem o desfecho. Com a env ligada, `track_outcome`
+    sorteia o aceite pela taxa histórica do bandit e a demo fecha o ciclo na
+    hora.
+
+    `setdefault` e não atribuição: quem quiser ver o comportamento de produção
+    roda `CRAI_SIMULATE_OUTCOMES=0 python test_pipeline.py` e o script
+    respeita.
+
+    POR QUE ISTO NÃO ESTÁ MAIS NO NÍVEL DO MÓDULO (27/09/2026). O nome deste
+    arquivo casa com `python_files = test_*.py`, então o pytest o IMPORTA na
+    coleta — e o import ligava a env para a sessão inteira, sem que nenhuma
+    fixture desfizesse. O grafo voluntário passava a incluir `track_outcome`
+    em toda a suíte: o ciclo nascia fechado, o webhook via "reenvio", e dois
+    testes escritos para a topologia de produção mediam outra coisa
+    (`docs/RELATORIO_ESTABILIDADE.md`). Chamar daqui, e não lá em cima,
+    preserva `python test_pipeline.py` EXATAMENTE como os READMEs o
+    documentam — o efeito só existe quando o script é o programa, que é
+    quando ele foi pedido. A catraca que impede a volta do vazamento, por
+    este arquivo ou por outro `test_*` qualquer, é
+    `tests/conftest.py::a_env_de_simulacao_nao_vaza_para_a_sessao`.
+    """
+    os.environ.setdefault("CRAI_SIMULATE_OUTCOMES", "1")
+
+
 if __name__ == "__main__":
+    ligar_modo_simulacao()
     asyncio.run(main())

@@ -237,7 +237,8 @@ RAIZ_REPO = Path(__file__).resolve().parent.parent.parent
 EVIDENCIA_V2 = RAIZ_REPO / "docs" / "evidencia_base_v2"
 CURVA_MEDIDA = EVIDENCIA_V2 / "curva_limiar_anomalia_v2_varredura.json"
 # Toda curva "final" publicada (uma por artefato promovido, nome datado): a de
-# 22/09 (p81), a de 20/09 (p83, outra máquina) e a de 23/09 (p83, esta máquina).
+# 22/09 (p81), a de 20/09 (p83, outra máquina), a de 23/09 (p83, esta máquina)
+# e a de 27/09 (p81, esta máquina).
 CURVAS_FINAIS = sorted(EVIDENCIA_V2.glob("curva_limiar_anomalia_v2_final_*.json"))
 CURVA_PROMOVIDA_23_09 = EVIDENCIA_V2 / "curva_limiar_anomalia_v2_final_23_09_p83.json"
 
@@ -494,8 +495,8 @@ class TestLimiarAnomaliaV2:
         """Cada curva "final" em `docs/evidencia_base_v2/` registra em
         `percentil_usado` a saída do critério na própria curva — o escolhido
         passa no piso e o seguinte não. Vale para os três artefatos publicados
-        (20/09 p83, 22/09 p81, 23/09 p83) e para qualquer um que se publique
-        depois com o mesmo padrão de nome."""
+        (20/09 p83, 22/09 p81, 23/09 p83, 27/09 p81) e para qualquer um que se
+        publique depois com o mesmo padrão de nome."""
         d = json.loads(arquivo.read_text(encoding="utf-8"))
         curva, piso = d["curva"], anomaly_module.RECALL_MINIMO_LIMIAR_V2
         escolhido = anomaly_module.AnomalyDetector.escolher_percentil(curva, piso)
@@ -507,9 +508,13 @@ class TestLimiarAnomaliaV2:
 
     def test_a_curva_publicada_de_23_09_e_a_do_artefato_promovido(self):
         """`app/models/` está fora do git; a cópia publicada é o que permite a quem
-        clona verificar a declaração do README §4.6. Aqui: a cópia existe, se
-        identifica (nota + artefato), traz o `criterio_limiar` do meta, e — quando
-        há artefato em `app/models/` — é idêntica, ponto a ponto, à curva dele."""
+        clona verificar a declaração do README §4.6. Aqui: a cópia de 23/09
+        existe, se identifica (nota + artefato) e traz o `criterio_limiar` do
+        meta; e — quando há artefato em `app/models/` — o artefato promovido
+        NESTA máquina tem a cópia datada dele publicada ao lado, idêntica ponto
+        a ponto. Retreinar sem publicar a curva nova reprova aqui, em vez de
+        pular: era um pulo que escondia o artefato em `app/models/` de
+        qualquer conferência."""
         assert CURVA_PROMOVIDA_23_09.exists(), CURVA_PROMOVIDA_23_09
         d = json.loads(CURVA_PROMOVIDA_23_09.read_text(encoding="utf-8"))
         assert "23/09/2026" in d["nota"] and "p83" in d["nota"] and "0,8694" in d["nota"]
@@ -524,8 +529,22 @@ class TestLimiarAnomaliaV2:
             pytest.skip("app/models/ sem artefato — a cópia publicada é a única evidência aqui")
         local = json.loads(curva_local.read_text(encoding="utf-8"))
         meta = json.loads(meta_local.read_text(encoding="utf-8"))
-        if meta["treinado_em"] != d["artefato"]["treinado_em"]:
-            pytest.skip("app/models/ tem outro artefato (retreinado depois de 23/09); "
-                        "publique a curva dele com nome datado")
-        assert local["curva"] == d["curva"]
-        assert local["criterio_limiar"] == d["criterio_limiar"] == meta["criterio_limiar"]
+        # A cópia do artefato promovido nesta máquina pode não ser a de 23/09:
+        # quem retreina publica a curva do próprio artefato com nome datado, e
+        # é ela que tem de bater ponto a ponto com `app/models/`.
+        publicadas = {}
+        for arquivo in CURVAS_FINAIS:
+            publicada = json.loads(arquivo.read_text(encoding="utf-8"))
+            if "artefato" in publicada:
+                publicadas[publicada["artefato"]["treinado_em"]] = (arquivo, publicada)
+        assert meta["treinado_em"] in publicadas, (
+            f"o artefato em app/models/ (treinado_em {meta['treinado_em']}) não tem "
+            f"cópia publicada em docs/evidencia_base_v2/; publique a curva dele com "
+            f"nome datado. Publicadas: {sorted(publicadas)}")
+        arquivo, promovida = publicadas[meta["treinado_em"]]
+        assert local["curva"] == promovida["curva"], arquivo.name
+        assert (local["criterio_limiar"] == promovida["criterio_limiar"]
+                == meta["criterio_limiar"]), arquivo.name
+        assert (promovida["artefato"]["threshold_percentil"]
+                == promovida["percentil_usado"] == meta["threshold_percentil"]), arquivo.name
+        assert promovida["artefato"]["roc_auc"] == meta["roc_auc"], arquivo.name

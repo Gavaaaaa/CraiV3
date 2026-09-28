@@ -23,6 +23,7 @@ import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -1692,6 +1693,42 @@ async def painel_ambiente():
     })
 
 
+def id_de_lote(prefixo: str, pedido: str | None = None) -> str:
+    """Identificador de lote EXPLICITO. NAO derivado do relogio.
+
+    Estas rotas montavam o id com `int(datetime.now().timestamp())` -- o
+    relogio em SEGUNDOS. Como identificador isso tem os dois defeitos ao
+    mesmo tempo, e eles se anulam na aparencia de funcionar:
+
+      FUNDE   duas chamadas no mesmo segundo recebem a MESMA string. O id
+              vira `thread_id` do checkpoint, chave de `_channel_history` e
+              parte da chave `(tenant, user_id, offer_type)` do ciclo de
+              retencao -- entao dois lotes independentes passam a dividir
+              memoria de canal, contador de tentativas do BACEN e ciclo
+              aberto. Foi assim que `test_dados_diferentes_canais_diferentes`
+              virou intermitente: tres requisicoes no mesmo segundo eram um
+              cliente so para o historico de canal.
+      PARTE   o inverso, e pelo mesmo motivo: um lote cujas chamadas cruzam
+              a virada do segundo se quebra em dois ids, e o que devia ser
+              um agrupamento vira dois.
+
+    Aumentar a resolucao (milissegundos, `%f`) troca a probabilidade, nao a
+    natureza: continua sendo o relogio decidindo quem e quem. Aqui o id e
+    SORTEADO uma vez, onde o lote comeca, e propagado -- `uuid4`, que nao
+    depende de quando foi chamado.
+
+    `pedido` e o id que o chamador ja tem: quem dispara varias chamadas que
+    pertencem ao MESMO lote manda a mesma string e elas ficam juntas,
+    atravessem quantas viradas de segundo atravessarem. Vem do navegador,
+    entao passa pelo mesmo saneamento do `cliente` (`PainelCobranca`): so
+    letras, digitos, hifen e sublinhado, no maximo 48 caracteres -- o valor
+    vira chave de checkpoint, de log e de tenant, e nenhuma delas pode
+    receber texto cru de fora.
+    """
+    limpo = re.sub(r"[^A-Za-z0-9_-]", "", pedido or "")[:48]
+    return f"{prefixo}_{limpo}" if limpo else f"{prefixo}_{uuid4().hex[:16]}"
+
+
 class PainelCobranca(BaseModel):
     valor: float = 299.90
     codigo_falha: str = "AM04"
@@ -1709,6 +1746,9 @@ class PainelCobranca(BaseModel):
     # Nao mexe na janela do BACEN: `id_recorrencia` e `thread_id` continuam
     # unicos por chamada, entao cada cobranca comeca com o contador limpo.
     cliente: str | None = None
+    # Agrupa varias chamadas no MESMO lote. Opcional: sem ele, cada chamada e
+    # um lote proprio, com id sorteado. Ver `id_de_lote`.
+    lote_id: str | None = None
 
 
 @app.post("/simulate/painel/cobranca-falhada")
@@ -1722,7 +1762,7 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
     """
     _require_simulation_env()
     valor = _valor_de_simulacao(payload.valor, "valor")
-    id_rec = f"RN_painel_{int(datetime.now(timezone.utc).timestamp())}"
+    id_rec = id_de_lote("RN_painel", payload.lote_id)
     # So letras, digitos, hifen e sublinhado, no maximo 48 caracteres: o valor
     # vem do navegador e vira chave de perfil e de log.
     apelido = re.sub(r"[^A-Za-z0-9_-]", "", (payload.cliente or ""))[:48]
@@ -1826,6 +1866,9 @@ class PainelEvento(BaseModel):
     # sendo "no site, sem telefone" para quem não enviar nada.
     phone: str | None = None
     on_site_now: bool = True
+    # Agrupa varias chamadas no MESMO lote. Opcional: sem ele, cada chamada e
+    # um lote proprio, com id sorteado. Ver `id_de_lote`.
+    lote_id: str | None = None
 
 
 @app.post("/simulate/painel/evento-risco")
@@ -1836,7 +1879,7 @@ async def painel_evento_risco(payload: PainelEvento):
     devolve risco, criticidade, oferta escolhida, canal e mensagem.
     """
     _require_simulation_env()
-    user_id = f"painel_{int(datetime.now(timezone.utc).timestamp())}"
+    user_id = id_de_lote("painel", payload.lote_id)
     props = {"days_since_last": _contador_de_simulacao(payload.days_since_last,
                                                       "days_since_last"),
              "features_used_30d": _contador_de_simulacao(payload.features_used_30d,
