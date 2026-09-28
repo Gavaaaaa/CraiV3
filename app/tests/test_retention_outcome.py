@@ -39,6 +39,7 @@ Uso:
 import hashlib
 import hmac
 import json
+import logging
 import sqlite3
 
 import pytest
@@ -420,7 +421,8 @@ class TestLogDeCiclos:
         aberto = rl.ciclo_aberto("t", "u", "desconto_20")
         assert aberto["channel"] == "whatsapp"
 
-        assert rl.registrar_desfecho("t", "u", "desconto_20", True) is True
+        assert (rl.registrar_desfecho("t", "u", "desconto_20", True)
+                is rl.ResultadoDesfecho.FECHADO)
         assert rl.ciclo_aberto("t", "u", "desconto_20")["channel"] == "email", (
             "fechou o ciclo errado — o antigo deveria continuar aberto")
 
@@ -428,3 +430,112 @@ class TestLogDeCiclos:
         """O campo já existe e já é gravado; quem o preenche de verdade é o
         Sprint 5. Ligar o fio agora evita migrar o dataset depois."""
         assert _disparar_ciclo(cliente)["tenant_id"] == "default_tenant"
+
+
+# ── O erro de gravação não pode sair como 200 (Bloco C.2) ────────────────
+
+class TestErroDeGravacaoPedeReenvio:
+    """Os três motivos para não contar deixaram de ter a mesma resposta HTTP.
+
+    Até o Bloco C, `registrar_desfecho` devolvia o MESMO `False` para reenvio,
+    para ciclo inexistente e para erro de gravação, e este endpoint respondia
+    200 "ignorado" nos três. Os dois primeiros estão certos: não há o que um
+    reenvio resolva. O terceiro não — o desfecho existiu, o cliente respondeu,
+    a gravação falhou, e o 200 fazia o remetente dar o assunto por encerrado.
+    O que se perde ali é o rótulo `accepted` de uma linha do dataset e a prova
+    de que aquela retenção aconteceu.
+
+    503 e não 409: infraestrutura de webhook retenta em 5xx com backoff, e é
+    essa retentativa que traz o desfecho de volta; 4xx a maioria trata como
+    "recusado, não insista".
+
+    Esta classe cobra a POLÍTICA HTTP. Que a contenção real produza mesmo o
+    status ERRO é o que `tests/test_ledger_concorrencia.py` prova; aqui o
+    último teste fecha a ponta, com trava de verdade no banco.
+    """
+
+    def test_erro_de_gravacao_responde_503_e_pede_reenvio(self, cliente, monkeypatch):
+        monkeypatch.setattr(va, "registrar_desfecho",
+                            lambda *a, **k: rl.ResultadoDesfecho.ERRO)
+        linha = _disparar_ciclo(cliente)
+        antes = va._bandit.state[rl.TENANT_PADRAO]["PJ"][linha["offer_type"]]["alpha"]
+
+        r = _enviar_desfecho(cliente, {
+            "user_id": "cliente_teste", "offer_type": linha["offer_type"],
+            "profile": "PJ", "accepted": True})
+
+        assert r.status_code == 503, (
+            f"erro de gravação respondeu {r.status_code} — em 200 o remetente "
+            "nunca reenvia e o desfecho some")
+        assert r.json()["status"] == "erro_ao_registrar"
+        assert r.headers.get("Retry-After") == "30"
+        assert va._bandit.state[rl.TENANT_PADRAO]["PJ"][linha["offer_type"]]["alpha"] == antes, (
+            "o bandit aprendeu com um desfecho que não foi gravado")
+
+    def test_reenvio_continua_200(self, cliente):
+        linha = _disparar_ciclo(cliente)
+        payload = {"user_id": "cliente_teste", "offer_type": linha["offer_type"],
+                   "profile": "PJ", "accepted": True}
+        assert _enviar_desfecho(cliente, payload).status_code == 200
+        segunda = _enviar_desfecho(cliente, payload)
+
+        assert segunda.status_code == 200, "reenvio não é falha de infraestrutura"
+        assert segunda.json()["status"] == "ignorado"
+
+    def test_ciclo_inexistente_continua_200(self, cliente):
+        r = _enviar_desfecho(cliente, {
+            "user_id": "nunca_existiu", "offer_type": "desconto_10",
+            "profile": "CLT", "accepted": True})
+
+        assert r.status_code == 200, (
+            "ciclo inexistente não é erro de infraestrutura — reenviar não "
+            "faria o ciclo aparecer, e um 5xx põe o remetente em laço")
+        assert r.json()["status"] == "ignorado"
+
+    def test_o_log_de_erro_identifica_o_ciclo_sem_dado_pessoal(
+            self, cliente, monkeypatch, caplog):
+        """C.2.3. O que identifica o ciclo é (tenant, user_id qualificado,
+        oferta) — os mesmos campos que a trilha do Art. 20 aceita gravar.
+        E-mail, telefone, texto de mensagem e motivo de cancelamento ficam de
+        fora aqui pela mesma regra."""
+        monkeypatch.setattr(va, "registrar_desfecho",
+                            lambda *a, **k: rl.ResultadoDesfecho.ERRO)
+        linha = _disparar_ciclo(cliente)
+
+        with caplog.at_level(logging.ERROR, logger="crai.api.app"):
+            _enviar_desfecho(cliente, {
+                "user_id": "cliente_teste", "offer_type": linha["offer_type"],
+                "profile": "PJ", "accepted": True})
+
+        erros = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert erros, "a falha de gravação não gerou log de erro"
+        texto = " ".join(r.getMessage() for r in erros)
+        assert "user:cliente_teste" in texto and linha["offer_type"] in texto
+        assert "default_tenant" in texto
+        for proibido in ("@", "telefone", "phone", "motivo_cancelamento"):
+            assert proibido not in texto, f"{proibido!r} vazou para o log"
+
+    def test_contencao_de_verdade_no_banco_vira_503(self, cliente, monkeypatch):
+        """A ponta a ponta, sem mock: o banco travado por outro gravador.
+
+        A env de `busy_timeout` é escopada a `registrar_desfecho`
+        (`_busy_timeout_do_desfecho_ms`), então baixá-la aqui não encosta na
+        trilha do Art. 20 — e o ciclo já foi criado antes da trava.
+        """
+        linha = _disparar_ciclo(cliente)
+        monkeypatch.setenv("CRAI_RETENTION_BUSY_TIMEOUT_MS", "50")
+
+        travador = sqlite3.connect(rl.caminho_do_banco(), timeout=0)
+        try:
+            travador.execute("BEGIN IMMEDIATE")
+            travador.execute("UPDATE ciclos_retencao SET origem_desfecho='trava'")
+            r = _enviar_desfecho(cliente, {
+                "user_id": "cliente_teste", "offer_type": linha["offer_type"],
+                "profile": "PJ", "accepted": True})
+        finally:
+            travador.rollback()
+            travador.close()
+
+        assert r.status_code == 503, r.text
+        assert _ultima_linha()["accepted"] is None, (
+            "respondeu 503 mas o ciclo fechou — o status estaria mentindo")

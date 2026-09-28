@@ -49,6 +49,7 @@ from .risk_scorer import (
 from .retention_log import (
     TENANT_PADRAO,
     ciclo_aberto,
+    ResultadoDesfecho,
     registrar_ciclo,
     registrar_desfecho,
 )
@@ -738,18 +739,25 @@ async def registrar_resultado_externo(user_id: str, offer_type: str, profile: st
 
       1. Lê o ciclo ABERTO no `retention_log` — é de onde saem `risk_score`,
          `event` e `channel`, que o webhook não carrega e o HubSpot precisa.
-      2. Fecha a linha. Se `registrar_desfecho` devolver False, é reenvio ou
-         desfecho órfão: NADA é contado. Contar duas vezes o mesmo aceite
-         enviesaria o posterior do bandit para quem reenvia mais.
+      2. Fecha a linha. Se `registrar_desfecho` não devolver FECHADO, NADA é
+         contado. Contar duas vezes o mesmo aceite enviesaria o posterior do
+         bandit para quem reenvia mais.
       3. Só então o bandit aprende.
 
-    Devolve o contexto do ciclo para quem chama montar o estado do CRM.
+    Devolve o contexto do ciclo para quem chama montar o estado do CRM, e —
+    desde o Bloco C — o `resultado` bruto do registro. Os três motivos para
+    não contar deixaram de ser o mesmo `False`: reenvio e ciclo órfão são
+    legítimos, ERRO não é, e quem responde HTTP precisa distinguir para não
+    devolver 200 a um desfecho que se perdeu. Aqui o comportamento é o mesmo
+    nos três — não contar —, porque este módulo decide sobre o BANDIT; o que
+    fazer com o erro é decisão da borda.
     """
     tenant_id = tenant_id or TENANT_PADRAO
     ciclo = ciclo_aberto(tenant_id, user_id, offer_type)
 
-    if not registrar_desfecho(tenant_id, user_id, offer_type, accepted):
-        return {"contabilizado": False, "ciclo": ciclo}
+    resultado = registrar_desfecho(tenant_id, user_id, offer_type, accepted)
+    if resultado is not ResultadoDesfecho.FECHADO:
+        return {"contabilizado": False, "ciclo": ciclo, "resultado": resultado}
 
     _bandit.record_outcome(tenant_id, profile, offer_type, accepted)
 
@@ -765,7 +773,7 @@ async def registrar_resultado_externo(user_id: str, offer_type: str, profile: st
           f"{'ACEITOU' if accepted else 'recusou'}")
 
     await _crm_do_desfecho(user_id, ciclo or {}, offer_type, accepted)
-    return {"contabilizado": True, "ciclo": ciclo}
+    return {"contabilizado": True, "ciclo": ciclo, "resultado": resultado}
 
 
 async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:

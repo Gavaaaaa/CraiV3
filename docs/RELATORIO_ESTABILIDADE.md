@@ -560,3 +560,409 @@ Nada commitado, nada no índice.
    stdout é um console cp1252 (`pytest -s`, ou script sem
    `PYTHONIOENCODING=utf-8`). Não é regressão — é a dívida já declarada no
    `app/README.md`.
+
+---
+
+# BLOCO C — o ledger sob concorrência
+
+**Data:** 28/09/2026. Árvore limpa em `3098b0b` no início, confirmado com
+`git status`. Nada commitado.
+
+**Fronteira respeitada:** a trilha do Art. 20 (`decisoes_automatizadas`) não foi
+tocada. A região do arquivo a partir de `_INSERT_DECISAO` é **byte a byte
+idêntica ao HEAD** — 12.500 caracteres, comparados por texto. Nenhum hunk do
+diff chega perto: o último termina na linha ~474, a trilha começa na 938. A
+exceção é `_conectar()`, que as duas tabelas dividem, e está tratada em C.1.1.
+
+## C.1.1 — `busy_timeout`
+
+**Corrigi uma premissa antes do código.** Não havia "falha imediata na
+contenção": o `sqlite3` do Python já aplicava 5 s aqui, porque
+`sqlite3.connect(timeout=5.0)` é o default e ele *vira* `busy_timeout`. O que
+faltava era o número estar **escrito** — ninguém conseguia achá-lo,
+justificá-lo, nem baixá-lo num teste.
+
+`BUSY_TIMEOUT_MS_PADRAO = 5000`, aplicado nos dois lugares (`timeout=` do
+connect **e** `PRAGMA busy_timeout`), com o porquê no comentário. Mantive 5 s de
+propósito: `registrar_resultado_externo` roda dentro de um handler `async` sem
+sair do event loop, então cada segundo de espera é um segundo de worker parado.
+Subir isso pediria tirar a escrita do loop — outra tarefa.
+
+### O escopo da env, tratado antes do C.2
+
+`CRAI_RETENTION_BUSY_TIMEOUT_MS` existe para um teste só, e na primeira versão
+era lida dentro do `_conectar` — que a **trilha do Art. 20 também usa**. Um
+teste que a baixasse para 50 ms e, adiante, encostasse num ponto que grava
+decisão (direto, ou pelo pipeline, que grava a trilha em todo `update_crm`)
+faria a trilha passar a falhar por contenção, de forma intermitente e a semanas
+da causa.
+
+Resolvido **estruturalmente**, sem tocar em nada da trilha: o override saiu do
+`_conectar` e foi para `_busy_timeout_do_desfecho_ms()`, que **só
+`registrar_desfecho` chama**. `_conectar` ganhou um parâmetro opcional
+(`busy_timeout_ms=None` → 5000) e todos os outros 12 chamadores — trilha
+inclusive — continuam recebendo o padrão.
+
+E não é promessa em comentário: `TestOEscopoDaEnvDeBusyTimeout` lê o
+`PRAGMA busy_timeout` que cada caminho **realmente emite**, espionando
+`sqlite3.connect` (e não `_conectar` — o PRAGMA sai de dentro dele, então um
+`set_trace_callback` posto no retorno chega tarde; foi o erro da primeira versão
+do teste).
+
+| com a env em 50 ms | PRAGMA observado |
+|---|---|
+| `registrar_decisao` (trilha) | `5000` |
+| `registrar_desfecho` (ciclos) | `50` |
+| sem a env, `registrar_desfecho` | `5000` |
+
+## C.1.2 — `BEGIN IMMEDIATE`
+
+**Modelo copiado: `registrar_decisoes`, deste mesmo arquivo, linhas 893-902**
+(`conn = _conectar()` → `conn.execute("BEGIN IMMEDIATE")` → `commit()`,
+`except: rollback(); raise`, `finally: close()`). Usei a forma explícita dela e
+não `with _conectar() as conn`: o `with` de `Connection` faz commit mas não
+fecha.
+
+## C.1.3 — o conserto principal
+
+`ResultadoDesfecho(Enum)`: `FECHADO` / `REENVIO` / `SEM_CICLO` / `ERRO`.
+
+**Deliberadamente sem `__bool__`.** Um `__bool__` que fizesse `ERRO` cair como
+falso manteria `if not registrar_desfecho(...)` compilando — e esconderia
+exatamente o defeito que o enum existe para expor. Preferi quebrar os chamadores
+e obrigar cada um a declarar quais status trata.
+
+### Os três chamadores
+
+| chamador | antes | agora |
+|---|---|---|
+| `voluntary_agent.py:751` (produção) | `if not registrar_desfecho(...)` | `resultado = ...; if resultado is not ResultadoDesfecho.FECHADO`. Comportamento **idêntico**; o status passa a sair no dict (`"resultado"`) para a borda usar |
+| `tests/test_disparo_lote.py:215` | `assert rl.registrar_desfecho(...)` | `... is rl.ResultadoDesfecho.FECHADO` |
+| `tests/test_retention_outcome.py:423` | `... is True` | `... is rl.ResultadoDesfecho.FECHADO` |
+
+C.1 é mecanismo; a política HTTP ficou toda no C.2.
+
+### Diff — `crai/churn_voluntary/retention_log.py`
+
+Quatro hunks. Revisão linha a linha:
+
+```diff
+@@ -112,6 +112,7 @@
++from enum import Enum
+```
+1 linha. O import do enum.
+
+```diff
+@@ -198,11 +199,48 @@
++BUSY_TIMEOUT_MS_PADRAO = 5000                     # + 20 linhas de comentário
++def _busy_timeout_do_desfecho_ms() -> int: ...    # lê a env; um só chamador
+ def _conectar(busy_timeout_ms: int | None = None) -> sqlite3.Connection:
+-    conn = sqlite3.connect(caminho)
++    ms = BUSY_TIMEOUT_MS_PADRAO if busy_timeout_ms is None else busy_timeout_ms
++    conn = sqlite3.connect(caminho, timeout=ms / 1000)
+     conn.row_factory = sqlite3.Row
++    conn.execute(f"PRAGMA busy_timeout = {ms}")
+     conn.executescript(_SCHEMA)
+```
+Parâmetro **opcional**: os 12 chamadores existentes, a trilha entre eles, não
+mudam e recebem 5000. O `PRAGMA` é redundante com o `timeout=` e está lá para
+ser legível — o argumento é atalho do driver, o PRAGMA é o que o SQLite vê.
+
+```diff
+@@ -326,23 +364,67 @@
++class ResultadoDesfecho(Enum):  ...  FECHADO / REENVIO / SEM_CICLO / ERRO
+-def registrar_desfecho(...) -> bool:
++def registrar_desfecho(...) -> ResultadoDesfecho:
+     try:
+-        with _conectar() as conn:
++        conn = _conectar(_busy_timeout_do_desfecho_ms())
++        try:
++            conn.execute("BEGIN IMMEDIATE")
+             linha = conn.execute("""SELECT id FROM ciclos_retencao ...""")
+```
+O enum e a abertura da transação. O `SELECT` e o `UPDATE` são os mesmos de
+antes, palavra por palavra — o que mudou é que agora acontecem sob a trava.
+
+```diff
+@@ -358,11 +440,14 @@  (dentro do ramo "não há ciclo aberto")
++                conn.commit()
++                resultado = (ResultadoDesfecho.REENVIO if ja_fechado
++                             else ResultadoDesfecho.SEM_CICLO)
+-                return False
++                return resultado
+
+@@ -370,10 +455,19 @@  (depois do UPDATE)
+-            return True
++            conn.commit()
++            return ResultadoDesfecho.FECHADO
++        except Exception:
++            conn.rollback()
++            raise
++        finally:
++            conn.close()
+-    except Exception as e:
+-        print(f"[RETENTION-LOG] Falha ao registrar desfecho: {e}")
+-        return False
++    except Exception as e:
++        print(f"[RETENTION-LOG] ERRO ao registrar desfecho "
++              f"{tenant_id}/{user_id}/{offer_type}: {e}")
++        return ResultadoDesfecho.ERRO
+```
+O `commit()` no ramo de leitura pura existe para fechar a transação IMMEDIATE
+(que já tomou a trava) em vez de deixá-la aberta até o `close()`. O `rollback` +
+`close` em `finally` é o padrão da trilha. E o log de erro ganhou a identidade
+do ciclo, que antes não tinha — é o que o C.2.3 precisa.
+
+## C.1.4 — os testes de concorrência
+
+`app/tests/test_ledger_concorrencia.py`, 9 testes. Dois **processos de verdade**
+(`subprocess`, não threads: o GIL esconde a intercalação, e a trava do SQLite é
+entre conexões), com largada sincronizada **por corrida** num relógio monotônico
+compartilhado.
+
+```
+80 chamadas em 40 corridas, 2 processos
+distribuicao: {'fechado': 40, 'reenvio': 40}
+corridas com != 1 FECHADO: 0
+corridas com sobreposicao temporal real: 4/40
+banco ao fim (total, fechadas): (40, 40)
+```
+
+Contenção além do `busy_timeout` (baixado a 50 ms, com um gravador segurando a
+trava): devolve `ERRO`, distinto de `REENVIO`, em menos de 5 s, e o ciclo
+**continua aberto** no banco — a prova de que o desfecho se perdeu de verdade.
+
+### Uma coisa que preciso declarar sobre esse teste
+
+Medi a sensibilidade removendo o `BEGIN IMMEDIATE` de propósito: o teste de
+exclusão mútua reprova em **2 de 3** execuções, não 3 de 3. Aumentar para 120
+corridas **piorou** (1 de 4 — os processos derivam da grade de largadas). Uma
+corrida entre processos é probabilística por natureza: ela prova que o
+invariante **vale** sob concorrência real, mas não serve como catraca de
+regressão.
+
+Por isso acrescentei a catraca determinística que faltava:
+`test_o_begin_immediate_precede_o_select_do_ciclo_aberto` usa o
+`trace_callback` do `sqlite3` para verificar a **ordem** dos comandos —
+`BEGIN IMMEDIATE` antes do `SELECT`. Sem o `BEGIN IMMEDIATE`, reprova **3/3**.
+
+Também baixei o piso do teste de sobreposição de `N/4` para `1`, com a razão
+escrita no código: **a própria correção reduz o que essa medida enxerga** (4/40
+com ela, 10+/40 sem ela — o worker que perde a trava fica parado e passa a
+alternar em vez de colidir). Exigir muito ali seria reprovar o conserto.
+
+## PORTÃO C.1
+
+- [x] **`verificar_cadeia` verde** — `TestCadeia` + `TestSemBifurcacao`,
+      incluindo `test_gravadores_concorrentes_de_verdade_serializam_e_a_cadeia_fica_linear`
+- [x] **testes que abrem o banco cru e varrem PII, verdes** —
+      `TestNadaCruNoVoluntario`, `TestNadaCruNoInvoluntario`,
+      `TestPontosDeDecisao`, `TestNadaVaza`: **23 passed**; os 52 testes dos dois
+      arquivos de Art. 20, verdes
+- [x] **nenhum UPDATE/DELETE novo sobre `decisoes_automatizadas`** — as únicas
+      linhas adicionadas que dizem "UPDATE" são prosa de docstring; o único
+      `DELETE FROM decisoes_automatizadas` (`apagar_trilha_expirada`) é
+      pré-existente e intocado
+- [x] **10 execuções da raiz, todas verdes, 0 skipped:**
+
+```
+1483 passed in 59.93s    1483 passed in 59.04s
+1483 passed in 59.93s    1483 passed in 59.25s
+1483 passed in 59.91s    1483 passed in 59.76s
+1483 passed in 59.60s    1483 passed in 59.19s
+1483 passed in 59.64s    1483 passed in 60.51s
+```
+
+- [x] **diff revisado linha a linha** (acima)
+
+---
+
+# BLOCO C.2 — o chamador não pode engolir o erro
+
+## C.2.1 / C.2.2 — 503, e só para o erro
+
+Um único chamador (`app.py:756`), confirmado por varredura de
+`registrar_resultado_externo` no repositório inteiro.
+
+```diff
++    if resultado.get("resultado") is retention_log.ResultadoDesfecho.ERRO:
++        logger.error(
++            "[OUTCOME] FALHA ao registrar desfecho — respondendo 503 para o "
++            "remetente reenviar | tenant=%s user=%s offer=%s accepted=%s",
++            tenant_id, identidade, offer_type, accepted)
++        return JSONResponse(
++            status_code=503,
++            content={"status": "erro_ao_registrar",
++                     "motivo": "falha_de_gravacao",
++                     "detalhe": ("o desfecho não foi registrado; reenvie — "
++                                 "este endpoint é idempotente e um reenvio "
++                                 "bem-sucedido conta uma vez só")},
++            headers={"Retry-After": "30"})
++
+     if not resultado["contabilizado"]:
+         return JSONResponse({"status": "ignorado",
+                              "motivo": "reenvio_ou_ciclo_inexistente"})
+```
+
+E, no `voluntary_agent.py`, o que tornou isso possível — o status atravessando
+a camada sem mudar o comportamento dela:
+
+```diff
+-    if not registrar_desfecho(tenant_id, user_id, offer_type, accepted):
+-        return {"contabilizado": False, "ciclo": ciclo}
++    resultado = registrar_desfecho(tenant_id, user_id, offer_type, accepted)
++    if resultado is not ResultadoDesfecho.FECHADO:
++        return {"contabilizado": False, "ciclo": ciclo, "resultado": resultado}
+...
+-    return {"contabilizado": True, "ciclo": ciclo}
++    return {"contabilizado": True, "ciclo": ciclo, "resultado": resultado}
+```
+
+**503 e não 409, e a razão é operacional, não semântica.** Infraestrutura de
+webhook (Segment, Stripe, backend próprio) retenta em 5xx com backoff, e é essa
+retentativa que traz o desfecho de volta. 409 é 4xx — a maioria dos remetentes
+trata como "recusado, não insista", que é o desfecho perdido outra vez, só com
+outro número. Além disso 409 significaria conflito de **estado**, quando aqui o
+estado está certo e quem falhou foi a infraestrutura. `Retry-After: 30` porque
+contenção de banco passa em segundos.
+
+Reenvio e ciclo inexistente **continuam 200**, e não por ser mais fácil: não há
+o que um reenvio resolva em nenhum dos dois, e um 5xx poria o remetente em laço.
+
+## C.2.3 — o log
+
+`logger.error` com `tenant`, `user` (id qualificado, `user:...`), `offer` e
+`accepted`. São os mesmos campos que a trilha do Art. 20 aceita gravar como
+`sujeito_id`; e-mail, telefone, texto de mensagem e `motivo_cancelamento` ficam
+de fora pela mesma regra — e há um teste que varre a saída do log atrás deles.
+
+## PORTÃO C.2
+
+- [x] **erro → resposta que pede reenvio; reenvio → 200; ciclo inexistente →
+      200** — `TestErroDeGravacaoPedeReenvio`, 5 testes, incluindo um ponta a
+      ponta **sem mock**: banco travado de verdade por outro gravador → 503, e o
+      ciclo continua com `accepted IS NULL`
+- [x] **10 execuções da raiz, todas verdes:**
+
+```
+1491 passed in 65.22s    1491 passed in 64.47s
+1491 passed in 65.72s    1491 passed in 64.07s
+1491 passed in 63.87s    1491 passed in 64.49s
+1491 passed in 64.66s    1491 passed in 64.66s
+1491 passed in 65.81s    1491 passed in 66.17s
+```
+
+---
+
+# BLOCO C.3 — a dívida que sobrou
+
+## C.3.1 — o `MemorySaver` do involuntário
+
+Fixture autouse nova no `conftest.py`, separada da do voluntário de propósito:
+são dois pipelines, e um nome dizendo "voluntário" mentindo sobre o que limpa
+seria pior do que uma fixture a mais. O helper `_limpar_checkpointer(grafo)` foi
+extraído e agora serve aos três grafos.
+
+```diff
++def _limpar_checkpointer(grafo) -> None:
++    cp = getattr(grafo, "checkpointer", None)
++    for nome in ("storage", "writes"):
++        alvo = getattr(cp, nome, None)
++        if alvo is not None:
++            alvo.clear()
++
+ def _zerar_checkpointers(va) -> None:
+     for grafo in getattr(va, "_AGENTES", {}).values():
+-        cp = getattr(grafo, "checkpointer", None)   # (corpo movido acima)
++        _limpar_checkpointer(grafo)
++
++@pytest.fixture(autouse=True)
++def checkpoint_do_involuntario_limpo():
++    from crai.agent.main_agent import crai_agent
++    _limpar_checkpointer(crai_agent)
++    yield
++    _limpar_checkpointer(crai_agent)
+```
+
+**Aqui o estado pesa mais do que no voluntário**, e é o que justifica a fixture:
+o checkpoint do `crai_agent` é onde mora o **contador de tentativas da janela do
+BACEN** (`main_agent.py:108`). Um teste que deixasse `RN_x` com 2 tentativas
+gastas fazia o próximo teste com o mesmo `id_recorrencia` começar com 2 — e o
+que ele mediria seria a ordem de execução da suíte, não a regra regulatória.
+
+Medido ao fim de uma sessão inteira, com plugin somente-leitura:
+
+```
+===== checkpointers ao fim da sessao =====
+  crai_agent (involuntario) : 0 threads
+  voluntario(simular=True)  : 0 threads
+  voluntario(simular=False) : 0 threads
+```
+
+Antes do Bloco A eram 41 + 5 no voluntário; o involuntário seguia acumulando até
+agora.
+
+## C.3.2 — `docs/LIMITACOES.md`
+
+Seção nova — *"O ledger de retenção é um arquivo local — workers distribuídos
+não o compartilham"* —, nas quatro partes do padrão do documento: **O que é** /
+**Por que está assim** / **O que não está afetado** / **O dia em que… vira
+obrigatória**.
+
+O ponto que fiz questão de deixar escrito, porque é contraintuitivo depois do
+C.2: **o 503 não alcança o caso distribuído.** Com dois workers em arquivos
+diferentes, o ciclo é aberto por um e o desfecho chega ao outro, que responde
+`SEM_CICLO` — um status legítimo — e portanto **200**. O sistema não sabe que
+falhou; ele conclui, com razão local, que não havia nada a fechar. É o mesmo
+desfecho perdido que o C.2 fecha no caso de erro, por uma porta que o C.2 não
+cobre.
+
+Também registrei que volume compartilhado por NFS **não** é uma terceira
+opção — o travamento de arquivo do SQLite não é confiável ali, e trocaria uma
+falha visível por corrupção.
+
+## PORTÃO C.3
+
+- [x] **10 execuções da raiz, todas verdes:**
+
+```
+1491 passed in 64.67s    1491 passed in 65.66s
+1491 passed in 64.34s    1491 passed in 64.11s
+1491 passed in 66.48s    1491 passed in 64.45s
+1491 passed in 64.62s    1491 passed in 65.14s
+1491 passed in 63.75s    1491 passed in 64.98s
+```
+
+- [x] **`LIMITACOES.md` com a seção nova**
+
+---
+
+# Estado do working tree ao fim do Bloco C
+
+```
+ M app/crai/api/app.py                          C.2
+ M app/crai/churn_voluntary/retention_log.py    C.1.1 / C.1.2 / C.1.3
+ M app/crai/churn_voluntary/voluntary_agent.py  C.1.3 (chamador de produção)
+ M app/tests/conftest.py                        C.3.1
+ M app/tests/test_disparo_lote.py               C.1.3 (chamador)
+ M app/tests/test_retention_outcome.py          C.1.3 (chamador) + C.2
+ M docs/LIMITACOES.md                           C.3.2
+ M docs/RELATORIO_ESTABILIDADE.md               este relatório
+?? app/tests/test_ledger_concorrencia.py        C.1.4
+```
+
+Nada commitado, nada no índice. 1483 → 1491 testes (9 de concorrência + 5 de
+política HTTP, menos os que já existiam no arquivo de outcome).
+
+# O que continua em aberto depois do Bloco C
+
+1. **O caso distribuído** — declarado em `LIMITACOES.md`, sem conserto possível
+   sem Postgres. É o item que o 503 do C.2 não cobre.
+2. **A escrita bloqueia o event loop.** `registrar_resultado_externo` é `async`
+   mas chama `registrar_desfecho` de forma síncrona: com contenção real, o
+   worker fica parado até 5 s. É o que limita o `busy_timeout` por cima, e o
+   conserto é tirar a escrita do loop (`run_in_threadpool`) — não foi pedido
+   aqui e mexe no comportamento de todas as rotas.
+3. **`docs/CONTRATO_PAINEL.md`** continua sem documentar o `lote_id` do Bloco B.
+4. **`hubspot_crm.py:63`**, o id de negociação com 100.000 valores possíveis.
+5. **N-12**, o `UnicodeEncodeError` do `✅`/`❌` em console cp1252.

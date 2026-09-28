@@ -756,9 +756,40 @@ async def retention_outcome_webhook(request: Request) -> JSONResponse:
     resultado = await registrar_resultado_externo(
         identidade, offer_type, profile, accepted, tenant_id=tenant_id)
 
+    if resultado.get("resultado") is retention_log.ResultadoDesfecho.ERRO:
+        # 503 E NÃO 200 — a única resposta que recupera o dado.
+        #
+        # Este ramo não existia: até o Bloco C, erro de gravação voltava do
+        # `registrar_desfecho` como o MESMO `False` de um reenvio, e saía
+        # daqui como 200 "ignorado". O remetente dava o desfecho por entregue
+        # e nunca mais mandava. O que se perde nesse 200 não é um log: é o
+        # rótulo `accepted` de uma linha do dataset de treino e a prova de que
+        # aquela retenção aconteceu — e o bandit fica sem a observação.
+        #
+        # 503, e não 409: infraestrutura de webhook (Segment, Stripe, backend
+        # próprio) retenta em 5xx com backoff, e é essa retentativa que traz o
+        # desfecho de volta. 409 é 4xx — a maioria dos remetentes o trata como
+        # "recusado, não insista", que é exatamente o desfecho perdido de
+        # novo, só com outro número. E 409 significaria conflito de ESTADO,
+        # quando o estado aqui está certo e quem falhou foi a infraestrutura.
+        # `Retry-After` porque uma contenção de banco passa em segundos.
+        logger.error(
+            "[OUTCOME] FALHA ao registrar desfecho — respondendo 503 para o "
+            "remetente reenviar | tenant=%s user=%s offer=%s accepted=%s",
+            tenant_id, identidade, offer_type, accepted)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "erro_ao_registrar",
+                     "motivo": "falha_de_gravacao",
+                     "detalhe": ("o desfecho não foi registrado; reenvie — "
+                                 "este endpoint é idempotente e um reenvio "
+                                 "bem-sucedido conta uma vez só")},
+            headers={"Retry-After": "30"})
+
     if not resultado["contabilizado"]:
         # 200, não erro: reenvio é comportamento esperado de webhook, e um 4xx
-        # faria o cliente retentar para sempre o que já foi processado.
+        # faria o cliente retentar para sempre o que já foi processado. Ciclo
+        # inexistente idem — não há o que reenviar resolva.
         return JSONResponse({"status": "ignorado",
                              "motivo": "reenvio_ou_ciclo_inexistente"})
 

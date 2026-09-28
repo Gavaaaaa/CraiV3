@@ -185,14 +185,47 @@ def _warm_start(va) -> dict:
     return _SNAPSHOT["estado"]
 
 
+def _limpar_checkpointer(grafo) -> None:
+    """Esvazia o `MemorySaver` de um grafo compilado, se houver um."""
+    cp = getattr(grafo, "checkpointer", None)
+    for nome in ("storage", "writes"):
+        alvo = getattr(cp, nome, None)
+        if alvo is not None:
+            alvo.clear()
+
+
 def _zerar_checkpointers(va) -> None:
     """Os `MemorySaver` são criados no import e não têm dono que os limpe."""
     for grafo in getattr(va, "_AGENTES", {}).values():
-        cp = getattr(grafo, "checkpointer", None)
-        for nome in ("storage", "writes"):
-            alvo = getattr(cp, nome, None)
-            if alvo is not None:
-                alvo.clear()
+        _limpar_checkpointer(grafo)
+
+
+@pytest.fixture(autouse=True)
+def checkpoint_do_involuntario_limpo():
+    """O `MemorySaver` do `crai_agent`, zerado por teste. A outra metade.
+
+    A fixture acima fechou os dois grafos do VOLUNTÁRIO. O involuntário
+    (`crai.agent.main_agent.crai_agent`, compilado no import, linha 142)
+    ficou de fora e é a mesma dívida: 46 threads acumuladas ao fim de uma
+    sessão, e testes diferentes chegando a compartilhar checkpoint quando o
+    `thread_id` colide.
+
+    AQUI O ESTADO PESA MAIS DO QUE NO VOLUNTÁRIO, e por isso a dívida é pior:
+    o checkpoint do `crai_agent` é onde mora o CONTADOR DE TENTATIVAS DA
+    JANELA DO BACEN (ver o comentário longo em `main_agent.py:108`). Um teste
+    que deixasse `RN_x` com 2 tentativas gastas fazia o próximo teste que
+    usasse o mesmo `id_recorrencia` começar com 2 — e o que ele mediria seria
+    a ordem de execução da suíte, não a regra regulatória.
+
+    Separada da fixture do voluntário de propósito: são dois pipelines, e um
+    nome que dissesse "voluntário" mentindo sobre o que limpa é pior do que
+    uma fixture a mais.
+    """
+    from crai.agent.main_agent import crai_agent
+
+    _limpar_checkpointer(crai_agent)
+    yield
+    _limpar_checkpointer(crai_agent)
 
 
 @pytest.fixture(autouse=True)

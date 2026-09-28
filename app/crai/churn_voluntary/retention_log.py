@@ -112,6 +112,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from enum import Enum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -198,11 +199,70 @@ def caminho_do_banco() -> Path:
     return Path(override) if override else DB_PATH
 
 
-def _conectar() -> sqlite3.Connection:
+# Quanto o SQLite espera por uma trava de escrita antes de desistir com
+# "database is locked".
+#
+# CORREÇÃO DE PREMISSA, declarada porque muda o que este número significa: o
+# `sqlite3` do Python JÁ aplicava 5 s aqui — `sqlite3.connect(timeout=5.0)` é
+# o default e ele vira `busy_timeout`. Não havia "falha imediata" na
+# contenção. O que faltava era o número estar ESCRITO: ninguém conseguia
+# achá-lo, justificá-lo, nem baixá-lo num teste.
+#
+# POR QUE 5 s, e não mais. As transações deste arquivo duram microssegundos
+# (um UPDATE, ou os INSERT de um lote). Uma contenção que passa de 5 s não é
+# sobreposição momentânea — é gravador travado, e aí desistir é a resposta
+# certa, agora que `registrar_desfecho` sabe dizer ERRO em vez de fingir
+# reenvio. Subir isto tem custo real: `registrar_resultado_externo` é chamado
+# de dentro de um handler `async` sem sair do event loop, então cada segundo
+# de espera é um segundo com o worker parado. Tratar isso de verdade é tirar
+# a escrita do loop, e está fora do escopo deste bloco.
+#
+# ESTE VALOR VALE PARA TODO MUNDO, inclusive para a trilha do Art. 20, que
+# divide o `_conectar` com os ciclos. É o default e não é sobrescrevível por
+# ambiente — ver `_busy_timeout_do_desfecho_ms` logo abaixo.
+BUSY_TIMEOUT_MS_PADRAO = 5000
+
+
+def _busy_timeout_do_desfecho_ms() -> int:
+    """O `busy_timeout` de `registrar_desfecho`, e SÓ dele.
+
+    POR QUE A ENV É ESCOPADA A UMA FUNÇÃO. Ela existe para um motivo só: o
+    teste de contenção (`tests/test_ledger_concorrencia.py`) precisa provocar
+    o estouro do timeout em milissegundos, em vez de segurar a suíte por 5 s.
+
+    Se fosse lida dentro do `_conectar`, alcançaria também as conexões da
+    TRILHA DO ART. 20, que é a outra tabela deste arquivo e usa o mesmo
+    `_conectar`. Um teste que baixasse o timeout para 50 ms e, adiante,
+    encostasse num ponto que grava decisão — direto ou pelo pipeline —
+    passaria a reprovar por contenção em vez de por mérito, de forma
+    intermitente e a semanas de distância da causa. É a mesma classe de
+    acoplamento que o Bloco A fechou com a env do modo simulação, e não faz
+    sentido reabri-la aqui.
+
+    Então o override não mora no `_conectar`: mora AQUI, e só
+    `registrar_desfecho` o passa adiante. Todo o resto — trilha inclusive —
+    recebe `BUSY_TIMEOUT_MS_PADRAO`. A catraca disso é
+    `test_a_env_de_busy_timeout_nao_alcanca_a_trilha`.
+    """
+    bruto = os.getenv("CRAI_RETENTION_BUSY_TIMEOUT_MS")
+    try:
+        return max(0, int(bruto))
+    except (TypeError, ValueError):
+        return BUSY_TIMEOUT_MS_PADRAO
+
+
+def _conectar(busy_timeout_ms: int | None = None) -> sqlite3.Connection:
+    """Conexão com o banco. `busy_timeout_ms` só é passado por quem tem razão
+    declarada para fugir do padrão — hoje, um chamador só."""
     caminho = caminho_do_banco()
     caminho.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(caminho)
+    ms = BUSY_TIMEOUT_MS_PADRAO if busy_timeout_ms is None else busy_timeout_ms
+    conn = sqlite3.connect(caminho, timeout=ms / 1000)
     conn.row_factory = sqlite3.Row
+    # Explícito além do `timeout=` do connect: o PRAGMA é o que vale para o
+    # SQLite, o argumento é só o atalho do driver. Com os dois escritos, quem
+    # ler o arquivo não precisa saber que um implica o outro.
+    conn.execute(f"PRAGMA busy_timeout = {ms}")
     conn.executescript(_SCHEMA)
     try:
         conn.executescript(_INDICE_ELO_UNICO)
@@ -326,23 +386,67 @@ def ciclo_aberto(tenant_id: str, user_id: str, offer_type: str) -> dict | None:
         return None
 
 
+class ResultadoDesfecho(Enum):
+    """O que aconteceu com uma tentativa de fechar o ciclo. QUATRO casos.
+
+    POR QUE ISTO DEIXOU DE SER UM `bool`. `registrar_desfecho` devolvia
+    `False` para três situações que não são a mesma coisa, e o chamador — que
+    só via o `False` — tratava as três como "não conte e siga":
+
+        reenvio    o ciclo já tem desfecho. LEGÍTIMO: ignorar é o certo,
+                   contar duas vezes enviesaria o posterior do bandit para
+                   quem reenvia mais.
+        sem ciclo  chegou desfecho de uma oferta que este sistema não fez.
+                   LEGÍTIMO: aprender com isso é aprender com dado de origem
+                   desconhecida.
+        ERRO       o banco estava travado, ou a escrita falhou. NÃO é
+                   legítimo: o desfecho existiu, o cliente respondeu, e o
+                   registro se perdeu. É rótulo de treino perdido e prova de
+                   faturamento perdida — e saía pela mesma porta de um
+                   reenvio, em silêncio.
+
+    A distinção antes existia só no log, que ninguém lê em produção.
+
+    ENUM E NÃO EXCEÇÃO, de propósito: o módulo inteiro é best effort por
+    projeto (ver a docstring do arquivo) — perder uma linha de dataset é
+    ruim, derrubar o ciclo de retenção de um cliente por causa do disco é
+    pior. Quem decide o que fazer com o erro é o chamador, que é quem sabe se
+    está num webhook (pode pedir reenvio) ou num nó de grafo (não pode).
+
+    SEM `__bool__`, também de propósito. Um `__bool__` que fizesse ERRO cair
+    como falso manteria `if not registrar_desfecho(...)` compilando e
+    escondendo exatamente o defeito que este enum existe para expor. Todo
+    chamador foi ajustado para dizer, explicitamente, quais status ele trata.
+    """
+
+    FECHADO = "fechado"
+    REENVIO = "reenvio"
+    SEM_CICLO = "sem_ciclo"
+    ERRO = "erro"
+
+
 def registrar_desfecho(tenant_id: str, user_id: str, offer_type: str,
-                       accepted: bool, origem: str = "webhook") -> bool:
-    """Fecha o ciclo aberto mais recente. Devolve False se não havia o que fechar.
+                       accepted: bool, origem: str = "webhook") -> ResultadoDesfecho:
+    """Fecha o ciclo aberto mais recente. Devolve QUAL dos quatro casos foi.
 
-    `False` significa uma de duas coisas, e as duas pedem que o chamador NÃO
-    atualize o bandit:
+    Ver `ResultadoDesfecho` para o que cada um significa e por que o `bool`
+    de antes era insuficiente.
 
-      - REENVIO: o ciclo já tem desfecho. Contar de novo enviesaria o
-        posterior para o lado que reenviou.
-      - SEM CICLO: chegou desfecho de uma oferta que este sistema não fez.
-        Aprender com isso seria aprender com dado de origem desconhecida.
-
-    A distinção entre os dois casos sai no log, não no retorno — quem chama só
-    precisa saber se deve ou não contar.
+    `BEGIN IMMEDIATE`, e o modelo é a trilha do Art. 20 DESTE MESMO ARQUIVO
+    (`registrar_decisoes`, que abre a transação antes de ler o
+    `hash_anterior`). O motivo é o mesmo, um andar abaixo: aqui o `SELECT` que
+    procura o ciclo ABERTO e o `UPDATE` que o fecha eram duas operações
+    soltas. Em modo deferido o `SELECT` não pega trava nenhuma, então dois
+    workers podiam ler a MESMA linha aberta e os dois seguirem para o UPDATE —
+    os dois devolvendo "fechei", e o bandit contando o mesmo desfecho duas
+    vezes. Com `BEGIN IMMEDIATE` a trava de escrita é tomada ANTES da leitura:
+    o segundo worker espera, e quando entra já encontra a linha fechada e
+    responde REENVIO, que é a verdade.
     """
     try:
-        with _conectar() as conn:
+        conn = _conectar(_busy_timeout_do_desfecho_ms())
+        try:
+            conn.execute("BEGIN IMMEDIATE")
             linha = conn.execute(
                 """SELECT id FROM ciclos_retencao
                     WHERE tenant_id = ? AND user_id = ? AND offer_type = ?
@@ -358,11 +462,14 @@ def registrar_desfecho(tenant_id: str, user_id: str, offer_type: str,
                      LIMIT 1""",
                     (tenant_id, user_id, offer_type),
                 ).fetchone()
+                conn.commit()
+                resultado = (ResultadoDesfecho.REENVIO if ja_fechado
+                             else ResultadoDesfecho.SEM_CICLO)
                 motivo = ("desfecho já registrado (reenvio)" if ja_fechado
                           else "nenhum ciclo correspondente")
                 print(f"[RETENTION-LOG] Ignorado — {motivo}: "
                       f"{tenant_id}/{user_id}/{offer_type}")
-                return False
+                return resultado
 
             conn.execute(
                 """UPDATE ciclos_retencao
@@ -370,10 +477,19 @@ def registrar_desfecho(tenant_id: str, user_id: str, offer_type: str,
                     WHERE id = ?""",
                 (int(bool(accepted)), _agora(), origem, linha["id"]),
             )
-            return True
-    except Exception as e:                       # noqa: BLE001
-        print(f"[RETENTION-LOG] Falha ao registrar desfecho: {e}")
-        return False
+            conn.commit()
+            return ResultadoDesfecho.FECHADO
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    except Exception as e:                       # noqa: BLE001 — best effort declarado
+        # ERRO, e não o `False` de antes: daqui para cima alguém precisa saber
+        # que o desfecho NÃO foi registrado por culpa da infraestrutura.
+        print(f"[RETENTION-LOG] ERRO ao registrar desfecho "
+              f"{tenant_id}/{user_id}/{offer_type}: {e}")
+        return ResultadoDesfecho.ERRO
 
 
 def apagar_tenant(tenant_id: str) -> int:

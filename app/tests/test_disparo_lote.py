@@ -212,7 +212,8 @@ class TestRegistroDoEnvio:
     def test_ciclo_fechado_libera_novo_contato(self, cliente):
         primeiro = _post(cliente, {"clientes": [_c("x", dias=45, uso=0)]})
         oferta = primeiro["clientes"][0]["offer_type"]
-        assert rl.registrar_desfecho(TENANT_PAINEL, "user:x", oferta, False)
+        assert (rl.registrar_desfecho(TENANT_PAINEL, "user:x", oferta, False)
+                is rl.ResultadoDesfecho.FECHADO)
         segundo = _post(cliente, {"clientes": [_c("x", dias=45, uso=0)]})
         assert segundo["resumo"]["processados"] == 1
 

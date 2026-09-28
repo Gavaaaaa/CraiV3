@@ -283,3 +283,60 @@ TestWebhooksIntocados` trava que só elas dependem de `get_tenant_id`.
 vira obrigatória: segredo por tenant (o header passa a ser derivado de qual
 segredo assinou, não lido do request), ou tenant dentro do payload assinado.
 Sem uma das duas, multi-tenant nos webhooks é multi-tenant só no banco.
+
+### O ledger de retenção é um arquivo local — workers distribuídos não o compartilham
+
+Declarado aqui em 28/09/2026, ao fim do Bloco C. Até então isso existia só como
+uma linha de `BASE_DIR` em `app/crai/churn_voluntary/retention_log.py` e como um
+achado de diagnóstico em `docs/RELATORIO_ESTABILIDADE.md`.
+
+**O que é.** `ciclos_retencao` — o dataset de treino do churn voluntário e, ao
+mesmo tempo, a deduplicação do desfecho — mora num SQLite **local ao sistema de
+arquivos do processo**: `app/data/retention_cycles.db`, ou o que
+`CRAI_RETENTION_DB` apontar. Dois workers no mesmo host, ou em contêineres com o
+mesmo volume, compartilham o arquivo e tudo funciona — isso é medido, com dois
+processos de verdade, em `tests/test_ledger_concorrencia.py`. Dois workers em
+**hosts ou contêineres diferentes** não: cada um cria o seu banco, e três coisas
+quebram de uma vez. A deduplicação some entre eles, então o mesmo desfecho
+reenviado a workers distintos é contado duas vezes e move o posterior do bandit
+em dobro. O dataset de treino nasce partido em N pedaços, um por worker, e
+nenhum deles é a história completa de um cliente. E o pior dos três: o ciclo é
+ABERTO por um worker e o desfecho chega a outro, que não encontra nada — a
+resposta é `SEM_CICLO`, e `SEM_CICLO` é um caso legítimo, então o webhook
+responde 200 e o desfecho é descartado em silêncio, exatamente o resultado que o
+Bloco C.2 existe para impedir no caso de erro. **O 503 do C.2 não alcança este
+caso**, e é importante que isso esteja escrito: lá o sistema sabe que falhou;
+aqui ele acha, com razão local, que não havia nada a fechar.
+
+**Por que está assim.** É a mesma dívida assumida do `MemorySaver` em
+`crai/agent/main_agent.py:108`, um andar acima: a POC roda em **um processo**, e
+a escolha do SQLite tem razão própria — a segunda escrita de um ciclo é um
+`UPDATE` numa linha gravada dias antes, possivelmente por outro processo, e
+Parquet é imutável por arquivo. O Bloco C fechou o que dava para fechar **dentro
+de um arquivo**: `BEGIN IMMEDIATE` em volta do `SELECT`+`UPDATE` que fecha o
+ciclo, `busy_timeout` declarado em vez de implícito, e um status `ERRO` que
+deixou de se disfarçar de reenvio. Nenhuma dessas três atravessa o limite do
+sistema de arquivos, porque nenhuma delas pode: a trava do SQLite é sobre um
+arquivo, e dois arquivos não disputam nada.
+
+**O que não está afetado.** O deploy de hoje, que é de processo único, e
+qualquer arranjo em que os workers vejam o **mesmo** arquivo — as duas garantias
+do Bloco C valem inteiras ali, medidas com dois processos reais disputando o
+mesmo ciclo (exatamente um fecha, o outro recebe `REENVIO`, nenhum recebe
+`ERRO`). A trilha do Art. 20 mora no mesmo arquivo e tem a mesma limitação de
+alcance, mas falha de um jeito diferente e melhor: o índice único
+`uq_decisao_elo` faz o segundo gravador **falhar alto**, com `IntegrityError`
+logado como BIFURCAÇÃO EVITADA, em vez de divergir em silêncio. Os modelos, o
+`bandit_state.json` e os artefatos de `crai/models/` também não entram aqui —
+são leitura, não estado transacional.
+
+**O dia em que houver mais de um worker que não divida o volume**, esta é a
+linha que vira obrigatória: `ciclos_retencao` em **Postgres**, com o desfecho
+fechado por `UPDATE ... WHERE accepted IS NULL RETURNING id` — que é atômico no
+servidor e dispensa a transação explícita —, ou uma fila que garanta afinidade
+de worker por `(tenant, user, oferta)`. O SQL já é quase todo portável e o
+`SUPABASE_DB_URL` que a API de clientes usa mostra que o Postgres já está no
+desenho; o que falta é a migração e trocar o `_conectar` por um pool. Volume
+compartilhado por NFS **não** é uma terceira opção: o travamento de arquivo do
+SQLite não é confiável sobre NFS, e trocaria uma falha visível por corrupção.
+Sem uma das duas primeiras, multi-worker é multi-worker só no balanceador.
