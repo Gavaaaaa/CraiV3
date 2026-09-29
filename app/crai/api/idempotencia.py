@@ -17,23 +17,30 @@ duas direções opostas:
                              é a receita do modelo Outcome-as-a-Service, isso é
                              erro de faturamento, não de log.
 
-O QUE ESTA CAMADA É — e o que ela não é. É uma janela de memória do processo:
-um `OrderedDict` com TTL e teto de entradas. Consequências, escritas em vez de
-descobertas depois:
+O QUE ESTA CAMADA É. Duas formas, sob a MESMA interface (`registrar_se_novo`):
 
-  1. **Reinício zera a janela.** Um reenvio que chegue depois de um restart
-     passa como novo. É a mesma limitação do `MemorySaver`
-     (crai/agent/main_agent.py) e do contador do BACEN, e a mesma correção:
-     persistência (PostgreSQL) — outra frente.
-  2. **Dois processos têm janelas separadas.** A CRAI hoje só é correta em
-     processo único, pelo mesmo motivo já documentado no grafo.
-  3. O TTL é a janela do BACEN (7 dias): é o horizonte em que um reenvio ainda
-     descreve o mesmo ciclo de cobrança. Passado isso, um evento com o mesmo
-     par de ids é um ciclo NOVO e deve mesmo ser processado.
+  persistente   as janelas do Pix (`EVENTOS_DE_FALHA`, `CICLOS_FECHADOS`)
+                gravam em `eventos_vistos`, no arquivo do ciclo de cobrança
+                (`crai/dunning/ciclo_cobranca.py`), sob `BEGIN IMMEDIATE`. Um
+                reenvio do PSP depois de um REINÍCIO é reconhecido como
+                reenvio; dois processos no mesmo arquivo veem a mesma janela.
+                Era a limitação (1) e (2) da versão anterior deste módulo,
+                fechada na Etapa 1 (Bloco 1, 28/09/2026). O que continua
+                valendo é o limite do arquivo: dois workers em máquinas
+                diferentes têm dois arquivos — a mesma dívida do ledger de
+                desfecho, declarada em `docs/LIMITACOES.md`.
+  em memória    a janela da API de clientes (`CLIENTES_API`) continua sendo um
+                `OrderedDict` com TTL e teto de entradas — está fora do escopo
+                da etapa, e a sua limitação (reinício zera) permanece.
 
-MVP DECLARADO: quando o DB entrar, a mesma interface (`registrar_se_novo`)
-passa a consultar uma tabela com UNIQUE em (escopo, chave) e as três
-limitações acima somem sem tocar em quem chama.
+Se o banco falhar numa janela persistente, a chamada NÃO levanta: loga alto e
+cai para a janela em memória do processo, que ainda segura o reenvio dentro do
+processo. Perder deduplicação entre reinícios é pior que derrubar a cobrança
+de um cliente por causa do disco? Não — e é por isso que o fallback existe.
+
+O TTL é a janela do BACEN (7 dias): é o horizonte em que um reenvio ainda
+descreve o mesmo ciclo de cobrança. Passado isso, um evento com o mesmo par
+de ids é um ciclo NOVO e deve mesmo ser processado.
 """
 
 import json
@@ -42,6 +49,8 @@ import threading
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Optional
+
+from ..dunning import ciclo_cobranca
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +79,13 @@ class JanelaDeIdempotencia:
     """Lembra as chaves vistas recentemente. `registrar_se_novo` é toda a API."""
 
     def __init__(self, escopo: str, ttl: timedelta = TTL_PADRAO,
-                 max_entradas: int = MAX_ENTRADAS):
+                 max_entradas: int = MAX_ENTRADAS, persistente: bool = False):
         self.escopo = escopo
         self.ttl = ttl
         self.max_entradas = max_entradas
+        # `persistente=True` grava em `eventos_vistos`; a memória do processo
+        # vira só o fallback de quando o banco falha (ver docstring do módulo).
+        self.persistente = persistente
         self._vistos: "OrderedDict[str, datetime]" = OrderedDict()
         # A janela é consultada de dentro de handlers async (um event loop) e,
         # nos testes, também de threads do TestClient. O lock é barato e torna
@@ -81,25 +93,58 @@ class JanelaDeIdempotencia:
         self._trava = threading.Lock()
 
     def registrar_se_novo(self, chave: str, agora: Optional[datetime] = None) -> bool:
-        """`True` se a chave é nova (siga em frente); `False` se é reenvio.
+        """`True` se a chave é nova (siga em frente); `False` se é reenvio."""
+        return self.registrar_se_novo_detalhado(chave, agora)[0]
+
+    def registrar_se_novo_detalhado(self, chave: str,
+                                    agora: Optional[datetime] = None) -> tuple[bool, bool]:
+        """`(novo, persistido)`: se a chave é nova, e se a resposta veio do
+        banco (`True`) ou da memória do processo (`False`, janela em memória
+        ou fallback por banco indisponível — B2-a).
 
         Registra e responde no mesmo passo, sob trava: um `ja_visto()` seguido
         de um `marcar()` deixaria uma fresta entre a consulta e a escrita, que
         é exatamente por onde duas entregas simultâneas passariam as duas.
         """
         agora = agora or datetime.now()
+        if self.persistente:
+            try:
+                return ciclo_cobranca.registrar_evento_se_novo(
+                    self.escopo, chave, agora, self.ttl), True
+            except Exception as e:               # noqa: BLE001 — fallback declarado
+                # Marcador próprio, para o operador achar no log (B2-a).
+                logger.warning("[IDEMPOTENCIA-FALLBACK] %s: banco indisponível (%s) — "
+                               "usando a janela em memória deste processo para esta "
+                               "chave. Um reenvio depois de reinício NÃO será "
+                               "reconhecido enquanto o banco não voltar.",
+                               self.escopo, e)
         with self._trava:
             self._expirar(agora)
             visto_em = self._vistos.get(chave)
             if visto_em is not None:
                 logger.info("[IDEMPOTENCIA] %s: reenvio ignorado (visto em %s) — %s",
                             self.escopo, visto_em.isoformat(timespec="seconds"), chave)
-                return False
+                return False, False
             self._vistos[chave] = agora
             self._vistos.move_to_end(chave)
             while len(self._vistos) > self.max_entradas:
                 self._vistos.popitem(last=False)
-            return True
+            return True, False
+
+    def esquecer(self, chave: str) -> None:
+        """Desfaz o registro de UMA chave cujo processamento falhou (B2-a).
+
+        O PSP vai reenviar o evento, e o reenvio tem que ser processado como
+        novo — na memória e no banco, os dois, porque não se sabe em qual dos
+        dois a chave foi parar."""
+        with self._trava:
+            self._vistos.pop(chave, None)
+        if self.persistente:
+            try:
+                ciclo_cobranca.esquecer_evento(self.escopo, chave)
+            except Exception as e:               # noqa: BLE001
+                logger.warning("[IDEMPOTENCIA] %s: não foi possível esquecer a chave no "
+                               "banco (%s)", self.escopo, e)
 
     def _expirar(self, agora: datetime) -> None:
         """Descarta o que passou do TTL. As entradas estão em ordem de inserção."""
@@ -114,16 +159,28 @@ class JanelaDeIdempotencia:
         """Esquece tudo. Existe para o teste — ver `tests/conftest.py`."""
         with self._trava:
             self._vistos.clear()
+        if self.persistente:
+            try:
+                ciclo_cobranca.limpar_eventos(self.escopo)
+            except Exception as e:               # noqa: BLE001
+                logger.warning("[IDEMPOTENCIA] %s: não foi possível limpar o banco (%s)",
+                               self.escopo, e)
 
     def __len__(self) -> int:
+        if self.persistente:
+            try:
+                return ciclo_cobranca.contar_eventos(self.escopo) + len(self._vistos)
+            except Exception:                    # noqa: BLE001
+                pass
         return len(self._vistos)
 
 
-# As duas janelas do churn involuntário. Separadas de propósito: um e2e_id de
-# cobrança falhada e um de cobrança paga são transações diferentes, e misturá-
-# los num balde só faria uma confirmação silenciar a falha seguinte.
-EVENTOS_DE_FALHA = JanelaDeIdempotencia("pix_falha")
-CICLOS_FECHADOS = JanelaDeIdempotencia("pix_recuperacao")
+# As duas janelas do churn involuntário, PERSISTENTES (Etapa 1, 1.2). Separadas
+# de propósito: um e2e_id de cobrança falhada e um de cobrança paga são
+# transações diferentes, e misturá-los num balde só faria uma confirmação
+# silenciar a falha seguinte.
+EVENTOS_DE_FALHA = JanelaDeIdempotencia("pix_falha", persistente=True)
+CICLOS_FECHADOS = JanelaDeIdempotencia("pix_recuperacao", persistente=True)
 
 # A janela da API de sincronização de clientes (`api/clientes.py`). A chave é
 # o header `Idempotency-Key` que o backend do cliente manda, composta com

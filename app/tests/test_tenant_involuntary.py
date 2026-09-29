@@ -160,20 +160,25 @@ class TestOTenantChegaAosEfeitosExternos:
 
         monkeypatch.setattr(sched, "reenviar_cobranca_pix", espiao)
 
-        # Janela já aberta: a primeira tentativa é devida e o próprio nó a
-        # dispara, sem precisar do agendador.
+        # Etapa 1 (R3). ANTES: o teste PLANTAVA no checkpoint uma janela
+        # aberta há dois dias (`update_state(pix_janela_ate=now+5d)`) para a
+        # primeira tentativa ser devida no próprio nó. Afirmava que o
+        # checkpoint era a fonte da janela — o mecanismo que reabria a janela
+        # depois de um reinício. AGORA a janela nasce no ciclo, na primeira
+        # falha, e nada plantado no checkpoint a move; a tentativa 1 é de
+        # amanhã, e quem a dispara é o agendador, com o relógio adiantado.
+        import asyncio
         from datetime import datetime, timedelta
         from crai.agent import workflow as workflow_module
         monkeypatch.setattr(workflow_module._pix_retry, "confianca_minima", 2.0)
 
         rec = "RN_s4_psp"
-        crai_agent.update_state(
-            {"configurable": {"thread_id": rec}},
-            {"pix_janela_ate": datetime.now() + timedelta(days=5), "retry_count": 0},
-        )
         corpo = _corpo(rec, f"E_{rec}")
         cliente.post("/webhooks/pix-automatico", content=corpo,
                      headers={**_assinar(corpo), "x-tenant-id": "empresa_psp"})
+        assert not chamadas, "instrução reenviada antes da janela do recebedor abrir"
+
+        asyncio.run(sched.processar_tentativas_devidas(datetime.now() + timedelta(days=2)))
 
         assert chamadas, "nenhuma instrução foi reenviada — o teste não mediu nada"
         assert all(c.get("tenant_id") == "empresa_psp" for c in chamadas)

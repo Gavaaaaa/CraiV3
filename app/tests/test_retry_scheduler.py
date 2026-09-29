@@ -142,18 +142,38 @@ class TestLimiteDoBacen:
             f"{MAX_TENTATIVAS} por janela de 7 dias")
 
     @pytest.mark.asyncio
-    async def test_plano_corrompido_com_quarta_tentativa_nao_dispara_a_quarta(self):
-        """Defesa em profundidade: o agendador não concede, só executa.
+    async def test_plano_com_quarta_tentativa_e_recusado_na_origem_e_no_agendador(self):
+        """Duas camadas, e a de baixo é o BANCO (Etapa 1, Bloco 1).
 
-        Um estado gravado com 4 entradas é inconsistente por construção — a
-        política nunca produz isso. Se acontecer (arquivo editado à mão, versão
-        antiga do formato), a quarta não pode sair.
+        ANTES: este teste gravava um plano com 4 entradas no JSON — que aceitava
+        qualquer coisa — e afirmava só que o agendador não disparava a 4ª. Ou
+        seja, afirmava que um plano de 4 tentativas PODIA existir gravado, e
+        que a defesa era o `if numero > MAX_TENTATIVAS` do agendador. Era a
+        única barreira.
+
+        AGORA: o plano de 4 nem é gravado. `CHECK (numero BETWEEN 1 AND 3)` na
+        tabela recusa, a transação inteira volta atrás (nenhuma das 4 fica),
+        e `save_retry_state` levanta. O agendador continua com a guarda de
+        defesa em profundidade, medida abaixo com um registro montado à mão —
+        um estado que o banco não deixa mais existir.
         """
-        _plano(quantas=MAX_TENTATIVAS + 1)
-        disparos = await processar_tentativas_devidas(ABERTURA + timedelta(days=9))
+        from crai.dunning.ciclo_cobranca import LimiteDeTentativas
+        from crai.dunning.retry_scheduler import disparar_tentativa
 
-        assert [d["numero"] for d in disparos] == [1, 2, 3]
-        assert MAX_TENTATIVAS + 1 not in _disparadas()
+        with pytest.raises(LimiteDeTentativas):
+            _plano(quantas=MAX_TENTATIVAS + 1)
+        assert retry_state.get_retry_state("RN_sched") is None, (
+            "a transação do plano de 4 tentativas não voltou atrás inteira")
+
+        disparos = await processar_tentativas_devidas(ABERTURA + timedelta(days=9))
+        assert disparos == []
+
+        # A guarda do agendador, com um registro que o banco já não produz.
+        registro = {"customer_id": "RN_sched", "tenant_id": None, "e2e_id": "E_x",
+                    "valor_original": VALOR, "tentativas": []}
+        quarta = {"numero": MAX_TENTATIVAS + 1, "quando": ABERTURA, "valor": VALOR}
+        assert await disparar_tentativa(registro, quarta, ABERTURA) is None
+        assert _disparadas() == []
 
 
 class TestFalhaDoPSP:
@@ -276,14 +296,31 @@ class TestIntegracaoComONoDoGrafo:
 class TestCamadaDeEstado:
     """Gap 2: o ponto de troca para o DB, e o que ele promete hoje."""
 
-    def test_o_caminho_do_estado_e_redirecionavel(self, monkeypatch, tmp_path):
+    def test_o_plano_mora_no_banco_isolado_e_o_json_nao_e_mais_escrito(
+            self, monkeypatch, tmp_path):
+        """ANTES: afirmava que `save_retry_state` criava o arquivo JSON apontado
+        por `CRAI_RETRY_STATE` — isto é, afirmava o mecanismo que o diagnóstico
+        apontou como defeito: um arquivo reescrito inteiro, sem transação, que
+        era a metade durável de um estado partido em dois.
+
+        AGORA: o plano é linha em `tentativas_cobranca`, no arquivo de
+        `CRAI_RECOVERY_DB` (isolado pelo conftest, que é o que o teste antigo
+        protegia). O JSON não é criado: ele é só entrada da migração.
+        """
+        import os
+        import sqlite3
+
         destino = tmp_path / "outro.json"
         monkeypatch.setenv(retry_state.ENV_CAMINHO, str(destino))
         _plano("RN_redirecionado")
 
-        assert destino.exists(), (
-            "sem redirecionamento por env a suíte escreveria no estado real, e "
-            "a próxima passagem do agendador cobraria clientes de teste")
+        assert not destino.exists(), "o JSON legado voltou a ser escrito"
+        banco = os.environ["CRAI_RECOVERY_DB"]
+        assert str(tmp_path) in banco or "de_teste" in banco, (
+            "o banco do ciclo não está isolado — a suíte escreveria no estado real")
+        with sqlite3.connect(banco) as conn:
+            n = conn.execute("SELECT COUNT(*) FROM tentativas_cobranca").fetchone()[0]
+        assert n == MAX_TENTATIVAS
         assert retry_state.get_retry_state("RN_redirecionado") is not None
 
     def test_estado_ilegivel_nao_derruba_e_nao_concede_tentativa(

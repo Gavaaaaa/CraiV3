@@ -27,9 +27,9 @@ entregar um evento inventado — diagnosticar uma cobrança de R$ 0 é pior que
 devolver 422, porque o e-Profit vai a zero e o churn involuntário legítimo é
 descartado sem rastro.
 
-PRIVACIDADE — o schema normalizado contém cinco campos de DADO:
+PRIVACIDADE — o schema normalizado contém sete campos de DADO:
 
-    e2e_id, valor, status, ispb_pagador, id_recorrencia
+    e2e_id, valor, status, ispb_pagador, id_recorrencia, codigo_falha, id_cobranca
 
 …mais um sexto campo, `degradacoes`, que é **metadado de qualidade do
 parsing**: uma lista de rótulos fixos, tirados de `DEGRADACOES_CONHECIDAS`.
@@ -396,7 +396,7 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
 
         Returns:
             {e2e_id, valor, status, ispb_pagador, id_recorrencia, codigo_falha,
-            degradacoes}. Os seis primeiros são dado; `degradacoes` é a lista
+            id_cobranca, degradacoes}. Os sete primeiros são dado; `degradacoes` é a lista
             (possivelmente vazia) dos defaults que precisaram ser aplicados. A
             chave Pix do pagador é deliberadamente descartada.
 
@@ -439,6 +439,19 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
                 default="",
             ), "id_recorrencia", degradacoes),
             "codigo_falha": self._extrair_codigo_de_falha(raw_payload, dados),
+            # Etapa 1 (D1, 28/09/2026), ADITIVO: a identidade da COBRANÇA, que
+            # se mantém entre a falha original e as retentativas enquanto o
+            # `e2e_id` muda a cada transação. É `data.id` na Iugu (a fatura),
+            # `txid` no BACEN, o id da charge no Pagar.me — o mesmo que
+            # `reenviar_cobranca_pix` recebe de volta ao reenviar. `id` fica por
+            # último de propósito: é o nome mais genérico, e só vale quando o
+            # PSP não manda nenhum dos específicos. Ausente vira `""`, sem
+            # degradação: o ciclo cai na identidade pelo e2e (A1).
+            "id_cobranca": _texto_de_identificacao(_primeiro_preenchido(
+                dados, "id_cobranca", "txid", "cobranca.txid", "charge_id", "charge.id",
+                "invoice_id", "invoice.id", "id",
+                default="",
+            ), "id_cobranca", degradacoes),
             "degradacoes": degradacoes,
         }
 

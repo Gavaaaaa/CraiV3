@@ -53,7 +53,7 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -144,7 +144,10 @@ def caminho_do_banco() -> Path:
 # criado antes do Bloco H não teria `metodo_pagamento`, o INSERT falharia e —
 # como toda escrita aqui é best-effort — o ciclo sumiria do dataset em
 # silêncio. A migração é idempotente e barata (um PRAGMA por conexão).
-_COLUNAS_ACRESCENTADAS = (("metodo_pagamento", "TEXT"),)
+# `ciclo_id` (Etapa 1, Bloco 3): a linha do dataset aponta para o ciclo de
+# cobrança de `crai/dunning/ciclo_cobranca.py` que a gerou. NULL nas linhas
+# antigas e nas gravadas por um state sem ciclo.
+_COLUNAS_ACRESCENTADAS = (("metodo_pagamento", "TEXT"), ("ciclo_id", "INTEGER"))
 
 
 def _migrar(conn: sqlite3.Connection):
@@ -250,6 +253,7 @@ def registrar_ciclo(state: dict, tentativas_usadas: int = 0) -> Optional[int]:
         "success_fee": (round(float(state.get("amount") or 0) * success_fee_pct(), 2)
                         if state.get("recovered") else 0.0),
         "amount": _num(state.get("amount")),
+        "ciclo_id": int(state["ciclo_id"]) if state.get("ciclo_id") else None,
     }
 
     campos = ", ".join(colunas)
@@ -285,9 +289,12 @@ def registrar_recuperacao(
     """Fecha o ciclo aberto com o desfecho REAL. False se não havia o que fechar.
 
     O `e2e_id` aqui é o da COBRANÇA QUE FALHOU e abriu o ciclo, não o da
-    transação que a pagou: é aquele que identifica o ciclo na tabela. Quando a
-    confirmação traz outro e2e (transação distinta, que é o caso normal), quem
-    reencontra a linha é o ciclo aberto mais recente daquele cliente.
+    transação que a pagou: é aquele que identifica o ciclo na tabela. Desde a
+    Etapa 1 (Bloco 3) quem fecha é `_fechar_ciclo_recuperado` lendo o CICLO,
+    e passa o e2e da falha original: a linha é reencontrada por ele, com
+    precisão. Quando o chamador só tem o e2e da transação que pagou (caminho
+    antigo), a linha é o ciclo aberto mais recente daquele cliente, como
+    sempre foi.
 
     Devolve `False` também no reenvio — a linha já está fechada —, e é isso que
     impede o fee de ser somado duas vezes no agregado.
@@ -296,10 +303,16 @@ def registrar_recuperacao(
         with _conectar() as conn:
             linha = conn.execute(
                 """SELECT id, amount FROM ciclos_recuperacao
-                    WHERE tenant_id = ? AND customer_id = ? AND recovered = 0
-                 ORDER BY id DESC LIMIT 1""",
-                (tenant_id or TENANT_PADRAO, customer_id),
+                    WHERE tenant_id = ? AND e2e_id = ? AND recovered = 0""",
+                (tenant_id or TENANT_PADRAO, e2e_id),
             ).fetchone()
+            if linha is None:
+                linha = conn.execute(
+                    """SELECT id, amount FROM ciclos_recuperacao
+                        WHERE tenant_id = ? AND customer_id = ? AND recovered = 0
+                     ORDER BY id DESC LIMIT 1""",
+                    (tenant_id or TENANT_PADRAO, customer_id),
+                ).fetchone()
 
             if linha is None:
                 logger.info("[RECOVERY-LOG] Nenhum ciclo aberto para %s/%s — "
@@ -321,6 +334,81 @@ def registrar_recuperacao(
     except Exception as e:                       # noqa: BLE001
         logger.warning("[RECOVERY-LOG] Falha ao registrar recuperação: %s", e)
         return False
+
+
+def linha_aberta_recente(tenant_id: str, customer_id: str, agora: datetime,
+                         dias: int) -> Optional[dict]:
+    """A4 (D9): a linha ABERTA mais recente deste cliente, se foi registrada há
+    no máximo `dias` — o caminho de TRANSIÇÃO para um ciclo que só existia na
+    RAM antes da Etapa 1. Linha mais velha não é devolvida: uma confirmação
+    nova não fecha uma falha antiga. `agora` é comparado em UTC, que é como
+    `registrado_em` é gravado."""
+    limite = (agora.astimezone(timezone.utc) if agora.tzinfo else agora.replace(tzinfo=timezone.utc))
+    limite = (limite - timedelta(days=dias)).isoformat(timespec="seconds")
+    try:
+        with _conectar() as conn:
+            linha = conn.execute(
+                """SELECT * FROM ciclos_recuperacao
+                    WHERE tenant_id = ? AND customer_id = ? AND recovered = 0
+                      AND registrado_em >= ?
+                 ORDER BY id DESC LIMIT 1""",
+                (tenant_id or TENANT_PADRAO, customer_id, limite),
+            ).fetchone()
+            return dict(linha) if linha else None
+    except Exception as e:                       # noqa: BLE001
+        logger.warning("[RECOVERY-LOG] Falha ao procurar linha aberta: %s", e)
+        return None
+
+
+def reconciliar_recuperados(ciclos: list[dict]) -> list[int]:
+    """B4-a: ciclo `recuperado` cuja linha do dataset continua ABERTA
+    (`recovered = 0`) — a falha caiu entre a transação do ciclo e o
+    fechamento best-effort desta linha. Fecha a linha, com WARNING por
+    linha, e devolve os ids dos ciclos reconciliados. Chamada pela varredura
+    do agendador, a cada passagem, para os recuperados recentes."""
+    reconciliados = []
+    for ciclo in ciclos:
+        e2e = ciclo.get("e2e_falha_original") or ciclo.get("id_cobranca_original")
+        if not e2e:
+            continue
+        # "Aberta" aqui é: sem DESFECHO gravado. `registrar_ciclo` (o nó de
+        # fechamento) regrava a linha com `recovered = MAX(...)`, então a linha
+        # pode estar `recovered = 1` e ainda assim sem `desfecho_em` e com fee 0
+        # — é exatamente o rastro da falha entre a transação do ciclo e
+        # `registrar_recuperacao`. Por isso o UPDATE é feito aqui, e não por
+        # `registrar_recuperacao`, que só procura `recovered = 0`.
+        try:
+            with _conectar() as conn:
+                aberta = conn.execute(
+                    """SELECT id, tentativas_usadas, amount FROM ciclos_recuperacao
+                        WHERE tenant_id = ? AND e2e_id = ?
+                          AND (recovered = 0 OR desfecho_em IS NULL)""",
+                    (ciclo["tenant_id"], e2e)).fetchone()
+                if aberta is None:
+                    continue
+                logger.warning(
+                    "[RECOVERY-LOG] RECONCILIAÇÃO (B4-a): ciclo %s de %s está recuperado desde %s, "
+                    "mas a linha %s do dataset (e2e %s) continuava sem desfecho — fechando agora.",
+                    ciclo.get("id"), ciclo.get("id_recorrencia"), ciclo.get("recuperado_em"),
+                    aberta["id"], e2e)
+                valor = float(ciclo.get("valor") or aberta["amount"] or 0.0)
+                usadas = int(ciclo.get("_tentativas_executadas")
+                             if ciclo.get("_tentativas_executadas") is not None
+                             else (aberta["tentativas_usadas"] or 0))
+                mensagem = bool(ciclo.get("mensagem_confirmada_em"))
+                conn.execute(
+                    """UPDATE ciclos_recuperacao
+                          SET recovered = 1, desfecho_em = ?, tentativas_usadas = ?,
+                              custo_total = ?, success_fee = ?, amount = ?
+                        WHERE id = ?""",
+                    (ciclo.get("recuperado_em") or _agora(), usadas,
+                     custo_realizado(usadas, mensagem),
+                     round(valor * success_fee_pct(), 2), valor, aberta["id"]))
+        except Exception as e:                   # noqa: BLE001
+            logger.warning("[RECOVERY-LOG] Falha ao reconciliar ciclo %s: %s", ciclo.get("id"), e)
+            continue
+        reconciliados.append(ciclo["id"])
+    return reconciliados
 
 
 def metricas(tenant_id: Optional[str] = None, desde: Optional[str] = None) -> dict:

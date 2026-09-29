@@ -98,8 +98,14 @@ CHAVE_PIX_PAGADOR = "12345678901"
 # A promessa de privacidade continua sendo sobre TODOS os campos, e o novo não
 # a afrouxa: ele carrega código de recusa, nunca dado do pagador, e o teste
 # `test_pipeline_recebe_evento_sem_chave_pix` mede o dict inteiro.
+# Etapa 1 (D1, 28/09/2026): `id_cobranca` entrou como SÉTIMO campo de dado —
+# a identidade da cobrança, que se mantém entre a falha original e as
+# retentativas. ANTES este conjunto tinha seis, e o teste do schema afirmava
+# "nem mais, nem menos" sobre eles: afirmava que o adaptador descartava
+# `data.id`, que é justamente o campo que o diagnóstico de 28/09 apontou como
+# ausente para distinguir "nova falha da mesma cobrança" de "cobrança nova".
 CAMPOS_NORMALIZADOS = {"e2e_id", "valor", "status", "ispb_pagador",
-                       "id_recorrencia", "codigo_falha"}
+                       "id_recorrencia", "codigo_falha", "id_cobranca"}
 CAMPO_QUALIDADE = "degradacoes"
 
 
@@ -165,13 +171,35 @@ class TestNormalizacaoDeEventos:
     async def test_schema_tem_os_campos_de_dado_mais_a_qualidade(self, adapter):
         """Nem mais, nem menos: o contrato com o pipeline é fechado.
 
-        Seis campos de dado + `degradacoes`. `degradacoes` entrou na Fase 3 e é
+        Sete campos de dado + `degradacoes`. `degradacoes` entrou na Fase 3 e é
         metadado de qualidade; `codigo_falha` entrou no Sprint 3 do churn
         involuntário e é dado — o motivo cru da recusa, que o PIX_CODE_MAP
-        traduz. A promessa de privacidade vale para o dict inteiro.
+        traduz; `id_cobranca` entrou na Etapa 1 (D1) e é a identidade da
+        cobrança. A promessa de privacidade vale para o dict inteiro.
         """
         resultado = await adapter.parse_pix_event(payload_pix("automatic_pix.charge_failed"))
         assert set(resultado.keys()) == CAMPOS_NORMALIZADOS | {CAMPO_QUALIDADE}
+
+    @pytest.mark.asyncio
+    async def test_id_cobranca_vem_do_id_da_fatura_e_ausente_fica_vazio(self, adapter):
+        """D1: `data.id` da fixture de referência (a fatura da Iugu) é a
+        identidade da cobrança; os nomes específicos ganham do genérico; sem
+        nenhum deles o campo fica vazio, sem degradação."""
+        resultado = await adapter.parse_pix_event(payload_pix("automatic_pix.charge_failed"))
+        assert resultado["id_cobranca"] == "inv_pix_001"
+
+        com_txid = payload_pix("automatic_pix.charge_failed", txid="TX123")
+        assert (await adapter.parse_pix_event(com_txid))["id_cobranca"] == "TX123"
+
+        sem_id = payload_pix("automatic_pix.charge_failed")
+        del sem_id["data"]["id"]
+        resultado = await adapter.parse_pix_event(sem_id)
+        assert resultado["id_cobranca"] == ""
+        assert resultado["degradacoes"] == []
+
+        estrutura = payload_pix("automatic_pix.charge_failed", id={"a": 1})
+        resultado = await adapter.parse_pix_event(estrutura)
+        assert resultado["id_cobranca"] == "", "estrutura não vira identidade por str()"
 
     @pytest.mark.asyncio
     async def test_campos_extraidos_corretamente(self, adapter):

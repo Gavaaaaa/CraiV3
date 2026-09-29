@@ -19,6 +19,7 @@ import math
 import asyncio
 import hashlib
 import logging
+import sqlite3
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,12 +42,15 @@ load_dotenv()
 from ..agent.main_agent import crai_agent
 from ..agent.pix_codes import CAUSA_LEGIVEL
 from ..agent.state import AgentState, PaymentMethod
+from ..agent.pix_codes import CAUSA_REVOGADA
 from ..agent.workflow import (
+    concluir_ciclo_por_resultado,
+    estado_do_ciclo,
     success_fee,
     tentativas_ja_disparadas,
     update_roi_dashboard,
 )
-from ..dunning import recovery_log
+from ..dunning import ciclo_cobranca, recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
@@ -372,6 +376,11 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     if status == STATUS_COBRANCA_CONFIRMADA:
         return await _confirmar_cobranca_paga(evento, tenant_id)
 
+    if status == STATUS_AUTORIZACAO_REVOGADA:
+        # R5 (Etapa 1, Bloco 3): a revogação aciona o ciclo aberto do mandato
+        # — cancela o que ainda não saiu e manda a mensagem na hora.
+        return await _tratar_revogacao(evento, tenant_id)
+
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
         logger.info("[PIX] %s — registrado sem acionar recuperação "
@@ -405,13 +414,13 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
                         "clientes distintos dividiriam o mesmo checkpoint"),
         })
 
-    # Reenvio da MESMA falha não roda o pipeline de novo (Gap 3). A trava por
-    # `thread_id` e o contador do checkpoint já impediam o 3+3 de tentativas;
-    # o que continuava acontecendo era o custo: diagnóstico, LLM e — a partir
-    # do Sprint 2 — chamada ao PSP repetidos por um evento já tratado.
-    if not EVENTOS_DE_FALHA.registrar_se_novo(
-        chave_do_evento(evento["id_recorrencia"], evento["e2e_id"])
-    ):
+    # Reenvio da MESMA falha não roda o pipeline de novo (Gap 3). A janela é
+    # persistente desde a Etapa 1: um reenvio depois de reinício também para
+    # aqui. `persistido` diz se a resposta veio do banco ou da memória do
+    # processo (fallback por banco indisponível — ver B2-a abaixo).
+    chave = chave_do_evento(evento["id_recorrencia"], evento["e2e_id"])
+    novo, persistido = EVENTOS_DE_FALHA.registrar_se_novo_detalhado(chave)
+    if not novo:
         logger.info("[PIX] Cobrança falhada reenviada (recorrencia=%s, e2e=%s) — "
                     "pipeline não reexecutado.",
                     evento["id_recorrencia"] or "desconhecida", evento["e2e_id"][:16])
@@ -421,14 +430,39 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "evento": status, "pipeline": False,
                              "motivo": "evento_ja_processado"})
 
-    await _run_involuntary_pipeline(
-        event=evento,
-        payment_method="pix_automatico",
-        customer_id=customer_id,
-        amount=evento["valor"],
-        invoice_id=evento["e2e_id"] or "e2e_desconhecido",
-        tenant_id=tenant_id,
-    )
+    try:
+        await _run_involuntary_pipeline(
+            event=evento,
+            payment_method="pix_automatico",
+            customer_id=customer_id,
+            amount=evento["valor"],
+            invoice_id=evento["e2e_id"] or "e2e_desconhecido",
+            tenant_id=tenant_id,
+        )
+    except sqlite3.Error as e:
+        # B2-a — o CICLO não pôde ser gravado. 503 e não 200, pela política do
+        # C.2 (`/webhooks/retention-outcome`): 200 diria ao PSP "entregue", e
+        # a cobrança falhada sumiria sem ciclo, sem tentativa e sem mensagem.
+        # 503 com `Retry-After` faz o PSP reenviar quando o banco voltar.
+        #
+        # E a chave de deduplicação é ESQUECIDA, na memória e no banco: sem
+        # isso o reenvio que o 503 pede seria descartado como
+        # `evento_ja_processado`. Nenhum efeito parcial fica: o ciclo é o
+        # primeiro nó do grafo, e o que falhou foi a gravação dele.
+        EVENTOS_DE_FALHA.esquecer(chave)
+        logger.error(
+            "[PIX] FALHA de persistência do ciclo de cobrança (recorrencia=%s, e2e=%s, "
+            "dedup %s): %s — respondendo 503 para o PSP reenviar.",
+            evento["id_recorrencia"] or "desconhecida", evento["e2e_id"][:16],
+            "no banco" if persistido else "EM MEMÓRIA (fallback)", e)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "erro_ao_registrar", "evento": status, "pipeline": False,
+                     "motivo": "falha_de_gravacao",
+                     "detalhe": ("o ciclo de cobrança não foi gravado; reenvie — o "
+                                 "evento foi esquecido da deduplicação e um reenvio "
+                                 "bem-sucedido conta uma vez só")},
+            headers={"Retry-After": "30"})
     return JSONResponse({"status": "ok", "evento": status, "pipeline": True})
 
 
@@ -1321,14 +1355,65 @@ async def _confirmar_cobranca_paga(evento: dict, tenant_id: str = TENANT_PADRAO)
         return JSONResponse({"status": "ok", "evento": evento["status"],
                              "pipeline": False, "ciclo": "sem_identificacao"})
 
-    resultado = await _fechar_ciclo_recuperado(
-        customer_id=customer_id,
-        e2e_id=evento["e2e_id"] or "e2e_desconhecido",
-        valor=evento.get("valor") or None,
-        tenant_id=tenant_id,
-    )
+    try:
+        resultado = await _fechar_ciclo_recuperado(
+            customer_id=customer_id,
+            e2e_id=evento["e2e_id"] or "e2e_desconhecido",
+            valor=evento.get("valor") or None,
+            tenant_id=tenant_id,
+            id_cobranca=evento.get("id_cobranca") or None,
+        )
+    except sqlite3.Error as e:
+        # Mesma política do C.2 e do B2-a: uma confirmação perdida é fee
+        # perdida. 503 para o PSP reenviar, e a chave de deduplicação da
+        # confirmação é esquecida para o reenvio contar.
+        chave = chave_do_evento(customer_id, evento["e2e_id"] or "e2e_desconhecido")
+        CICLOS_FECHADOS.esquecer(chave)
+        logger.error("[PIX] FALHA de persistência ao fechar o ciclo (recorrencia=%s): %s — 503",
+                     customer_id, e)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "erro_ao_registrar", "evento": evento["status"],
+                     "pipeline": False, "motivo": "falha_de_gravacao",
+                     "detalhe": "a confirmação não foi registrada; reenvie"},
+            headers={"Retry-After": "30"})
     return JSONResponse({"status": "ok", "evento": evento["status"],
                          "pipeline": False, **resultado})
+
+
+async def _tratar_revogacao(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSONResponse:
+    """R5: autorização revogada pelo pagador.
+
+    Não há mais mandato: nenhuma retentativa pode acontecer. Para o ciclo
+    `recobrando` do mandato, as tentativas ainda não disparadas são
+    canceladas (`autorizacao_revogada`) e a mensagem sai NA HORA, com o boleto
+    que `_select_payment` já oferece para essa causa — mesmo com score abaixo
+    do corte (D5): a mensagem é a única ação que resta. Sem ciclo aberto, só o
+    registro, como antes: não há cobrança falhada a recuperar.
+    """
+    customer_id = _thread_id(evento)
+    if customer_id is None:
+        logger.info("[PIX] Autorização revogada sem identificação — registrada.")
+        return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
+                             "ciclo": "sem_identificacao"})
+    async with _trava_do_cliente(customer_id):
+        ciclo = ciclo_cobranca.ciclo_aberto_do_mandato(
+            tenant_id, customer_id, estados=(ciclo_cobranca.RECOBRANDO,))
+        if ciclo is None:
+            logger.info("[PIX] Autorização revogada (recorrencia=%s) — sem ciclo em "
+                        "recobrança; registrada.", customer_id)
+            return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
+                                 "ciclo": "sem_ciclo_aberto"})
+        agora = datetime.now()
+        canceladas = ciclo_cobranca.cancelar_pendentes(ciclo["id"], "autorizacao_revogada", agora)
+        print(f"[PIX] Autorização revogada — {canceladas} tentativa(s) do ciclo {ciclo['id']} "
+              f"cancelada(s); mensagem na hora (R5)")
+        estado = await concluir_ciclo_por_resultado(
+            ciclo["id"], agora, motivo="autorizacao_revogada", causa=CAUSA_REVOGADA)
+    return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
+                         "ciclo": "mensagem_enviada" if estado else "ja_concluido",
+                         "ciclo_id": ciclo["id"], "tentativas_canceladas": canceladas,
+                         "metodo_pagamento": (estado or {}).get("metodo_pagamento")})
 
 
 async def _fechar_ciclo_recuperado(
@@ -1336,27 +1421,39 @@ async def _fechar_ciclo_recuperado(
     e2e_id: str,
     valor: Optional[float] = None,
     tenant_id: str = TENANT_PADRAO,
+    id_cobranca: Optional[str] = None,
 ) -> dict:
-    """Marca `recovered=True` e fecha o ciclo: ROI com fee + estágio no CRM.
+    """Fecha o ciclo como recuperado: tentativa paga, pendentes canceladas, fee,
+    linha do dataset e CRM — lendo o CICLO, não o checkpoint (R4, Etapa 1).
 
     POR QUE UMA FUNÇÃO DEDICADA, E NÃO UM `ainvoke` A MAIS. Reprocessar o grafo
-    na confirmação seria ativamente errado, não apenas caro:
+    na confirmação seria ativamente errado: `diagnose_failure` rodaria o
+    ensemble sobre um evento que não é falha, `schedule_retry_pix` agendaria
+    tentativas para uma cobrança que acabou de ser paga, `trigger_dunning`
+    mandaria mensagem a quem já pagou. O caminho certo é ler o ciclo, gravar o
+    desfecho e reaproveitar o nó de fechamento (`update_roi_dashboard`) fora
+    do grafo — o mesmo nó, o mesmo `[ROI]`, o mesmo `register_recovery_cycle`.
 
-      - `diagnose_failure` rodaria o ensemble sobre um evento que não é falha;
-      - `schedule_retry_pix` agendaria MAIS tentativas na janela do BACEN para
-        uma cobrança que **acabou de ser paga** — gastando tentativas
-        regulatórias contra o próprio cliente;
-      - `trigger_dunning` mandaria mensagem de cobrança a quem já pagou.
+    ATÉ A ETAPA 1 esta função lia o checkpoint do LangGraph (RAM): depois de um
+    reinício respondia `sem_ciclo_aberto` e a fee ia a zero (diagnóstico de
+    28/09/2026, item 10). Agora lê `ciclos_cobranca`, e funciona depois de um
+    reinício e em outro processo.
 
-    O caminho certo é o inverso: **ler** o checkpoint (que guarda o diagnóstico
-    do ciclo aberto), gravar nele o desfecho e reaproveitar o nó de fechamento
-    (`update_roi_dashboard`) fora do grafo. É o mesmo nó, o mesmo log `[ROI]` e
-    o mesmo `register_recovery_cycle` que o caminho perdido usa — sem
-    reexecutar nenhuma decisão.
+    A3: um ciclo `mensagem_enviada` fecha como recuperado dentro do prazo de
+    recuperação (30 dias da mensagem), com a janela do BACEN já encerrada —
+    o cliente pagou pelo meio oferecido. Depois do prazo o ciclo está
+    `perdido` pela varredura e NÃO é reaberto: a confirmação é registrada
+    como `ciclo_perdido`, fee zero, e o log diz.
+
+    A4 (D9, transição): sem ciclo na tabela, mas com linha ABERTA no
+    `recovery_log` registrada há no máximo 7 + PRAZO_RECUPERACAO_DIAS dias —
+    um ciclo que só existia na RAM antes da Etapa 1 —, o ciclo é criado como
+    recuperado a partir dela, com WARNING a cada uso. Linha mais velha não é
+    fechada por uma confirmação nova.
 
     Returns:
         dict com `ciclo` ∈ {recuperado, reenvio, sem_ciclo_aberto,
-        ja_recuperado} e o `fee` efetivamente contado (0.0 quando não houve).
+        ja_recuperado, ciclo_perdido, ciclo_descartado} e o `fee` contado.
     """
     # (a) Idempotência da confirmação: o mesmo e2e_id não conta fee duas vezes.
     if not CICLOS_FECHADOS.registrar_se_novo(chave_do_evento(customer_id, e2e_id)):
@@ -1364,77 +1461,113 @@ async def _fechar_ciclo_recuperado(
                     customer_id, e2e_id[:16])
         return {"ciclo": "reenvio", "fee": 0.0}
 
-    config = {"configurable": {"thread_id": customer_id}}
-
-    # A trava do cliente cobre a leitura e a escrita do checkpoint pelo mesmo
-    # motivo que cobre o `ainvoke`: uma confirmação chegando junto com uma
-    # falha do mesmo `thread_id` intercalaria leitura e gravação.
+    agora = datetime.now()
+    # A trava do cliente cobre a leitura e a escrita do ciclo pelo mesmo motivo
+    # que cobre o `ainvoke`: uma confirmação chegando junto com uma falha do
+    # mesmo mandato intercalaria leitura e gravação.
     async with _trava_do_cliente(customer_id):
-        snapshot = await crai_agent.aget_state(config)
-        estado = dict(getattr(snapshot, "values", None) or {})
+        ciclo = ciclo_cobranca.ciclo_para_confirmacao(tenant_id, customer_id, id_cobranca)
 
-        # (b) Pagamento que nunca falhou: mensalidade normal, não recuperação.
-        if not estado or estado.get("failure_cause") is None:
-            logger.info("[PIX] Cobrança confirmada para %s sem ciclo de "
-                        "recuperação aberto — mensalidade normal, sem fee.",
-                        customer_id)
-            return {"ciclo": "sem_ciclo_aberto", "fee": 0.0}
-
-        # (c) Ciclo já fechado por outra entrega (e2e diferente, mesmo ciclo).
-        if estado.get("recovered"):
-            logger.info("[PIX] Ciclo de %s já constava como recuperado — "
-                        "confirmação registrada sem novo fee.", customer_id)
-            return {"ciclo": "ja_recuperado", "fee": 0.0}
-
-        # O valor autoritativo é o da cobrança que FALHOU e abriu o ciclo: é
-        # sobre ele que o fee é calculado. O valor do evento de confirmação
-        # entra só como fallback, para o caso de um checkpoint sem `amount`.
-        estado["amount"] = estado.get("amount") or valor or 0.0
-        estado["recovered"] = True
+        if ciclo is None:
+            return await _fechar_pela_linha_do_dataset(customer_id, e2e_id, valor, tenant_id, agora)
 
         # O tenant AUTORITATIVO é o do ciclo, não o do evento de confirmação:
         # quem rodou a recuperação foi aquele, e é a ele que o resultado é
-        # atribuído. Um evento que declare outro tenant não pode reatribuir uma
-        # recuperação alheia — mas a divergência fica registrada, porque ou é
-        # erro de integração do cliente ou é tentativa de atribuição indevida,
-        # e as duas precisam ser vistas.
-        tenant_do_ciclo = estado.get("tenant_id") or tenant_id
+        # atribuído. A divergência fica registrada.
+        tenant_do_ciclo = ciclo["tenant_id"]
         if tenant_id != TENANT_PADRAO and tenant_id != tenant_do_ciclo:
             logger.warning(
                 "[PIX] Confirmação de %s declarou tenant %r, mas o ciclo foi "
                 "aberto por %r — atribuindo ao tenant do ciclo.",
                 customer_id, tenant_id, tenant_do_ciclo,
             )
-        estado["tenant_id"] = tenant_do_ciclo
 
-        await crai_agent.aupdate_state(config, {"recovered": True})
+        if ciclo["estado"] == ciclo_cobranca.RECUPERADO:
+            logger.info("[PIX] Ciclo %s de %s já constava como recuperado — "
+                        "confirmação registrada sem novo fee.", ciclo["id"], customer_id)
+            return {"ciclo": "ja_recuperado", "fee": 0.0, "tenant_id": tenant_do_ciclo}
+        if ciclo["estado"] in (ciclo_cobranca.PERDIDO, ciclo_cobranca.DESCARTADO):
+            logger.warning(
+                "[PIX] Confirmação para o ciclo %s de %s, que está %s — NÃO reaberto; "
+                "fee não contado (pagamento fora do prazo de recuperação, ou de um ciclo "
+                "descartado).", ciclo["id"], customer_id, ciclo["estado"])
+            return {"ciclo": f"ciclo_{ciclo['estado']}", "fee": 0.0,
+                    "ciclo_id": ciclo["id"], "tenant_id": tenant_do_ciclo}
 
-        print(f"[PIX] Cobrança confirmada — ciclo de recuperação de "
-              f"{customer_id} fechado com sucesso (e2e {e2e_id[:16]})")
-        # ORDEM IMPORTA, e custou um teste para aparecer. `registrar_recuperacao`
-        # fecha a linha ABERTA do ciclo — procura por `recovered = 0`. O
-        # `update_roi_dashboard` grava a linha do dataset e, com o state já
-        # marcado como recuperado, levaria `recovered` a 1 sem gravar fee nem
-        # desfecho (esses três campos são preservados na regravação de
-        # propósito, para que uma reentrega do webhook não desfaça um
-        # desfecho). Rodando o dashboard primeiro, o UPDATE seguinte não
-        # encontrava mais nenhuma linha aberta e a recuperação ficava
-        # registrada com `success_fee = 0`.
+        # O valor autoritativo é o da cobrança que FALHOU e abriu o ciclo.
+        amount = float(ciclo["valor"] or valor or 0.0)
+        fee = success_fee(amount, True)
+        estava_com_mensagem = ciclo["estado"] == ciclo_cobranca.MENSAGEM_ENVIADA
+        fechamento = ciclo_cobranca.fechar_como_recuperado(
+            ciclo["id"], fee, agora, id_cobranca=id_cobranca, e2e_confirmacao=e2e_id)
+        print(f"[PIX] Cobrança confirmada — ciclo {ciclo['id']} de {customer_id} fechado como "
+              f"recuperado (tentativa paga: {fechamento['tentativa_paga'] or 'nenhuma disparada'}, "
+              f"{fechamento['canceladas']} cancelada(s), e2e {e2e_id[:16]})")
+
+        # ORDEM IMPORTA: `registrar_recuperacao` fecha a linha ABERTA do
+        # dataset (pelo e2e da falha original, que é a chave da linha); só
+        # depois `update_roi_dashboard` regrava a linha com o state recuperado —
+        # e ele preserva desfecho e fee. Invertido, a recuperação ficaria com
+        # `success_fee = 0`.
+        ciclo = ciclo_cobranca.ciclo_por_id(ciclo["id"])
+        estado = estado_do_ciclo(ciclo)
+        estado["recovered"] = True
+        estado["dunning_sent"] = estava_com_mensagem
         recovery_log.registrar_recuperacao(
             customer_id=customer_id,
-            e2e_id=e2e_id,
-            amount=estado["amount"],
-            tenant_id=estado["tenant_id"],
-            tentativas_usadas=tentativas_ja_disparadas(estado),
-            dunning_enviado=bool(estado.get("dunning_sent")),
+            e2e_id=estado["invoice_id"],
+            amount=amount,
+            tenant_id=tenant_do_ciclo,
+            tentativas_usadas=estado["retry_count"],
+            dunning_enviado=estava_com_mensagem,
         )
-
-        # Mesmo nó de fechamento do caminho perdido: [ROI] + HubSpot + a
-        # regravação da linha com o diagnóstico atual.
         await update_roi_dashboard(estado)
 
-    return {"ciclo": "recuperado", "fee": success_fee(estado["amount"], True),
-            "tenant_id": estado["tenant_id"]}
+    return {"ciclo": "recuperado", "fee": fee, "tenant_id": tenant_do_ciclo,
+            "ciclo_id": ciclo["id"], "tentativa_paga": fechamento["tentativa_paga"]}
+
+
+async def _fechar_pela_linha_do_dataset(customer_id: str, e2e_id: str, valor: Optional[float],
+                                        tenant_id: str, agora: datetime) -> dict:
+    """A4 (D9): o caminho de TRANSIÇÃO, para um ciclo que só existia na RAM
+    antes da Etapa 1. Só linha aberta registrada há no máximo
+    7 + PRAZO_RECUPERACAO_DIAS dias; logado a cada uso."""
+    dias = ciclo_cobranca.JANELA_DIAS + ciclo_cobranca.PRAZO_RECUPERACAO_DIAS
+    linha = recovery_log.linha_aberta_recente(tenant_id, customer_id, agora, dias)
+    if linha is None:
+        logger.info("[PIX] Cobrança confirmada para %s sem ciclo de recuperação aberto "
+                    "(nem linha recente no dataset) — mensalidade normal, sem fee.",
+                    customer_id)
+        return {"ciclo": "sem_ciclo_aberto", "fee": 0.0}
+
+    logger.warning(
+        "[PIX] TRANSIÇÃO (A4): confirmação de %s fechada pela linha ABERTA do recovery_log "
+        "(e2e %s, registrada em %s, há menos de %d dias) — ciclo que só existia na RAM "
+        "antes da Etapa 1. Ciclo criado como recuperado a partir dela.",
+        customer_id, linha["e2e_id"], linha["registrado_em"], dias)
+    amount = float(linha["amount"] or valor or 0.0)
+    fee = success_fee(amount, True)
+    try:
+        ciclo = ciclo_cobranca.abrir_ciclo(
+            linha["tenant_id"], customer_id, amount, linha.get("failure_cause") or "desconhecida",
+            agora, e2e_falha_original=linha["e2e_id"], estado=ciclo_cobranca.RECUPERADO,
+            estrategia=linha.get("estrategia"), origem=ciclo_cobranca.ORIGEM_RECOVERY_LOG,
+            recovery_score=linha.get("recovery_score"), p_recovery=linha.get("p_recovery"),
+            eprofit=linha.get("eprofit"))
+    except ciclo_cobranca.CicloJaExiste as e:
+        ciclo = ciclo_cobranca.ciclo_por_id(e.ciclo_id)
+    ciclo_cobranca.atualizar(ciclo["id"], agora, fee=fee, decidido_em=agora.isoformat())
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo["id"])
+    estado = estado_do_ciclo(ciclo)
+    estado["recovered"] = True
+    estado["dunning_sent"] = linha.get("estrategia") == "mensagem_pagamento"
+    recovery_log.registrar_recuperacao(
+        customer_id=customer_id, e2e_id=linha["e2e_id"], amount=amount,
+        tenant_id=linha["tenant_id"], tentativas_usadas=int(linha.get("tentativas_usadas") or 0),
+        dunning_enviado=estado["dunning_sent"])
+    await update_roi_dashboard(estado)
+    return {"ciclo": "recuperado", "fee": fee, "tenant_id": linha["tenant_id"],
+            "ciclo_id": ciclo["id"], "origem": ciclo_cobranca.ORIGEM_RECOVERY_LOG}
 
 
 async def _run_involuntary_pipeline(
@@ -1452,33 +1585,32 @@ async def _run_involuntary_pipeline(
     decisão — é o que permite ao grafo escolher a política de retentativa certa
     sem nunca precisar inferir a origem do evento depois.
 
-    **`retry_count` é omitido de propósito quando `retries_done is None`**, e
-    esse é o ponto inteiro desta função. O `ainvoke` aplica o dicionário de
-    entrada como *atualização* sobre o checkpoint do `thread_id`: toda chave
-    presente aqui SOBRESCREVE o que o checkpoint guardava. Enquanto esta função
-    escrevia `"retry_count": 0` incondicionalmente, cada novo webhook do mesmo
-    `id_recorrencia` zerava o contador que `schedule_retry_pix` tinha acabado
-    de gravar — e três webhooks do mesmo cliente agendavam 3 + 3 + 3 = **nove**
-    tentativas na mesma janela de 7 dias, todas numeradas 1, 2, 3. O limite do
-    BACEN é 3. O checkpoint guardava o número certo; era a entrada que o
-    apagava.
+    O CONTADOR E A JANELA NÃO VÊM DAQUI NEM DO CHECKPOINT (Etapa 1, Bloco 2).
+    Até 28/09/2026 esta docstring explicava por que `retry_count` e
+    `pix_janela_ate` eram OMITIDOS do dicionário de entrada: o `ainvoke`
+    aplica a entrada como atualização sobre o checkpoint do `thread_id`, e
+    escrever `retry_count: 0` aqui zerava o contador do BACEN a cada webhook
+    (3 + 3 + 3 = nove tentativas, medido em `8ee67ae`). O checkpoint era a
+    memória entre eventos.
 
-    Omitir a chave preserva o valor acumulado no checkpoint. Para um cliente
-    sem checkpoint a chave simplesmente não existe, e os nós já leem com
-    `state.get("retry_count", 0)`.
+    Agora a memória entre eventos é o CICLO DE COBRANÇA
+    (`crai/dunning/ciclo_cobranca.py`). O nó de entrada `open_cycle` lê o
+    ciclo e REESCREVE `retry_count` (tentativas executadas) e
+    `pix_janela_ate` (janela gravada na primeira falha) no state a cada
+    evento, então o que o checkpoint tinha não alcança nenhum nó de decisão.
+    As duas chaves passam a ser ESCRITAS aqui, zeradas — o inverso da regra
+    antiga —, e o motivo é o mesmo de antes, invertido: o `ainvoke` mescla a
+    entrada sobre o checkpoint, e um `pix_janela_ate` que sobrasse de um
+    evento anterior chegaria a `open_cycle` como se fosse uma janela
+    DECLARADA pelo chamador (D10) — foi medido: a cobrança de 60 dias depois
+    nascia com a janela da anterior. Declarar é coisa de quem tem contador
+    externo e autoritativo: `retries_done`, o `attempt_count` do Stripe, e o
+    parâmetro `tentativas_usadas` do painel. No webhook de Pix não há nada a
+    declarar, e é isso que o zero diz.
 
-    `pix_janela_ate` é omitido pelo mesmo motivo, e é o par indispensável do
-    contador: sozinho, `retry_count` acumula para sempre e o limite do BACEN
-    vira "3 por contrato" em vez de "3 por janela de 7 dias". Quem decide se o
-    contador ainda vale é `_janela_vigente` (crai/agent/workflow.py), que só
-    consegue decidir porque encontra a marca da janela no checkpoint. Escrever
-    qualquer um dos dois aqui apaga essa memória.
-
-    `retries_done` continua aceito para a origem em que o contador é **externo
-    e autoritativo** — o `attempt_count` do Stripe, quando a recobrança de
-    cartão voltar ao pipeline ativo. Aí a verdade vem de fora e deve mesmo
-    sobrescrever o checkpoint. No Pix o recebedor é quem conta, e quem conta é
-    o checkpoint.
+    As chaves `ciclo_*` entram zeradas de propósito: cada evento é
+    reassociado ao ciclo por `open_cycle`; nada de um evento anterior vale
+    para este.
     """
     initial: AgentState = {
         "payment_event": event, "payment_method": payment_method,
@@ -1495,11 +1627,11 @@ async def _run_involuntary_pipeline(
         "retry_exhausted": False, "recovered": False, "pix_retry_schedule": None,
         "dunning_sent": False,
         "channel": None, "metodo_pagamento": None, "message_sent": None,
+        "ciclo_id": None, "ciclo_evento": None, "ciclo_tentativa": None,
+        # Zerados por evento (ver docstring): a memória entre eventos é o ciclo.
+        # `retries_done` é o único contador DECLARADO que passa por aqui.
+        "retry_count": int(retries_done or 0), "pix_janela_ate": None,
     }
-    # Só entra na atualização quando a origem tem um contador autoritativo;
-    # caso contrário o checkpoint mantém o que já acumulou (ver docstring).
-    if retries_done is not None:
-        initial["retry_count"] = retries_done
 
     # Uma execução por vez, por cliente. Ver `_trava_do_cliente`.
     config = {"configurable": {"thread_id": customer_id}}
@@ -1763,6 +1895,10 @@ def id_de_lote(prefixo: str, pedido: str | None = None) -> str:
 class PainelCobranca(BaseModel):
     valor: float = 299.90
     codigo_falha: str = "AM04"
+    # Tentativas do BACEN ja EXECUTADAS nesta cobranca, declaradas pelo painel
+    # (0 a 3). Desde a Etapa 1 o no `open_cycle` abre o ciclo com N tentativas
+    # `falhou` de origem `declarada`: e o que "usadas" sempre quis dizer, e
+    # nao mais o contador comprometido do checkpoint.
     tentativas_usadas: int = 0
     # Identificador ESTAVEL do cliente de exemplo, opcional.
     #

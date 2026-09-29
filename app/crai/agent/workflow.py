@@ -1,5 +1,6 @@
 """crai/agent/workflow.py — Nós do pipeline de churn involuntário."""
 
+import logging
 from datetime import datetime
 from typing import Optional
 from .state import AgentState
@@ -11,7 +12,8 @@ from ..config import (
     custos_por_canal,
     success_fee_pct,
 )
-from .pix_codes import CAUSA_LEGIVEL, CAUSAS_RETENTAVEIS_PIX, EXPLICACAO_DA_CAUSA, causa_do_codigo
+from .pix_codes import (CAUSA_LEGIVEL, CAUSA_REVOGADA, CAUSAS_RETENTAVEIS_PIX,
+                        EXPLICACAO_DA_CAUSA, causa_do_codigo)
 from ..churn_voluntary import retention_log as trilha
 from ..ml.failure_classifier import MODELS_DIR as _MODELS_DIR, FailureClassifier
 from ..ml.anomaly_detector import AnomalyDetector
@@ -25,12 +27,14 @@ from ..dunning.pix_automatico_retry import (
     inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
-from ..dunning import recovery_log, retry_state
+from ..dunning import ciclo_cobranca, recovery_log, retry_state
 from ..dunning.retry_scheduler import disparar_tentativa
 from ..integrations.hubspot_crm import HubSpotCRM
 
 # Não há import de smart_backoff aqui: a retentativa de cartão saiu do pipeline
 # ativo na Fase 3 e vive isolada em crai/dunning/legacy_card/.
+
+logger = logging.getLogger(__name__)
 
 _classifier = FailureClassifier()
 _detector   = AnomalyDetector()
@@ -78,31 +82,224 @@ def _agora() -> datetime:
 
 
 def _janela_vigente(state: AgentState, agora: datetime) -> tuple[int, Optional[datetime]]:
-    """Quantas tentativas já foram usadas NA JANELA ABERTA, e até quando ela vai.
+    """Quantas tentativas deste ciclo já foram EXECUTADAS, e até quando vai a
+    janela do BACEN dele — como o ciclo diz (R2, R3).
 
-    O contador do checkpoint (`retry_count`) é cumulativo e não sabe a que
-    janela pertence. Quem sabe é `pix_janela_ate`. Passado o prazo, aquele
-    contador descreve uma janela encerrada e não pode mais bloquear nada: a
-    próxima cobrança que falhar abre uma janela nova, com as 3 tentativas
-    próprias que o BACEN concede a ela.
+    Até a Etapa 1 esta função zerava o contador quando o prazo passava: o
+    contador era por MANDATO, no checkpoint, e "prazo vencido" era a única
+    forma de a cobrança do mês seguinte ganhar as 3 tentativas dela. Era
+    também o que reabria a janela da MESMA cobrança depois de um reinício ou
+    de uma falha tardia (diagnóstico de 28/09/2026, item 10).
 
-    Um checkpoint com contador mas sem prazo (gravado antes desta marca
-    existir, ou por uma origem externa que sobrescreveu `retry_count`) é
-    tratado como janela ainda aberta — na dúvida, o limite regulatório
-    aperta, nunca afrouxa.
+    Agora o ciclo é por COBRANÇA: `open_cycle` copia para o state o contador
+    executado e a `janela_fim` gravados na abertura do ciclo, e nada os
+    reancora. Uma cobrança nova abre ciclo novo, com contador zero e janela
+    própria — sem precisar zerar nada aqui. Uma falha da mesma cobrança
+    depois do fim da janela chega com o contador que ela tem e o prazo que
+    ela tem; quem responde "não cabe mais tentativa" é a
+    `PixAutomaticoRetryPolicy`, pela aritmética da janela, e não um zero
+    inventado aqui.
+
+    Um state com contador e sem prazo (chamada direta, sem ciclo) é tratado
+    como janela aberta — na dúvida, o limite regulatório aperta, nunca
+    afrouxa. `agora` fica na assinatura por compatibilidade: a decisão de
+    expiração saiu daqui.
     """
-    usadas = state.get("retry_count") or 0
-    prazo = state.get("pix_janela_ate")
+    return state.get("retry_count") or 0, state.get("pix_janela_ate")
 
-    # `prazo is not None`, e não `isinstance(prazo, datetime)`: o segundo casa
-    # contra o `datetime` global DESTE módulo, que é justamente o que um teste
-    # substitui para congelar o relógio. Um `pix_janela_ate` legítimo deixaria
-    # de ser reconhecido durante o teste, e a checagem defensiva silenciaria a
-    # regra que ela deveria proteger. O campo só é escrito aqui e é tipado
-    # `Optional[datetime]` no state; não há terceiro valor possível.
-    if prazo is not None and agora > prazo:
-        return 0, None
-    return usadas, prazo
+
+def _ciclo_do_state(state: AgentState, momento: datetime) -> tuple[dict, dict]:
+    """O ciclo de cobrança deste state, e o que o evento É para ele.
+
+    1. `ciclo_id` já no state → é ele.
+    2. Senão, a associação de `ciclo_cobranca.associar_falha` (regras D1/D2):
+       o evento pode ser o resultado de uma tentativa disparada, uma falha
+       tardia da mesma cobrança, ou cobrança nova.
+    3. Cobrança nova → abre o ciclo. A janela do BACEN é gravada AQUI, uma vez
+       (R3). Se o state inicial DECLARA `retry_count = N` ou `pix_janela_ate`
+       sem ter ciclo (painel, `test_pipeline.py`, o `attempt_count` do
+       Stripe, um teste que chama o nó direto), isso é o contador externo e
+       autoritativo que `_run_involuntary_pipeline` sempre reconheceu (D10):
+       o ciclo nasce com N tentativas `falhou` de origem `declarada` e com a
+       janela declarada. Sem declaração, a janela ancora no instante da falha.
+
+    A causa gravada na abertura vem do código do PSP (`codigo_falha` →
+    `PIX_CODE_MAP`), e `diagnose_failure` a confirma com a feature que o
+    classificador viu. Origem `webhook` (ou `declarada`) — nunca `plano`
+    (B2-b): o caminho legado de `retry_state._ciclo_do_plano` não é deste
+    fluxo.
+    """
+    if state.get("ciclo_id"):
+        ciclo = ciclo_cobranca.ciclo_por_id(state["ciclo_id"])
+        if ciclo is not None:
+            return ciclo, {"tipo": ciclo_cobranca.NOVA, "ciclo": ciclo, "tentativa": None}
+
+    evento = state.get("payment_event") or {}
+    tenant = state.get("tenant_id")
+    mandato = state["customer_id"]
+    id_cobranca = evento.get("id_cobranca") or None
+    e2e = state.get("invoice_id") or evento.get("e2e_id") or None
+
+    assoc = ciclo_cobranca.associar_falha(tenant, mandato, id_cobranca, e2e, momento)
+    if assoc["tipo"] != ciclo_cobranca.NOVA:
+        return assoc["ciclo"], assoc
+    if assoc["ciclo"] is not None:
+        # I-4a: RETOMADA de um ciclo incompleto (aberto, sem decisão gravada e
+        # sem tentativas): o diagnóstico roda de novo sobre o MESMO ciclo, com
+        # a janela original — nenhum ciclo novo, nenhuma janela nova (R3).
+        print(f"[CICLO] {mandato}: ciclo {assoc['ciclo']['id']} incompleto (sem decisão) — "
+              f"retomando o diagnóstico, janela original mantida")
+        return assoc["ciclo"], assoc
+
+    declaradas = max(0, min(MAX_TENTATIVAS_PIX, int(state.get("retry_count") or 0)))
+    janela_fim = ciclo_cobranca._data(state.get("pix_janela_ate"))
+    janela_inicio = inicio_da_janela(janela_fim) if janela_fim else None
+    origem = (ciclo_cobranca.ORIGEM_DECLARADA if (declaradas or janela_fim)
+              else ciclo_cobranca.ORIGEM_WEBHOOK)
+    if state.get("payment_method", "card") == "pix_automatico":
+        causa = causa_do_codigo(evento.get("codigo_falha"))
+    else:
+        charge = (evento.get("data") or {}).get("object") or {}
+        causa = charge.get("failure_code") or state.get("failure_cause") or "desconhecida"
+
+    try:
+        ciclo = ciclo_cobranca.abrir_ciclo(
+            tenant, mandato, state.get("amount") or 0.0, causa, momento,
+            id_cobranca=id_cobranca, e2e_falha_original=e2e,
+            codigo_falha=evento.get("codigo_falha"),
+            janela_inicio=janela_inicio, janela_fim=janela_fim, origem=origem,
+        )
+    except ciclo_cobranca.CicloJaExiste:
+        # Outro processo abriu o mesmo ciclo entre a associação e o INSERT: a
+        # `UNIQUE` falou. Reassociar encontra o ciclo dele.
+        return _ciclo_do_state(state, momento)
+
+    if declaradas:
+        inicio = janela_inicio or momento
+        ciclo_cobranca.agendar_tentativas(ciclo["id"], [
+            {"numero": n, "quando": inicio, "valor": state.get("amount") or 0.0,
+             "origem": ciclo_cobranca.ORIGEM_DECLARADA}
+            for n in range(1, declaradas + 1)
+        ], momento)
+        for n in range(1, declaradas + 1):
+            ciclo_cobranca.registrar_resultado(ciclo["id"], n, ciclo_cobranca.FALHOU, momento)
+        print(f"[CICLO] {mandato}: ciclo {ciclo['id']} aberto com {declaradas} tentativa(s) "
+              f"declarada(s) como executadas pelo chamador")
+    return ciclo, {"tipo": ciclo_cobranca.NOVA, "ciclo": ciclo, "tentativa": None}
+
+
+async def open_cycle(state: AgentState) -> AgentState:
+    """Nó de entrada (Etapa 1, Bloco 2): abre ou reencontra o CICLO e copia
+    para o state o que dele importa aos nós seguintes.
+
+    `retry_count` passa a ser tentativas EXECUTADAS (R2) e `pix_janela_ate` a
+    `janela_fim` gravada na primeira falha (R3) — reescritos a cada evento, e
+    nunca acumulados no checkpoint. `ciclo_evento` diz ao roteador se este
+    evento roda o diagnóstico (cobrança nova) ou só registra um resultado.
+    """
+    momento = _agora()
+    ciclo, assoc = _ciclo_do_state(state, momento)
+    executadas = ciclo_cobranca.tentativas_executadas(ciclo["id"])
+    tentativa = assoc.get("tentativa") or {}
+    print(f"[CICLO] {state['customer_id']}: ciclo {ciclo['id']} ({ciclo['estado']}) | "
+          f"evento: {assoc['tipo']}"
+          + (f" da tentativa {tentativa.get('numero')}" if tentativa else "")
+          + f" | executadas {executadas}/{MAX_TENTATIVAS_PIX} | janela até "
+          f"{str(ciclo['janela_fim'])[:16]}")
+    return {
+        **state,
+        "ciclo_id": ciclo["id"],
+        "ciclo_evento": assoc["tipo"],
+        "ciclo_tentativa": tentativa.get("numero"),
+        "retry_count": executadas,
+        "pix_janela_ate": ciclo_cobranca._data(ciclo["janela_fim"]),
+    }
+
+
+async def registrar_resultado_do_evento(state: AgentState) -> AgentState:
+    """O evento não é cobrança nova: grava o que ele diz sobre o ciclo e para.
+
+    Diagnóstico, anomalia, liquidez e decisão NÃO rodam de novo (2.2). Dois
+    casos:
+
+      resultado_de_tentativa  a falha de uma retentativa disparada: a
+                              tentativa recebe `falhou`, com o código do PSP
+                              e o e2e do resultado (R2).
+      falha_tardia            a mesma cobrança, de novo, sem tentativa em
+                              aberto: NADA de tentativa nova (R3). Se a janela
+                              do BACEN já encerrou e ainda há tentativa não
+                              disparada, ela é cancelada (D7).
+
+    Se depois disto o ciclo ficou sem tentativa pendente e sem pagamento, ele
+    PRECISA de mensagem (R1) — a conclusão do ciclo entra no Bloco 3; aqui
+    fica registrado no log. O state devolvido recarrega o diagnóstico a
+    partir do ciclo, para o checkpoint desta execução não apagar o da
+    abertura.
+    """
+    momento = _agora()
+    ciclo_id = state["ciclo_id"]
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    evento = state.get("payment_event") or {}
+    mandato = state["customer_id"]
+
+    if (state.get("ciclo_evento") == ciclo_cobranca.RESULTADO_DE_TENTATIVA
+            and state.get("ciclo_tentativa")):
+        numero = state["ciclo_tentativa"]
+        gravado = ciclo_cobranca.registrar_resultado(
+            ciclo_id, numero, ciclo_cobranca.FALHOU, momento,
+            codigo=evento.get("codigo_falha"), e2e=state.get("invoice_id"))
+        print(f"[CICLO] {mandato}: tentativa {numero}/{MAX_TENTATIVAS_PIX} do ciclo {ciclo_id} "
+              f"FALHOU ({evento.get('codigo_falha') or 'sem código'})"
+              + ("" if gravado else " — resultado já estava registrado (reentrega)"))
+    else:
+        fim = ciclo_cobranca._data(ciclo["janela_fim"])
+        if ciclo["estado"] == ciclo_cobranca.RECOBRANDO and fim is not None and fim < momento:
+            canceladas = ciclo_cobranca.cancelar_pendentes(ciclo_id, "janela_encerrada", momento)
+            print(f"[CICLO] {mandato}: falha da mesma cobrança DEPOIS da janela do BACEN — "
+                  f"{canceladas} tentativa(s) não disparada(s) cancelada(s); nenhuma nova (R3)")
+        else:
+            print(f"[CICLO] {mandato}: falha da mesma cobrança registrada no ciclo {ciclo_id} — "
+                  f"nenhuma tentativa nova (R3), diagnóstico não reexecutado")
+
+    # R5: a falha com causa REVOGADA cancela o que ainda não saiu e manda a
+    # mensagem na hora — não há mandato para tentar de novo.
+    causa_evento = causa_do_codigo(evento.get("codigo_falha")) if evento.get("codigo_falha") else None
+    concluido = None
+    if causa_evento == CAUSA_REVOGADA and ciclo["estado"] == ciclo_cobranca.RECOBRANDO:
+        canceladas = ciclo_cobranca.cancelar_pendentes(ciclo_id, "autorizacao_revogada", momento)
+        print(f"[CICLO] {mandato}: autorização revogada — {canceladas} tentativa(s) "
+              f"cancelada(s); mensagem na hora (R5)")
+        concluido = await concluir_ciclo_por_resultado(ciclo_id, momento, motivo="autorizacao_revogada",
+                                                       causa=CAUSA_REVOGADA)
+    elif ciclo_cobranca.ciclo_precisa_de_mensagem(ciclo_id, momento):
+        # R1: a mensagem nasce do RESULTADO da última tentativa (ou do fim da
+        # janela), e não de um webhook novo de falha.
+        concluido = await concluir_ciclo_por_resultado(ciclo_id, momento, motivo="tentativas_esgotadas")
+
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    score = ciclo.get("recovery_score")
+    if concluido is not None:
+        # O state desta execução carrega o que a mensagem produziu, como no grafo.
+        return {**state, **{k: concluido.get(k) for k in (
+            "dunning_sent", "channel", "metodo_pagamento", "message_sent", "mensagem_meta",
+            "decisoes", "failure_cause", "recovery_score", "p_recovery", "eprofit",
+            "estrategia", "amount")},
+            "retry_count": ciclo_cobranca.tentativas_executadas(ciclo_id),
+            "pix_janela_ate": ciclo_cobranca._data(ciclo["janela_fim"])}
+    return {
+        **state,
+        "failure_cause": (ciclo["causa_original"] if ciclo["causa_original"] != "desconhecida"
+                          else state.get("failure_cause")),
+        "recovery_score": int(score) if score is not None else state.get("recovery_score"),
+        "p_recovery": ciclo.get("p_recovery") if ciclo.get("p_recovery") is not None
+        else state.get("p_recovery"),
+        "eprofit": ciclo.get("eprofit") if ciclo.get("eprofit") is not None
+        else state.get("eprofit"),
+        "estrategia": ciclo.get("estrategia") or state.get("estrategia"),
+        "amount": ciclo["valor"] or state.get("amount"),
+        "retry_count": ciclo_cobranca.tentativas_executadas(ciclo_id),
+        "pix_janela_ate": ciclo_cobranca._data(ciclo["janela_fim"]),
+    }
 
 
 def canais_considerados_involuntario(optimal: dict | None) -> list[dict]:
@@ -173,6 +370,11 @@ async def diagnose_failure(state: AgentState) -> AgentState:
               f"— diagnóstico feito sobre campos preenchidos por default")
 
     result = _classifier.predict(features)
+
+    # A causa que o classificador viu é a causa do ciclo (B2-b: o ciclo nasce
+    # com a causa real, nunca `desconhecida`, quando o evento passa pelo grafo).
+    if state.get("ciclo_id"):
+        ciclo_cobranca.atualizar(state["ciclo_id"], causa_original=features["gateway_error_code"])
 
     shap_readable = result["shap_explanation"].get("readable", "")
     print(f"[AGENT] Diagnóstico ({result['method']}): "
@@ -343,10 +545,10 @@ async def decide_recovery(state: AgentState) -> AgentState:
     eprofit = state.get("eprofit", 0.0)
     anomala = state.get("is_anomalous", False)
     metodo = state.get("payment_method", "card")
-    # O contador cru do checkpoint pode pertencer a uma janela já encerrada.
-    # `_janela_vigente` é quem decide se ele ainda vale — e o resultado é
-    # gravado de volta no state, para que `schedule_retry_pix` leia o mesmo
-    # número que esta decisão usou, em vez de recalcular a expiração.
+    # `usadas` são as tentativas EXECUTADAS do ciclo (R2), copiadas para o
+    # state por `open_cycle`; `prazo_vigente` é a janela gravada na primeira
+    # falha (R3). Uma janela já encerrada não zera nada aqui: a política
+    # responde "não cabe" pela aritmética dela.
     momento = _agora()
     usadas, prazo_vigente = _janela_vigente(state, momento)
 
@@ -408,6 +610,17 @@ async def decide_recovery(state: AgentState) -> AgentState:
     for passo in raciocinio:
         print(f"[RACIOCÍNIO] {passo}")
 
+    # O que o caminho de mensagem vai precisar DEPOIS da 3ª tentativa, sem
+    # checkpoint: fica no ciclo.
+    if state.get("ciclo_id"):
+        ciclo_cobranca.atualizar(
+            state["ciclo_id"], momento, estrategia=estrategia,
+            recovery_score=trilha._num(score), p_recovery=trilha._num(state.get("p_recovery")),
+            eprofit=trilha._num(eprofit),
+            # I-4a: a DECISÃO está gravada — na mesma escrita. Sem esta marca o
+            # ciclo é "incompleto" e o reenvio do PSP retoma o diagnóstico.
+            decidido_em=momento.isoformat())
+
     # Trilha do Art. 20: é regra (ReAct sobre causa + janela), sem modelo.
     dec = trilha.decisao(
         state.get("tenant_id"), state.get("customer_id"), trilha.DOMINIO_INVOLUNTARIO,
@@ -432,23 +645,24 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
 
     A política devolve o plano completo das tentativas restantes de uma vez, e
     não uma por execução: são todas instruções de pagamento a reenviar dentro
-    da mesma janela legal. Por isso `retry_count` passa a refletir todas as
-    tentativas comprometidas — um novo evento do mesmo cliente na mesma janela
-    encontra o limite já gasto e cai direto na mensagem personalizada.
+    da mesma janela legal. Elas vão para `tentativas_cobranca` como
+    PENDENTES, e `retry_count` continua sendo o que foi EXECUTADO (R2): até a
+    Etapa 1 este nó gravava `usadas + len(plano)` — tentativas comprometidas
+    contadas como usadas —, e era isso que fazia a falha da tentativa 1
+    encontrar "3 usadas" e disparar a mensagem com zero tentativa disparada
+    (diagnóstico de 28/09/2026, item 1).
 
-    "Na mesma janela" é a parte que precisa estar escrita no state, e não só
-    na cabeça de quem leu o BACEN. `pix_janela_ate` diz até quando o contador
-    vale; enquanto ele valer, esta função **continua** a janela aberta em vez
-    de abrir outra — reancorar o vencimento a cada webhook empurraria o prazo
-    indefinidamente e transformaria "3 por janela" em "3 por webhook".
+    A janela é a do CICLO, gravada na primeira falha (R3): `janela_inicio` é
+    o vencimento que ancora as datas da política e `janela_fim` é o prazo.
+    Nada aqui reancora — nem um segundo evento, nem um reinício.
     """
     momento = _agora()
-    usadas, prazo_vigente = _janela_vigente(state, momento)
-
-    # Vencimento que ancora a janela: o da cobrança que a abriu, se ela ainda
-    # está aberta; senão, agora — este evento é o começo de uma janela nova.
-    vencimento = inicio_da_janela(prazo_vigente) if prazo_vigente else momento
-    prazo_final = fim_da_janela(vencimento)
+    ciclo, _ = _ciclo_do_state(state, momento)
+    ciclo_id = ciclo["id"]
+    usadas = ciclo_cobranca.tentativas_executadas(ciclo_id)
+    vencimento = ciclo_cobranca._data(ciclo["janela_inicio"]) or momento
+    prazo_final = ciclo_cobranca._data(ciclo["janela_fim"]) or fim_da_janela(vencimento)
+    prazo_vigente = prazo_final
 
     tentativas = await _pix_retry.schedule(
         customer_id=state["customer_id"],
@@ -468,7 +682,7 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
             saida={"tentativas": [], "regra": "PixAutomaticoRetryPolicy.janela_esgotada",
                    "motivo_da_regra": "a janela regulada do BACEN não comporta nova tentativa"})
         return trilha.anotar_decisao(
-            {**state, "next_retry_at": None, "retry_exhausted": True,
+            {**state, "ciclo_id": ciclo_id, "next_retry_at": None, "retry_exhausted": True,
              "retry_count": usadas, "pix_janela_ate": prazo_vigente,
              "pix_retry_schedule": []}, dec)
 
@@ -479,10 +693,11 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     print(f"[AGENT] Pix Automático: {len(plano)} tentativa(s) na janela BACEN | "
           f"próxima: {tentativas[0].quando.strftime('%d/%m %H:%M')} ({tentativas[0].origem})")
 
-    # O plano sai do grafo e vai para a camada de estado (Sprint 2). Sem isto,
-    # as tentativas 2 e 3 morrem aqui: o `ainvoke` termina, o checkpoint guarda
-    # o plano num formato privado do LangGraph, e nada volta na data certa para
-    # reenviar a instrução de pagamento. Ver `crai/dunning/retry_scheduler.py`.
+    # O plano sai do grafo e vai para o ciclo (`tentativas_cobranca`, como
+    # pendentes). Sem isto, as tentativas 2 e 3 morrem aqui: o `ainvoke`
+    # termina e nada volta na data certa para reenviar a instrução de
+    # pagamento. Ver `crai/dunning/retry_scheduler.py`. `ciclo_id` explícito:
+    # o grafo nunca passa pelo caminho legado de `retry_state` (B2-b).
     retry_state.save_retry_state(
         customer_id=state["customer_id"],
         valor_original=state["amount"],
@@ -490,6 +705,7 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
         pix_janela_ate=prazo_final,
         e2e_id=state.get("invoice_id"),
         tenant_id=state.get("tenant_id"),
+        ciclo_id=ciclo_id,
     )
 
     # A primeira tentativa sai AGORA quando já é devida. "Devida" é a data que a
@@ -499,8 +715,7 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
     # a primeira tentativa está vencida e sai daqui; numa que acabou de falhar
     # ela é de amanhã, e quem a dispara é o agendador — o mesmo caminho das
     # tentativas 2 e 3, sem código paralelo.
-    registro = retry_state.get_retry_state(state["customer_id"],
-                                          tenant_id=state.get("tenant_id"))
+    registro = retry_state.registro_do_ciclo(ciclo_id)
     if registro:
         for devida in retry_state.tentativas_devidas(registro, momento):
             await disparar_tentativa(registro, devida, momento)
@@ -524,17 +739,41 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
                   "vencimento": vencimento},
         saida=saida_plano)
     return trilha.anotar_decisao(
-        {**state, "next_retry_at": tentativas[0].quando, "retry_exhausted": False,
-         "retry_count": usadas + len(tentativas), "pix_janela_ate": prazo_final,
+        {**state, "ciclo_id": ciclo_id, "next_retry_at": tentativas[0].quando,
+         "retry_exhausted": False,
+         # EXECUTADAS depois do disparo do que já era devido — nunca o plano.
+         "retry_count": ciclo_cobranca.tentativas_executadas(ciclo_id),
+         "pix_janela_ate": prazo_final,
          "pix_retry_schedule": plano}, dec)
 
 
 async def trigger_dunning(state: AgentState) -> AgentState:
     """Executa a mensagem personalizada via LLM (LangGraph) — nunca aciona humano."""
-    p_recovery = state.get("p_recovery", state.get("recovery_score", 50) / 100)
+    # `p_recovery` do diagnóstico; sem ele, o score/100; sem os dois (ciclo
+    # legado, aberto por um plano sem diagnóstico), o neutro 0.5 — a mensagem
+    # sai com tom "amigável", nunca deixa de sair por falta de número.
+    p_recovery = state.get("p_recovery")
+    if p_recovery is None:
+        score = state.get("recovery_score")
+        p_recovery = (score if score is not None else 50) / 100
     result = await _dunning.run_campaign(state["customer_id"], state["failure_cause"],
                                           p_recovery, state["amount"],
                                           tenant_id=state.get("tenant_id"))
+    # O estado do ciclo reflete o envio. Conteúdo da mensagem: inalterado.
+    # Se o ciclo já está `mensagem_enviada` (o caminho fora do grafo o RESERVA
+    # antes de enviar — ver `concluir_ciclo_por_resultado`), nada a fazer.
+    if state.get("ciclo_id") and result.get("sent"):
+        ciclo = ciclo_cobranca.ciclo_por_id(state["ciclo_id"])
+        if ciclo is not None and ciclo["estado"] == ciclo_cobranca.RECOBRANDO:
+            try:
+                # Dentro do grafo o envio já aconteceu: reserva e confirmação
+                # (B3-a) vão na mesma escrita.
+                momento = _agora()
+                ciclo_cobranca.transicionar(state["ciclo_id"], ciclo_cobranca.MENSAGEM_ENVIADA,
+                                            momento, mensagem_confirmada_em=momento.isoformat())
+            except ciclo_cobranca.TransicaoInvalida as e:
+                logger.warning("[CICLO] %s: mensagem enviada, mas o ciclo não aceitou a "
+                               "transição (%s)", state.get("customer_id"), e)
     return {
         **state,
         # As decisões da campanha (oferta + canal) entram na trilha do ciclo.
@@ -551,6 +790,145 @@ async def trigger_dunning(state: AgentState) -> AgentState:
     }
 
 
+def estado_do_ciclo(ciclo: dict, tentativas: Optional[list] = None) -> AgentState:
+    """O `AgentState` de um ciclo, reconstruído das tabelas — sem checkpoint.
+
+    É o que o caminho de mensagem DEPOIS da 3ª tentativa e o fechamento por
+    confirmação usam: o diagnóstico que `decide_recovery` gravou no ciclo,
+    a causa, o valor, o tenant, o e2e da falha original (que é a chave da
+    linha do dataset) e o contador executado.
+    """
+    score = ciclo.get("recovery_score")
+    return {
+        "payment_event": {}, "payment_method": "pix_automatico",
+        "tenant_id": ciclo["tenant_id"], "customer_id": ciclo["id_recorrencia"],
+        "invoice_id": ciclo.get("e2e_falha_original") or ciclo["id_cobranca_original"],
+        "amount": float(ciclo["valor"] or 0.0),
+        "ciclo_id": ciclo["id"], "ciclo_evento": None, "ciclo_tentativa": None,
+        "decisoes": [], "features": None,
+        "failure_cause": ciclo.get("causa_original"),
+        # Um ciclo sem diagnóstico (legado, aberto por um plano) tem score
+        # nulo; os nós de fechamento e o CRM formatam número, então vai 0 —
+        # que é o que se sabe: nada.
+        "recovery_score": int(score) if score is not None else 0,
+        "p_recovery": ciclo.get("p_recovery"), "eprofit": ciclo.get("eprofit"),
+        "recommend_action": None, "ltv_estimated": None, "shap_explanation": None,
+        "feature_importance": None, "is_anomalous": None, "reconstruction_error": None,
+        "anomaly_explanation": None, "optimal_retry_at": None, "confidence": None,
+        "profile_type": None,
+        "estrategia": ciclo.get("estrategia"), "raciocinio": None,
+        "retry_count": ciclo_cobranca.tentativas_executadas(ciclo["id"]),
+        "next_retry_at": None,
+        "retry_exhausted": ciclo["estado"] != ciclo_cobranca.RECOBRANDO,
+        "recovered": ciclo["estado"] == ciclo_cobranca.RECUPERADO,
+        "pix_janela_ate": ciclo_cobranca._data(ciclo["janela_fim"]),
+        "pix_retry_schedule": [
+            {"numero": t["numero"], "quando": ciclo_cobranca._data(t["agendada_para"]),
+             "valor": t["valor"], "origem": t["origem_data"]}
+            for t in (tentativas if tentativas is not None
+                      else ciclo_cobranca.tentativas_do_ciclo(ciclo["id"]))],
+        "dunning_sent": ciclo["estado"] in (ciclo_cobranca.MENSAGEM_ENVIADA,),
+        "channel": None, "canais_considerados": None, "metodo_pagamento": None,
+        "message_sent": None, "mensagem_meta": None,
+    }
+
+
+async def concluir_ciclo_por_resultado(ciclo_id: int, agora: Optional[datetime] = None,
+                                       motivo: str = "tentativas_esgotadas",
+                                       causa: Optional[str] = None) -> Optional[AgentState]:
+    """A mensagem DEPOIS das tentativas (R1) — e na revogação (R5) —, fora do grafo.
+
+    É um ponto de decisão como qualquer outro, e grava na trilha do Art. 20
+    EXATAMENTE as mesmas decisões que `trigger_dunning` grava dentro do grafo
+    (A2): as duas da campanha (oferta = meio de pagamento + tom, e canal),
+    montadas por `DunningEngine.decisoes_da_campanha`, e persistidas por
+    `update_roi_dashboard` — os mesmos dois nós, chamados com um state
+    reconstruído do ciclo (`estado_do_ciclo`). Não há caminho paralelo.
+
+    Concorrência: o ciclo é RESERVADO antes de enviar — `recobrando →
+    mensagem_enviada` sob a trava de escrita. Se outro processo (webhook e
+    agendador ao mesmo tempo) já reservou, `TransicaoInvalida` diz que não há
+    o que fazer e NENHUMA segunda mensagem sai. Devolve o state final, ou None
+    quando não havia o que concluir.
+
+    B3-a — reserva ≠ envio. Depois de o envio retornar, `confirmar_mensagem`
+    grava `mensagem_confirmada_em`. Se o envio LEVANTAR, a reserva é desfeita
+    (`desfazer_reserva_de_mensagem`, WARNING): o ciclo volta a `recobrando` e
+    a próxima passagem do agendador tenta de novo, com a mesma reserva contra
+    duplicata. Se o PROCESSO MORRER entre reservar e enviar, a varredura
+    encontra a reserva sem confirmação há mais de
+    `PRAZO_RESERVA_DE_MENSAGEM` e faz o mesmo. A exceção não propaga: o
+    resultado da tentativa já está gravado, e um 500 ao PSP faria ele
+    reenviar um evento já tratado.
+
+    `causa`, quando informada, sobrepõe a causa gravada no ciclo — é o caso da
+    revogação, em que a mensagem oferece boleto porque não há mais mandato.
+    """
+    agora = agora or _agora()
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    if ciclo is None or ciclo["estado"] != ciclo_cobranca.RECOBRANDO:
+        return None
+    try:
+        ciclo = ciclo_cobranca.transicionar(ciclo_id, ciclo_cobranca.MENSAGEM_ENVIADA, agora)
+    except ciclo_cobranca.TransicaoInvalida:
+        logger.info("[CICLO] ciclo %s: outro processo já concluiu — nenhuma segunda mensagem",
+                    ciclo_id)
+        return None
+
+    estado = estado_do_ciclo(ciclo)
+    estado["dunning_sent"] = False
+    if causa:
+        estado["failure_cause"] = causa
+    print(f"[CICLO] {estado['customer_id']}: ciclo {ciclo_id} — {motivo}; mensagem ao cliente "
+          f"({estado['retry_count']}/{MAX_TENTATIVAS_PIX} tentativa(s) executada(s))")
+    try:
+        estado = await trigger_dunning(estado)
+    except Exception as e:                       # noqa: BLE001 — B3-a: a reserva não pode ficar órfã
+        ciclo_cobranca.desfazer_reserva_de_mensagem(ciclo_id, f"envio levantou: {e!r}", agora)
+        return None
+    if not estado.get("dunning_sent"):
+        ciclo_cobranca.desfazer_reserva_de_mensagem(ciclo_id, "envio não confirmou (sent=False)",
+                                                    agora)
+        return None
+    ciclo_cobranca.confirmar_mensagem(ciclo_id, agora)
+    return await update_roi_dashboard(estado)
+
+
+async def descartar_ciclo(state: AgentState) -> AgentState:
+    """R6 / I-4b: o aborto de `route_after_diagnosis` deixa de ser silencioso.
+
+    Grava a decisão na trilha do Art. 20 pelo caminho que já existe para as
+    outras (`trilha.decisao` + `anotar_decisao`, persistida em
+    `update_roi_dashboard`), e leva o ciclo a `descartado` com o motivo —
+    gravando `decidido_em`, para o ciclo nunca se confundir com um incompleto.
+    """
+    momento = _agora()
+    eprofit = state.get("eprofit", 0) or 0
+    score = state.get("recovery_score", 0) or 0
+    if not state.get("recommend_action", True) or eprofit <= 0:
+        motivo = "eprofit_nao_positivo"
+        frase = f"e-Profit R$ {eprofit:.2f} <= 0: intervir custaria mais do que recupera"
+    else:
+        motivo = "score_abaixo_do_corte"
+        frase = f"score {score}/100 abaixo do corte de 5: recuperação improvável"
+    print(f"[CICLO] {state.get('customer_id')}: ciclo descartado — {motivo}")
+    dec = trilha.decisao(
+        state.get("tenant_id"), state.get("customer_id"), trilha.DOMINIO_INVOLUNTARIO,
+        trilha.TIPO_RETENTATIVA, trilha.MODELO_REGRA,
+        entradas={"failure_cause": state.get("failure_cause"),
+                  "recovery_score": trilha._num(score), "eprofit": trilha._num(eprofit),
+                  "recommend_action": bool(state.get("recommend_action", True))},
+        saida={"estrategia": "descartado", "regra": "route_after_diagnosis",
+               "motivo_descarte": motivo, "motivo_da_regra": frase})
+    if state.get("ciclo_id"):
+        try:
+            ciclo_cobranca.descartar(state["ciclo_id"], motivo, momento)
+        except ciclo_cobranca.TransicaoInvalida as e:
+            logger.warning("[CICLO] %s: descarte não aceito pelo ciclo (%s)",
+                           state.get("customer_id"), e)
+    return trilha.anotar_decisao({**state, "estrategia": "descartado"}, dec)
+
+
 def success_fee(amount: float, recovered: bool) -> float:
     """O que a CRAI cobra por este ciclo. Zero quando não houve recuperação.
 
@@ -565,13 +943,15 @@ def success_fee(amount: float, recovered: bool) -> float:
 
 
 def tentativas_ja_disparadas(state: AgentState) -> int:
-    """Quantas instruções de pagamento deste ciclo já saíram para o PSP.
+    """Quantas tentativas deste ciclo foram EXECUTADAS (saíram para o PSP, ou
+    têm resultado de execução).
 
-    Vem do `retry_state`, que é quem sabe o que foi DISPARADO — o
-    `retry_count` do checkpoint conta o que foi COMPROMETIDO pela política, que
-    é outra coisa. A diferença é exatamente o custo que o Gap 6 pedia: um
-    plano de 3 tentativas em que só a primeira saiu custou uma, não três.
+    Pelo ciclo, quando o state tem um. Sem ciclo (chamada direta), pelo plano
+    do mandato em `retry_state`. Nunca pelo plano agendado: um plano de 3
+    tentativas em que só a primeira saiu custou uma, não três (Gap 6).
     """
+    if state.get("ciclo_id"):
+        return ciclo_cobranca.tentativas_executadas(state["ciclo_id"])
     registro = retry_state.get_retry_state(
         state.get("customer_id", ""), tenant_id=state.get("tenant_id"))
     if not registro:
@@ -581,7 +961,9 @@ def tentativas_ja_disparadas(state: AgentState) -> int:
 
 async def update_roi_dashboard(state: AgentState) -> AgentState:
     fee = success_fee(state["amount"], bool(state.get("recovered")))
-    eprofit = state.get("eprofit", 0)
+    # `or 0`: um state reconstruído de um ciclo sem diagnóstico (legado, ou a
+    # linha de transição do dataset) tem e-Profit None, e o log não pode cair.
+    eprofit = state.get("eprofit") or 0
     recovered_icon = "[OK]" if state.get("recovered") else "[X]"
     print(f"[ROI] {recovered_icon} R$ {state['amount']:.2f} | taxa R$ {fee:.2f} | e-Profit R$ {eprofit:.2f}")
     crm_result = await _hubspot.register_recovery_cycle(state)

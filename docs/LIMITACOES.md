@@ -308,11 +308,13 @@ Bloco C.2 existe para impedir no caso de erro. **O 503 do C.2 não alcança este
 caso**, e é importante que isso esteja escrito: lá o sistema sabe que falhou;
 aqui ele acha, com razão local, que não havia nada a fechar.
 
-**Por que está assim.** É a mesma dívida assumida do `MemorySaver` em
-`crai/agent/main_agent.py:108`, um andar acima: a POC roda em **um processo**, e
-a escolha do SQLite tem razão própria — a segunda escrita de um ciclo é um
-`UPDATE` numa linha gravada dias antes, possivelmente por outro processo, e
-Parquet é imutável por arquivo. O Bloco C fechou o que dava para fechar **dentro
+**Por que está assim.** A POC roda em **um processo**, e a escolha do SQLite
+tem razão própria — a segunda escrita de um ciclo é um `UPDATE` numa linha
+gravada dias antes, possivelmente por outro processo, e Parquet é imutável por
+arquivo. (Até 28/09/2026 este parágrafo dizia "é a mesma dívida assumida do
+`MemorySaver` em `main_agent.py`". Essa dívida foi paga na Etapa 1: o estado
+do ciclo de cobrança do involuntário saiu da RAM e mora em SQLite, na seção
+seguinte. O que continua igual é o limite do arquivo.) O Bloco C fechou o que dava para fechar **dentro
 de um arquivo**: `BEGIN IMMEDIATE` em volta do `SELECT`+`UPDATE` que fecha o
 ciclo, `busy_timeout` declarado em vez de implícito, e um status `ERRO` que
 deixou de se disfarçar de reenvio. Nenhuma dessas três atravessa o limite do
@@ -340,3 +342,83 @@ desenho; o que falta é a migração e trocar o `_conectar` por um pool. Volume
 compartilhado por NFS **não** é uma terceira opção: o travamento de arquivo do
 SQLite não é confiável sobre NFS, e trocaria uma falha visível por corrupção.
 Sem uma das duas primeiras, multi-worker é multi-worker só no balanceador.
+
+### O ciclo de cobrança do involuntário mora num SQLite local à máquina — e o que a Etapa 1 deixou declarado
+
+Declarado em 28/09/2026, ao fim da Etapa 1 (o núcleo do involuntário:
+`docs/interno/RELATORIO_ETAPA1.md`).
+
+**O que deixou de ser verdade.** Até a Etapa 1 o contador de tentativas do
+BACEN, o prazo da janela e o desfecho do ciclo moravam no checkpoint do
+LangGraph (`MemorySaver`, RAM, um processo); o plano de retentativas num JSON
+reescrito sem transação; e a deduplicação de webhook em memória. Reiniciar o
+serviço zerava o contador, reabria a janela, descartava a confirmação de
+pagamento (`sem_ciclo_aberto`, fee 0) e deixava passar reenvios do PSP — tudo
+medido em `docs/interno/DIAGNOSTICO_INTEGRACAO.md`. Nada disso vale mais: o
+ciclo (`ciclos_cobranca`), as tentativas com o resultado de cada uma
+(`tentativas_cobranca`) e os eventos vistos (`eventos_vistos`) moram em
+`app/data/recovery_cycles.db`, sob `BEGIN IMMEDIATE`, e o `MemorySaver` do
+grafo é só o rascunho de uma execução. As linhas `P1-14` e `P1-15` da tabela
+de dívidas do `app/README.md` descrevem o estado anterior.
+
+**O que continua valendo: o arquivo é local à máquina.** É o mesmo limite da
+seção anterior, sobre o mesmo arquivo de sistema: dois workers no mesmo host,
+ou com o mesmo volume, compartilham o banco e as garantias valem (medido com
+dois processos reais em `test_ciclo_cobranca.py`, `test_etapa1_sequencia.py` e
+`test_etapa1_desfechos.py`). Dois workers em **máquinas diferentes** têm dois
+bancos: o ciclo aberto por um não existe para o outro, a deduplicação não
+atravessa, e o limite de 3 tentativas do BACEN vira 3 por máquina. A correção
+é Postgres — a mesma migração da seção anterior, com a `UNIQUE (tenant_id,
+id_cobranca_original)` e o `CHECK (numero BETWEEN 1 AND 3)` levados junto,
+porque são eles que fazem o banco recusar a 4ª tentativa e o 2º ciclo.
+
+**Limitações declaradas na Etapa 1**, cada uma com o lugar onde mora:
+
+1. **Confirmação de pagamento com tenant divergente** (`ciclo_para_confirmacao`,
+   `app/crai/dunning/ciclo_cobranca.py`). Uma confirmação que declara um
+   tenant sem ciclo daquele mandato encontra o ciclo aberto do mandato em
+   **qualquer** tenant, e a recuperação é atribuída ao tenant do ciclo, com
+   WARNING. Existe para preservar o comportamento anterior à etapa, quando o
+   checkpoint era por mandato e não por tenant. **Sai antes da API key
+   (Portão 0)**: com inquilinos autenticados, um inquilino não pode fechar o
+   ciclo de outro, e o fallback vira recusa.
+2. **Prazo de recuperação de 30 dias (A3)**: depois da mensagem ao cliente, o
+   ciclo espera `PRAZO_RECUPERACAO_DIAS = 30` dias por um pagamento, contados
+   de `mensagem_confirmada_em`, e vai a `perdido`. Um pagamento **depois**
+   disso não reabre o ciclo, não conta fee e é respondido como
+   `ciclo_perdido`, com WARNING — por decisão: além do prazo, é a
+   mensalidade seguinte, não a recuperação desta. O cliente não perde o
+   pagamento; a CRAI não o atribui ao ciclo.
+3. **Caminho de transição do A4** (`_fechar_pela_linha_do_dataset`,
+   `app/crai/api/app.py`). Uma confirmação sem ciclo na tabela, mas com uma
+   linha ABERTA no `recovery_log` registrada há no máximo 7 + 30 dias — um
+   ciclo que só existia na RAM antes da Etapa 1 —, cria o ciclo já
+   `recuperado` a partir da linha, com WARNING a cada uso. Linha mais velha
+   não é fechada. É código de transição: quando não houver mais linha aberta
+   anterior à etapa, ele deixa de ser alcançado e pode sair.
+4. **HubSpot: ciclo descartado chega como `retrying`.**
+   `register_recovery_cycle` (`app/crai/integrations/hubspot_crm.py`) só
+   conhece `recovered`, `dunning_sent`, `lost` e `retrying`; o estado
+   `descartado` (R6: e-Profit ≤ 0 ou score abaixo do corte, com motivo) cai
+   em `retrying`. O motivo do descarte está no ciclo e na trilha do Art. 20,
+   não no CRM. O módulo do HubSpot ficou fora do escopo da etapa.
+5. **Falha de banco num nó depois do primeiro.** Uma falha de persistência
+   em `open_cycle` vira 503 sem efeito parcial. Uma falha num nó posterior
+   também vira 503 e esquece a chave de deduplicação, mas o ciclo já aberto
+   fica; o reenvio do PSP o encontra **incompleto** (sem decisão gravada, sem
+   tentativas) e retoma o diagnóstico sobre ele, com a janela original — não
+   há descarte silencioso. O que não é refeito é o rastro do nó que falhou
+   antes de gravar.
+6. **Linha do dataset e ciclo em duas escritas.** O fechamento do ciclo como
+   recuperado é uma transação; a linha do `recovery_log` é fechada logo
+   depois, em outra conexão, best-effort. Uma falha entre as duas deixa o
+   ciclo `recuperado` e a linha sem desfecho até a próxima passagem do
+   agendador, cuja varredura de reconciliação fecha a linha com WARNING
+   (`recovery_log.reconciliar_recuperados`).
+
+**Fora do escopo da etapa, e ainda verdade:** o conteúdo da mensagem (o link
+`https://pay.crai.ai/...` é uma string montada; nenhuma cobrança é criada);
+o perfil sintético que alimenta o classificador; a simulação do painel; a
+janela de deduplicação da API de clientes (`CLIENTES_API`), que continua em
+memória.
+

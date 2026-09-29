@@ -44,6 +44,17 @@ class AgentState(TypedDict):
     amount:         float
     invoice_id:     str
 
+    # O CICLO DE COBRANÇA (Etapa 1, Bloco 2): a fonte da verdade mora em
+    # `crai/dunning/ciclo_cobranca.py`, não neste checkpoint. O nó de entrada
+    # `open_cycle` abre ou reencontra o ciclo e escreve aqui o id dele, o que
+    # este evento É para o ciclo (`nova` / `resultado_de_tentativa` /
+    # `falha_tardia`) e, no segundo caso, o número da tentativa. Os nós de
+    # diagnóstico só rodam para `nova`; `retry_count` e `pix_janela_ate` abaixo
+    # são cópias do ciclo, reescritas a cada evento — nunca acumuladas aqui.
+    ciclo_id:        Optional[int]
+    ciclo_evento:    Optional[str]
+    ciclo_tentativa: Optional[int]
+
     # A trilha do Art. 20 (LGPD): uma entrada por decisão automatizada deste
     # ciclo (risco, retentativa, oferta, canal), montada no nó que decide
     # (`retention_log.decisao`) e gravada de uma vez no `update_roi_dashboard`
@@ -87,6 +98,11 @@ class AgentState(TypedDict):
     #   pix_automatico → PixAutomaticoRetryPolicy (3 tentativas / 7 dias, BACEN)
     #   card           → nenhuma: a recobrança automática de cartão saiu do
     #                    pipeline ativo na Fase 3 (ver crai/dunning/legacy_card/)
+    # Tentativas EXECUTADAS do ciclo (R2): as que saíram para o PSP ou têm
+    # resultado. Não conta plano agendado. Copiado do ciclo por `open_cycle`;
+    # um valor presente no state inicial sem ciclo é um contador DECLARADO
+    # pelo chamador (painel, demo, `attempt_count` do Stripe) e abre o ciclo
+    # com N tentativas `falhou` de origem `declarada`.
     retry_count:     int
     next_retry_at:   Optional[datetime]
     retry_exhausted: bool
@@ -99,9 +115,9 @@ class AgentState(TypedDict):
     # janela encerrada havia semanas: o cliente perdia por prescrição um
     # direito que a regulação lhe dá em cada ciclo.
     #
-    # Ancorada no vencimento da cobrança que abriu a janela e NUNCA empurrada
-    # por eventos posteriores da mesma janela (ver `inicio_da_janela` em
-    # crai/dunning/pix_automatico_retry.py). `None` = nenhuma janela aberta.
+    # Ancorada na primeira falha da cobrança e gravada UMA vez, no ciclo
+    # (`ciclos_cobranca.janela_fim`); aqui é cópia. Nunca empurrada por
+    # eventos posteriores, nem por reinício (R3). `None` = nenhuma janela.
     pix_janela_ate:  Optional[datetime]
 
     # Plano completo de tentativas dentro da janela regulada (só Pix Automático)

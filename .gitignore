@@ -100,3 +100,5 @@ htmlcov/
 /Claude outputs/
 
 log_treino_*.txt
+
+/docs/interno/

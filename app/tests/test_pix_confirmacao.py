@@ -99,9 +99,17 @@ class TestConfirmacaoFechaOCiclo:
         assert corpo["fee"] == pytest.approx(round(VALOR * success_fee_pct(), 2)), (
             f"fee de {corpo['fee']} sobre R$ {VALOR:.2f} — esperado "
             f"{success_fee_pct():.0%} do valor recuperado")
-        assert _estado(rec)["recovered"] is True, (
-            "o checkpoint continua dizendo que o ciclo está aberto — o "
-            "webhook de confirmação não gravou o desfecho")
+        # Etapa 1 (R4). ANTES: `_estado(rec)["recovered"] is True` — o
+        # CHECKPOINT do LangGraph (RAM) era onde o desfecho ficava gravado, e
+        # era por isso que depois de um reinício a confirmação respondia
+        # `sem_ciclo_aberto` com fee 0 (diagnóstico de 28/09/2026, item 10).
+        # AGORA o desfecho fica no CICLO, em `ciclos_cobranca`, e é ele que
+        # sobrevive ao reinício; o checkpoint não é mais tocado na confirmação.
+        from crai.dunning import ciclo_cobranca
+        ciclo = ciclo_cobranca.ciclos_do_mandato(None, rec)[0]
+        assert ciclo["estado"] == ciclo_cobranca.RECUPERADO and ciclo["fee"] == corpo["fee"], (
+            "o ciclo continua dizendo que está aberto — o webhook de "
+            "confirmação não gravou o desfecho")
 
     def test_a_confirmacao_nao_reprocessa_o_grafo(self, cliente, monkeypatch):
         """Reagendar tentativa do BACEN para quem pagou é o pior desfecho possível.

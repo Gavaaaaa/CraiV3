@@ -257,6 +257,12 @@ def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     monkeypatch.setenv("CRAI_CLIENTES_DB", str(tmp_path / "clientes_de_teste.db"))
     from crai.churn_voluntary import clientes_importados
     clientes_importados.esquecer_schema_garantido()
+    # O ciclo de cobrança (Etapa 1) mora no MESMO arquivo do dataset do
+    # involuntário (`CRAI_RECOVERY_DB`, acima) e garante o schema uma vez por
+    # processo por destino: cada `tmp_path` é um banco novo, então a marca é
+    # esquecida aqui, como já é para a base de clientes.
+    from crai.dunning import ciclo_cobranca
+    ciclo_cobranca.esquecer_schema_garantido()
 
 
 @pytest.fixture
@@ -279,8 +285,14 @@ def supabase_falso(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def janelas_de_idempotencia_limpas():
+def janelas_de_idempotencia_limpas(banco_de_ciclos_isolado):
     """Nenhum teste herda os eventos que outro teste enviou.
+
+    Depende de `banco_de_ciclos_isolado` DE PROPÓSITO: desde a Etapa 1 as
+    janelas do Pix são persistentes (tabela `eventos_vistos` no arquivo de
+    `CRAI_RECOVERY_DB`), e `limpar_tudo` apaga essa tabela. Sem a ordem
+    garantida, a limpeza poderia rodar antes do redirecionamento da env e
+    apagar os eventos vistos do banco REAL.
 
     As janelas de idempotência (`crai/api/idempotencia.py`) são estado de
     módulo: vivem enquanto o processo viver. Numa suíte, isso significa que um

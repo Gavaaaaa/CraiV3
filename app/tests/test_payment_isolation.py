@@ -202,7 +202,17 @@ class TestPixEhOUnicoCaminhoDeRetentativa:
         assert len(resultado["pix_retry_schedule"]) == 2
         assert resultado["retry_exhausted"] is False
         assert resultado["next_retry_at"] == resultado["pix_retry_schedule"][0]["quando"]
-        assert resultado["retry_count"] == 2
+        # Etapa 1 (R2). ANTES: `retry_count == 2` — as duas tentativas só
+        # AGENDADAS (para amanhã e depois) contadas como usadas. Era o defeito
+        # do diagnóstico, item 1: a falha da tentativa 1 encontrava "3 usadas"
+        # e a mensagem saía com zero tentativa disparada. AGORA o contador é o
+        # que foi EXECUTADO: nada saiu ainda, então zero — e o plano de 2 fica
+        # no ciclo, como pendente.
+        assert resultado["retry_count"] == 0
+        from crai.dunning import ciclo_cobranca
+        tentativas = ciclo_cobranca.tentativas_do_ciclo(resultado["ciclo_id"])
+        assert [(t["numero"], t["resultado"], t["disparada_em"]) for t in tentativas] == [
+            (1, "pendente", None), (2, "pendente", None)]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -822,12 +832,25 @@ class TestA1R5AJanelaDoBacenExpira:
         )
         assert (usadas, prazo) == (3, None)
 
-    def test_o_contador_zera_quando_o_prazo_passa(self):
-        agora = datetime(2026, 9, 3, 9, 0)
-        estado = {"retry_count": 3, "pix_janela_ate": agora - timedelta(seconds=1)}
+    def test_o_contador_nao_zera_quando_o_prazo_passa(self):
+        """Etapa 1 (R3). ANTES: `_janela_vigente` devolvia `(0, None)` com o
+        prazo vencido — o contador do MANDATO zerava, e era assim que a
+        cobrança do mês seguinte ganhava as 3 tentativas dela. Era também o
+        que reabria a janela da MESMA cobrança depois de um reinício ou de
+        uma falha tardia (diagnóstico, item 10: "uma nova falha depois do
+        restart abre outra janela").
 
-        assert workflow_module._janela_vigente(estado, agora) == (0, None)
-        # Um segundo ANTES do fim a janela ainda vale: a fronteira é inclusiva.
+        AGORA o contador é por COBRANÇA e vem do ciclo: a cobrança nova tem
+        ciclo novo, com zero, sem precisar zerar nada; a mesma cobrança depois
+        do prazo chega com as 3 que tem, e quem diz "não cabe mais" é a
+        política, pela aritmética da janela. `_janela_vigente` devolve o que
+        o ciclo diz, antes e depois do prazo.
+        """
+        agora = datetime(2026, 9, 3, 9, 0)
+        vencido = agora - timedelta(seconds=1)
+        estado = {"retry_count": 3, "pix_janela_ate": vencido}
+
+        assert workflow_module._janela_vigente(estado, agora) == (3, vencido)
         estado["pix_janela_ate"] = agora + timedelta(seconds=1)
         assert workflow_module._janela_vigente(estado, agora) == (
             3, agora + timedelta(seconds=1),
@@ -943,25 +966,38 @@ class TestA1R6ConcorrenciaNaJanelaDoBacen:
             "concorrentes do mesmo cliente leram o mesmo contador"
         )
 
-    def test_o_checkpoint_nao_subnotifica_o_que_foi_comprometido(self, monkeypatch):
-        """O contador gravado tem que bater com o que a política agendou.
+    def test_o_ciclo_nao_subnotifica_o_que_foi_comprometido(self, monkeypatch):
+        """O que a política agendou tem que estar gravado — no CICLO.
 
         Esta é a parte que impede qualquer auditoria posterior de perceber o
         estouro: medido em `8786d82`, nove instruções comprometidas e
         `retry_count: 3` no checkpoint. Quem lesse o estado depois concluiria
         que o limite foi respeitado.
+
+        Etapa 1 (R2). ANTES: `estado["retry_count"] == total` — o contador do
+        checkpoint igual ao COMPROMETIDO pela política. Afirmava exatamente
+        o defeito do diagnóstico, item 1: contar tentativa agendada como
+        usada. AGORA a auditoria lê `tentativas_cobranca`: as `total`
+        tentativas estão lá, pendentes, e `retry_count` é o EXECUTADO — zero,
+        porque nenhuma saiu. O estouro continua visível, no lugar certo.
         """
+        from crai.dunning import ciclo_cobranca
+
         corpo = self._corpo("RN_r6_conc_sub")
         lotes = self._agendadas(monkeypatch, [corpo] * 3)
         total = sum(len(lote) for lote in lotes)
         estado = crai_agent.get_state(
             {"configurable": {"thread_id": "RN_r6_conc_sub"}}).values
 
-        assert estado.get("retry_count") == total, (
-            f"a política agendou {total} tentativa(s) e o checkpoint registra "
-            f"{estado.get('retry_count')}. O estado precisa refletir o que foi "
-            "comprometido, senão o estouro fica invisível para auditoria"
+        tentativas = ciclo_cobranca.tentativas_do_ciclo(estado["ciclo_id"])
+        assert len(tentativas) == total, (
+            f"a política agendou {total} tentativa(s) e o ciclo registra "
+            f"{len(tentativas)}. O ciclo precisa refletir o que foi comprometido, "
+            "senão o estouro fica invisível para auditoria"
         )
+        assert all(t["resultado"] == "pendente" for t in tentativas)
+        assert estado.get("retry_count") == 0, (
+            "o contador do state voltou a contar plano agendado como executado")
 
     def test_clientes_diferentes_continuam_correndo_em_paralelo(self, monkeypatch):
         """Contrapeso: a trava é por cliente, não uma fila global.
