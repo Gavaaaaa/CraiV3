@@ -37,7 +37,9 @@ from datetime import datetime, timezone
 from . import batch_scoring, clientes_importados, insights_unificados, retention_log
 from .batch_scoring import CRITICIDADE_SEM_DADO
 from .offer_bandit import PROFILES
-from .risk_scorer import REGRA_DE_RISCO, identidade_do_modelo, mrr_utilizavel
+from .risk_scorer import (EVENTO_DADO_ESTATICO, REGRA_DE_RISCO, avaliar_risco,
+                          colunas_comportamentais_v3, entradas_comportamentais,
+                          mrr_utilizavel)
 from . import voluntary_agent as va
 
 CRITERIO_INCLUSAO = ("critico", "alto")
@@ -194,18 +196,29 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
     # da base ou global, ou modelo treinado se ativo); a oferta, do bandit.
     # O canal entra sozinho, por `va.choose_channel`. Montadas aqui, gravadas
     # pelo lote inteiro em `disparar`.
-    modelo, versao = identidade_do_modelo()
+    # Quem decidiu ESTA linha (modelo ou régua, e por quê) e o TreeSHAP quando
+    # o modelo v3 decidiu (promoção v3, Bloco 1). As props do risco omitem o
+    # ausente, como `risco_por_features`: a régua não aceita chave com None.
+    props_do_risco = {k: v for k, v in (
+        ("days_since_last", linha.get("days_since_last")),
+        ("features_used_30d", linha.get("features_used_30d")), ("mrr", mrr),
+        *((c, linha.get(c)) for c in colunas_comportamentais_v3())) if v is not None}
+    avaliacao = avaliar_risco(EVENTO_DADO_ESTATICO, props_do_risco)
+    modelo, versao = avaliacao["modelo"], avaliacao["modelo_versao"]
     saida_risco = {"risk_score": round(risco, 4), "criticality": criticidade}
     if modelo == retention_log.MODELO_REGRA:
         saida_risco["regra"] = (f"batch_scoring.{linha.get('origem_da_regua')}"
                                 if linha.get("origem_da_regua") else REGRA_DE_RISCO)
+        if avaliacao["motivo_da_regra"]:
+            saida_risco["motivo_da_regra"] = avaliacao["motivo_da_regra"]
     decisao_risco = retention_log.decisao(
         tenant_id, _user_id(cid), retention_log.DOMINIO_VOLUNTARIO, retention_log.TIPO_RISCO,
         modelo, modelo_versao=versao,
         entradas={"days_since_last": retention_log._num(props["days_since_last"]),
                   "features_used_30d": retention_log._num(props["features_used_30d"]),
-                  "mrr": retention_log._num(mrr), "billing_profile": perfil},
-        saida=saida_risco)
+                  "mrr": retention_log._num(mrr), "billing_profile": perfil,
+                  **entradas_comportamentais(props_do_risco)},
+        saida=saida_risco, contribuicoes=avaliacao["contribuicoes"])
     decisao_oferta = va.decisao_de_oferta(tenant_id, _user_id(cid), perfil, risco, mrr, rodada)
 
     estado = {

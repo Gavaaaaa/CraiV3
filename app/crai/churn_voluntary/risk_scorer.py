@@ -59,6 +59,75 @@ FEATURES_DE_RISCO = [
 _modelo = None
 _modelo_consultado = False
 
+# ── Contratos de artefato aceitos (promoção v3, Bloco 1, 30/09/2026) ─────
+# A tabela é FECHADA: qualquer outra combinação de `meta["contrato"]`,
+# `meta["features_versao"]` e `meta["features"]` é recusada, como sempre foi.
+#   legado — meta sem "contrato" e sem "features_versao", features ==
+#            FEATURES_DE_RISCO. Vetor como sempre: ausente vira 0.0.
+#   v3     — meta["contrato"] == "v3", features_versao == 1, features ==
+#            FEATURES_DE_RISCO_V3 (`crai.ml.voluntario_v3`). Ausente vira NaN:
+#            para o HistGradientBoosting "0 chamados" e "não sei" são coisas
+#            diferentes, e o modelo aprendeu o NaN no treino (aumento por
+#            máscara). O meta de `models/v3/` NÃO declara "contrato": só o meta
+#            de produção, gravado pela promoção, declara.
+CONTRATO_LEGADO = "legado"
+CONTRATO_V3 = "v3"
+_contrato = CONTRATO_LEGADO
+
+# "Dado suficiente" para o modelo v3 decidir (D1): pelo menos uma das duas
+# colunas que a régua lê E pelo menos este número das colunas comportamentais
+# que só o v3 usa. 0 foi medido no Bloco 0 (holdout v3: 0,6377 contra 0,6156
+# da melhor régua); o Bloco 3 confirma por GroupKFold, e se a vantagem ficar
+# abaixo do desvio, passa a 1.
+N_MINIMO_COLUNAS_COMPORTAMENTAIS = 0
+MOTIVO_SEM_DADO_PARA_O_MODELO = (
+    "modelo v3 ativo, mas sem days_since_last e sem features_used_30d: "
+    "dado insuficiente para o modelo")
+
+
+def _features_v3() -> tuple:
+    """(FEATURES_DE_RISCO_V3, versão). Import preguiçoso: `voluntario_v3` traz o
+    pandas, e este módulo é importado no caminho de toda requisição."""
+    from ..ml.voluntario_v3 import FEATURES_DE_RISCO_V3, FEATURES_DE_RISCO_V3_VERSAO
+    return list(FEATURES_DE_RISCO_V3), FEATURES_DE_RISCO_V3_VERSAO
+
+
+def colunas_comportamentais_v3() -> list:
+    """As colunas do contrato v3 que o contrato legado não tem (as 9 do Bloco 0)."""
+    return [f for f in _features_v3()[0] if f not in FEATURES_DE_RISCO]
+
+
+def contrato_do_meta(meta) -> str | None:
+    """O contrato que este meta declara E cumpre, ou None (recusar)."""
+    if not isinstance(meta, dict):
+        return None
+    contrato = meta.get("contrato")
+    if contrato is None:
+        if meta.get("features_versao") is None and meta.get("features") == FEATURES_DE_RISCO:
+            return CONTRATO_LEGADO
+        return None
+    if contrato == CONTRATO_V3:
+        lista, versao = _features_v3()
+        if meta.get("features_versao") == versao and meta.get("features") == lista:
+            return CONTRATO_V3
+    return None
+
+
+def _vetor_v3(event: str, props: dict) -> list:
+    """As features de `FEATURES_DE_RISCO_V3`, nessa ordem. Ausente = NaN."""
+    vetor = []
+    for f in _features_v3()[0]:
+        if f == "evento_cancelamento":
+            vetor.append(1.0 if event == "Cancellation Page Viewed" else 0.0)
+        elif f == "evento_downgrade":
+            vetor.append(1.0 if event == "Downgrade Clicked" else 0.0)
+        elif f == "evento_sessao":
+            vetor.append(1.0 if event == "Session Started" else 0.0)
+        else:
+            v = _numero_utilizavel(props.get(f))
+            vetor.append(float("nan") if v is None else float(v))
+    return vetor
+
 
 def _vetor_de_features(event: str, props: dict) -> list:
     """As features de `FEATURES_DE_RISCO`, nessa ordem, a partir do evento.
@@ -88,13 +157,14 @@ def carregar_modelo(forcar: bool = False) -> bool:
     modelo novo sem reiniciar, igual ao `load()` do classificador e do
     autoencoder. `forcar=True` existe para os testes.
     """
-    global _modelo, _modelo_consultado
+    global _modelo, _modelo_consultado, _contrato
 
     if _modelo_consultado and not forcar:
         return _modelo is not None
 
     _modelo_consultado = True
     _modelo = None
+    _contrato = CONTRATO_LEGADO
 
     if not MODELO_PATH.exists():
         # Silencioso: é o estado normal do projeto hoje, e um aviso a cada
@@ -107,14 +177,20 @@ def carregar_modelo(forcar: bool = False) -> bool:
         with open(MODELO_META_PATH, encoding="utf-8") as f:
             meta = json.load(f)
 
-        if meta.get("features") != FEATURES_DE_RISCO:
-            print(f"[RISK-VOL] Modelo IGNORADO: `features` do meta não bate com "
-                  f"FEATURES_DE_RISCO. Esperado {FEATURES_DE_RISCO}, "
-                  f"meta declara {meta.get('features')}. Um modelo com as "
-                  f"colunas em outra ordem devolve número plausível e errado.")
+        contrato = contrato_do_meta(meta)
+        if contrato is None:
+            print(f"[RISK-VOL] Modelo IGNORADO: o meta não cumpre nenhum contrato "
+                  f"aceito (legado = FEATURES_DE_RISCO {FEATURES_DE_RISCO} sem "
+                  f"'contrato'; ou contrato 'v3' com features_versao e "
+                  f"FEATURES_DE_RISCO_V3). Meta declara contrato="
+                  f"{meta.get('contrato')!r}, features_versao="
+                  f"{meta.get('features_versao')!r}, features {meta.get('features')}. "
+                  f"Um modelo com as colunas em outra ordem devolve número "
+                  f"plausível e errado.")
             return False
 
         _modelo = joblib.load(MODELO_PATH)
+        _contrato = contrato
         print(f"[RISK-VOL] Modelo de risco carregado de {MODELO_PATH} "
               f"({meta.get('algoritmo', 'algoritmo não declarado')}, "
               f"treinado em {meta.get('treinado_em', 'data não declarada')})")
@@ -170,10 +246,10 @@ def _risco_do_modelo(event: str, props: dict):
         return None
 
     try:
-        bruto = _modelo.predict_proba([_vetor_de_features(event, props)])[0][1]
+        bruto = _modelo.predict_proba([_vetor_do_contrato(event, props)])[0][1]
     except AttributeError:
         try:
-            bruto = _modelo.predict([_vetor_de_features(event, props)])[0]
+            bruto = _modelo.predict([_vetor_do_contrato(event, props)])[0]
         except Exception as e:                    # noqa: BLE001
             print(f"[RISK-VOL] Modelo falhou ({e}) — caindo nas regras fixas")
             return None
@@ -217,8 +293,79 @@ def _risco(event: str, props: dict) -> float:
     SDK (`calculate_risk`) e a linha da base importada (`risco_por_features`).
     Regra ou modelo, os dois batem aqui; só muda de onde vêm os números.
     """
+    return _decidir(event, props)[0]
+
+
+def _dado_suficiente_v3(props: dict) -> bool:
+    """D1: dias OU uso presente, e pelo menos N_MINIMO_COLUNAS_COMPORTAMENTAIS
+    das colunas comportamentais do v3."""
+    if not isinstance(props, dict):
+        return False
+    if (_numero_utilizavel(props.get("days_since_last")) is None
+            and _numero_utilizavel(props.get("features_used_30d")) is None):
+        return False
+    presentes = sum(1 for c in colunas_comportamentais_v3()
+                    if _numero_utilizavel(props.get(c)) is not None)
+    return presentes >= N_MINIMO_COLUNAS_COMPORTAMENTAIS
+
+
+def _vetor_do_contrato(event: str, props: dict) -> list:
+    return _vetor_v3(event, props) if _contrato == CONTRATO_V3 else _vetor_de_features(event, props)
+
+
+def _decidir(event: str, props: dict) -> tuple:
+    """(risco, decidiu_o_modelo, motivo_da_regra).
+
+    Contrato legado: exatamente o de antes (modelo se houver e funcionar, régua
+    se não). Contrato v3: o modelo só decide com dado suficiente (D1); sem ele,
+    a régua decide e o motivo vai para a trilha.
+    """
+    if carregar_modelo() and _contrato == CONTRATO_V3 and not _dado_suficiente_v3(props):
+        return _risco_por_regras(event, props), False, MOTIVO_SEM_DADO_PARA_O_MODELO
     risco = _risco_do_modelo(event, props)
-    return risco if risco is not None else _risco_por_regras(event, props)
+    if risco is not None:
+        return risco, True, None
+    motivo = ("modelo ativo, mas falhou ou devolveu valor fora de [0, 1]"
+              if _modelo is not None else None)
+    return _risco_por_regras(event, props), False, motivo
+
+
+def entradas_comportamentais(props: dict) -> dict:
+    """As colunas comportamentais do v3 presentes em `props`, para as entradas
+    da trilha. Vazio sem modelo v3 ativo: o registro legado não muda."""
+    if _modelo is None or _contrato != CONTRATO_V3 or not isinstance(props, dict):
+        return {}
+    saida = {}
+    for c in colunas_comportamentais_v3():
+        v = _numero_utilizavel(props.get(c))
+        if v is not None:
+            saida[c] = v
+    return saida
+
+
+def avaliar_risco(event: str, props: dict) -> dict:
+    """O risco E o registro de quem decidiu, para a trilha do Art. 20 (P1, P3).
+
+    Devolve `risco` (o mesmo número de `calculate_risk`), `modelo` e
+    `modelo_versao` DESTA decisão (a régua pode decidir com o modelo carregado,
+    e então aqui sai "regra"), `motivo_da_regra` quando o modelo estava ativo e
+    a régua decidiu, e `contribuicoes` do TreeSHAP quando o modelo v3 decidiu
+    (None se não, ou se o SHAP falhar: nunca inventa contribuição). Nunca
+    levanta por causa da explicação.
+    """
+    risco, por_modelo, motivo = _decidir(event, props)
+    if por_modelo:
+        modelo, versao = identidade_do_modelo()
+    else:
+        modelo, versao = "regra", None
+    contribuicoes = None
+    if por_modelo and _contrato == CONTRATO_V3:
+        from .explicacao_v3 import contribuicoes_shap
+        contribuicoes = contribuicoes_shap(_modelo, _features_v3()[0],
+                                           _vetor_v3(event, props), event)
+    return {"risco": risco, "modelo": modelo, "modelo_versao": versao,
+            "motivo_da_regra": motivo, "contribuicoes": contribuicoes,
+            "contrato": _contrato if por_modelo else None}
 
 
 def calculate_risk(event: str, props: dict) -> float:

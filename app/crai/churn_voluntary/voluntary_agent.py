@@ -44,7 +44,8 @@ from .risk_scorer import (
     EVENTO_DADO_ESTATICO,
     FIXED_RISK,
     REGRA_DE_RISCO,
-    identidade_do_modelo,
+    avaliar_risco,
+    entradas_comportamentais,
 )
 from .retention_log import (
     TENANT_PADRAO,
@@ -54,7 +55,6 @@ from .retention_log import (
     registrar_desfecho,
 )
 from .risk_scorer import (
-    calculate_risk,
     classify_criticality,
     classify_profile,
     mrr_utilizavel,
@@ -146,7 +146,11 @@ def encaminha_para_humano(texto: str) -> str | None:
 # ── Nós do grafo ─────────────────────────────────────────────────────────
 
 async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
-    risk = calculate_risk(state["event"], state["props"])
+    # `avaliar_risco` devolve o mesmo número de `calculate_risk` e, junto, quem
+    # decidiu ESTA decisão (modelo ou régua, e por quê) e o TreeSHAP quando o
+    # modelo v3 decidiu (promoção v3, Bloco 1).
+    avaliacao = avaliar_risco(state["event"], state["props"])
+    risk = avaliacao["risco"]
     profile = classify_profile(state["props"])
     criticality = classify_criticality(risk, state["props"].get("mrr"))
     print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} "
@@ -154,11 +158,13 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # Trilha do Art. 20: a decisão de risco, com as features que ela viu —
     # dicionário explícito, nunca o `props` inteiro (telefone, e-mail).
     props = state["props"] if isinstance(state.get("props"), dict) else {}
-    modelo, versao = identidade_do_modelo()
+    modelo, versao = avaliacao["modelo"], avaliacao["modelo_versao"]
     saida = {"risk_score": round(float(risk), 4), "profile": profile,
              "criticality": criticality}
     if modelo == trilha.MODELO_REGRA:
         saida["regra"] = REGRA_DE_RISCO
+        if avaliacao["motivo_da_regra"]:
+            saida["motivo_da_regra"] = avaliacao["motivo_da_regra"]
     dec = trilha.decisao(
         state.get("tenant_id"), state["user_id"], trilha.DOMINIO_VOLUNTARIO,
         trilha.TIPO_RISCO, modelo, modelo_versao=versao,
@@ -167,8 +173,9 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
                   "features_used_30d": trilha._num(props.get("features_used_30d")),
                   "mrr": trilha._num(props.get("mrr")),
                   "billing_profile": props.get("billing_profile")
-                  if isinstance(props.get("billing_profile"), str) else None},
-        saida=saida)
+                  if isinstance(props.get("billing_profile"), str) else None,
+                  **entradas_comportamentais(props)},
+        saida=saida, contribuicoes=avaliacao["contribuicoes"])
     return trilha.anotar_decisao(
         {**state, "risk_score": risk, "profile": profile, "criticality": criticality}, dec)
 
