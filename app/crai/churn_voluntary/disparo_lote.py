@@ -134,11 +134,11 @@ def preparar(clientes: list[dict] | None, tenant_id: str) -> tuple[list[dict], l
                                   "motivo": "cadastro_invalido", "detalhe": motivo})
             else:
                 validos.append(cliente)
-        regua = batch_scoring.regua_da_base(validos)
-        linhas = []
-        for c in validos:
-            pontuada = batch_scoring.pontuar_cliente(c, regua)
-            linhas.append({**pontuada, "phone": c["phone"], "on_site_now": c["on_site_now"]})
+        # `pontuar_lista`: sem modelo ativo, a régua da própria lista, como
+        # sempre; com modelo, a posição pelo score dentro da lista (promoção
+        # v3, Bloco 2). Sem tenant: a referência do SDK vem só da base importada.
+        linhas = [{**pontuada, "phone": c["phone"], "on_site_now": c["on_site_now"]}
+                  for c, pontuada in zip(validos, batch_scoring.pontuar_lista(validos))]
         return batch_scoring.ordenar(linhas), descartes, ORIGEM_CORPO
 
     ranking = insights_unificados.clientes_em_risco(tenant_id)

@@ -330,6 +330,15 @@ def _decidir(event: str, props: dict) -> tuple:
     return _risco_por_regras(event, props), False, motivo
 
 
+def decidir_risco(event: str, props: dict) -> tuple:
+    """(risco, decidiu_o_modelo, motivo_da_regra), sem o TreeSHAP.
+
+    Para quem pontua a base inteira (`batch_scoring`) e só precisa saber quem
+    decidiu cada linha; a explicação por SHAP fica para o disparo, linha a
+    linha (`avaliar_risco`)."""
+    return _decidir(event, props)
+
+
 def entradas_comportamentais(props: dict) -> dict:
     """As colunas comportamentais do v3 presentes em `props`, para as entradas
     da trilha. Vazio sem modelo v3 ativo: o registro legado não muda."""

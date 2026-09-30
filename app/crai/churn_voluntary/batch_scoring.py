@@ -49,10 +49,13 @@ from datetime import datetime, timezone
 import numpy as np
 
 from . import clientes_importados
-from .risk_scorer import (HIGH_RISK_THRESHOLD, PISO_ABSOLUTO_DIAS_SEM_LOGIN,
-                          classify_criticality, desengajamento_de_uso,
-                          is_critical_risk, modelo_ativo, posicao_na_base,
-                          risco_por_features, risco_por_posicao,
+from . import risk_scorer as _rs
+from .risk_scorer import (EVENTO_DADO_ESTATICO, HIGH_RISK_THRESHOLD,
+                          PISO_ABSOLUTO_DIAS_SEM_LOGIN, classify_criticality,
+                          colunas_comportamentais_v3, decidir_risco,
+                          desengajamento_de_uso, is_critical_risk,
+                          modelo_ativo, mrr_utilizavel,
+                          posicao_na_base, risco_por_features, risco_por_posicao,
                           sinal_absoluto_de_desengajamento)
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,20 @@ FRASES = {
                        "en": "logged in less than {n} days ago"},
     "usa_produto":    {"pt": "usa o produto", "en": "uses the product"},
     "e":              {"pt": " e ", "en": " and "},
+    "dias_desc_modelo": {"pt": "dias sem login desconhecidos",
+                         "en": "days without login unknown"},
+    "uso_desc_modelo":  {"pt": "uso de funcionalidades desconhecido",
+                         "en": "feature usage unknown"},
+    "pos_grave":      {"pt": "entre os {x}% de maior risco da sua base, pelo modelo",
+                       "en": "among the {x}% highest-risk customers in your base, by the model"},
+    "pos_preocupante": {"pt": "entre os {x}% de maior risco da sua base, pelo modelo",
+                        "en": "among the {x}% highest-risk customers in your base, by the model"},
+    "pos_fora":       {"pt": "fora dos {x}% de maior risco da sua base, pelo modelo",
+                       "en": "outside the {x}% highest-risk customers in your base, by the model"},
+    "pos_sem_ref":    {"pt": "risco pelo modelo, sem base de comparação para posicionar",
+                       "en": "risk by the model, with no base to compare against"},
+    "promovido_valor": {"pt": " — grave pelo valor da conta: tem risco e o MRR está entre os {x}% maiores da sua base",
+                        "en": " - serious because of the account value: at risk and the MRR is among the top {x}% of your base"},
 }
 
 
@@ -377,8 +394,11 @@ def ordenar(linhas: list[dict]) -> list[dict]:
 def esquecer_calculos_da_regua() -> None:
     """Zera a marca de todos os tenants. Existe para o teste (`conftest`):
     um teste que pediu o ranking não pode deixar `regua_calculada_em`
-    preenchido para o teste seguinte."""
+    preenchido para o teste seguinte. Zera também a referência do score do
+    modelo por tenant (promoção v3, Bloco 2), pelo mesmo motivo."""
     _ultimo_calculo_da_regua.clear()
+    _referencia_do_score.clear()
+    _referencia_do_mrr.clear()
 
 
 def ultimo_calculo_da_regua(tenant_id: str):
@@ -397,7 +417,7 @@ def pontuar_base(tenant_id: str, idioma: str = "pt") -> list[dict]:
     regua = regua_da_base(base)
     _ultimo_calculo_da_regua[tenant_id] = datetime.now(timezone.utc).isoformat(
         timespec="seconds")
-    ranking = ordenar([pontuar_cliente(c, regua, idioma) for c in base])
+    ranking = ordenar(pontuar_lista(base, idioma, tenant_id=tenant_id, regua=regua))
     sem_dado = sum(1 for l in ranking if l["criticality"] == CRITICIDADE_SEM_DADO)
     logger.info("[BATCH-SCORING] tenant=%s clientes=%d sem_dado=%d regua=%s",
                 tenant_id, len(ranking), sem_dado,
@@ -408,3 +428,313 @@ def pontuar_base(tenant_id: str, idioma: str = "pt") -> list[dict]:
                 f"{regua['features_used_30d']['p25']}/{regua['features_used_30d']['p50']}, "
                 f"n={regua['n_utilizaveis']})")
     return ranking
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# COM O MODELO V3 ATIVO: o risco vira ação pela POSIÇÃO (promoção v3, Bloco 2)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Com o modelo decidindo, o risco é uma probabilidade calibrada numa base com
+# taxa de cancelamento de ~17%: os cortes fixos de `classify_criticality`
+# (0,75 alto, 0,90 crítico) quase nunca seriam cruzados. A criticidade passa
+# a sair da POSIÇÃO do cliente na base da empresa (P2):
+#
+#   grave (critico)       — os FAIXA_GRAVE_PCT% de maior score
+#   preocupante (alto)    — os FAIXA_PREOCUPANTE_PCT% seguintes
+#   sem risco (padrao)    — o resto
+#
+# SEMPRE com o sinal absoluto de desengajamento, como a régua da base já faz:
+# posição é relativa por construção, e uma base inteira saudável não pode ter
+# 10% de graves.
+#
+# A PORTA DE VALOR, no caminho do v3 (D-B2-3, 30/09/2026), não marca ninguém
+# como grave sozinha: ela só PROMOVE de preocupante para grave um cliente que
+# já tem risco, e o limiar é relativo à base da empresa — MRR entre os
+# FAIXA_VALOR_PCT% maiores da própria lista —, não R$ 2.000 fixos. O caminho
+# legado (régua e modelo v2) continua com `classify_criticality` e o limiar de
+# `limiar_de_alto_valor()` (variável de ambiente), idêntico.
+#
+# D5: quem o modelo decidiu e quem a régua decidiu (modelo falhou) têm posição
+# calculada SEPARADA — probabilidade e risco de régua não estão na mesma escala.
+#
+# Referência da posição: a própria lista, se tiver pelo menos
+# MINIMO_LINHAS_POSICAO linhas daquele grupo; senão, para o grupo do modelo,
+# os quantis do score no holdout de treino gravados no meta de produção pela
+# promoção (`referencia_score_quantis`); sem nenhuma das duas, ninguém é
+# grave nem preocupante e a explicação diz que não houve base de comparação.
+# A referência do MRR é a própria lista, com o mesmo mínimo de linhas; sem ela
+# (lista pequena, ou SDK sem `pontuar_base` do tenant), ninguém é promovido.
+# O grupo da régua sem referência cai em `classify_criticality`, como hoje.
+#
+# O contrato de saída não muda de forma: `origem_da_regua` continua sendo
+# `base_do_tenant` (posição contra a própria base) ou `padrao_global`
+# (referência do treino, ou nenhuma). Entram dois campos novos:
+# `risco_decidido_por` ("modelo" | "regra") e `posicao_na_base` (0..1 ou None).
+
+FAIXA_GRAVE_PCT = 10
+FAIXA_PREOCUPANTE_PCT = 20
+FAIXA_VALOR_PCT = 20
+MINIMO_LINHAS_POSICAO = MINIMO_LINHAS_REGUA_DA_BASE
+DECIDIDO_MODELO = "modelo"
+DECIDIDO_REGRA = "regra"
+
+# A referência do score do modelo por tenant, da última `pontuar_base` NESTE
+# processo — o que o caminho do SDK usa para posicionar um evento sozinho (D4).
+# Mesma classe de memória de `_ultimo_calculo_da_regua`: zera no reinício.
+_referencia_do_score: dict = {}
+# A referência do MRR por tenant, da mesma `pontuar_base`, para a promoção pelo
+# valor no SDK.
+_referencia_do_mrr: dict = {}
+
+
+def posicao_pelo_modelo_ativa() -> bool:
+    """A posição pelo score vale para o modelo de contrato v3.
+
+    O modelo legado (o candidato v2) foi treinado no rótulo da própria régua e
+    reproduz a escala absoluta dela (correlação 0,9974 com `risk_regra`): nele
+    os cortes fixos de `classify_criticality` continuam fazendo sentido, e o
+    comportamento de antes fica como estava."""
+    return modelo_ativo() and _rs._contrato == _rs.CONTRATO_V3
+
+
+def faixas_de_posicao(tenant_id: str | None = None) -> tuple:
+    """(X, Y) em pontos percentuais. A `configuracao_tenant` é criada pela
+    Etapa 2 e ainda não existe; enquanto isso, o padrão em código."""
+    return FAIXA_GRAVE_PCT, FAIXA_PREOCUPANTE_PCT
+
+
+def posicao_no_score(score: float, referencia) -> float:
+    """Fração da referência ESTRITAMENTE abaixo de `score` (0..1).
+
+    Estrita de propósito: com empate, o cliente fica com a posição mais baixa
+    do empate — a afirmação mais fraca, como `_interpolar` faz na régua."""
+    ref = np.asarray(referencia, dtype=float)
+    if ref.size == 0:
+        return 0.0
+    return float(np.searchsorted(ref, float(score), side="left") / ref.size)
+
+
+def mrr_no_topo(posicao_mrr: float | None) -> bool:
+    """O MRR está entre os FAIXA_VALOR_PCT% maiores da base?"""
+    return posicao_mrr is not None and posicao_mrr >= 1 - FAIXA_VALOR_PCT / 100
+
+
+def criticidade_por_posicao(posicao: float | None, dias, uso,
+                            faixas: tuple = (FAIXA_GRAVE_PCT, FAIXA_PREOCUPANTE_PCT),
+                            posicao_mrr: float | None = None) -> str:
+    """grave/preocupante pela posição do score, SEMPRE com sinal absoluto.
+
+    A porta de valor só promove preocupante a grave, e só com o MRR no topo
+    FAIXA_VALOR_PCT% da base (`posicao_mrr`). Sem posição (sem referência):
+    ninguém é grave nem preocupante."""
+    grave_pct, preocupante_pct = faixas
+    if posicao is None or not sinal_absoluto_de_desengajamento(dias, uso):
+        return "padrao"
+    if posicao >= 1 - grave_pct / 100:
+        return "critico"
+    if posicao >= 1 - (grave_pct + preocupante_pct) / 100:
+        return "critico" if mrr_no_topo(posicao_mrr) else "alto"
+    return "padrao"
+
+
+def foi_promovido_pelo_valor(posicao: float | None, dias, uso, faixas: tuple,
+                             posicao_mrr: float | None) -> bool:
+    """Grave por causa da porta de valor (e não da posição do score)?"""
+    grave_pct, _ = faixas
+    return (criticidade_por_posicao(posicao, dias, uso, faixas, posicao_mrr) == "critico"
+            and posicao < 1 - grave_pct / 100)
+
+
+def referencia_de_mrr(clientes: list[dict]):
+    """Os MRR da lista, ordenados, se houver pelo menos MINIMO_LINHAS_POSICAO."""
+    valores = sorted(v for v in (mrr_utilizavel(c.get("mrr")) for c in clientes)
+                     if v is not None)
+    return valores if len(valores) >= MINIMO_LINHAS_POSICAO else None
+
+
+def _posicao_do_mrr(mrr, referencia) -> float | None:
+    valor = mrr_utilizavel(mrr)
+    if referencia is None or valor is None:
+        return None
+    return posicao_no_score(valor, referencia)
+
+
+def referencia_do_meta():
+    """Os quantis do score no holdout de treino, do meta de produção, ou None."""
+    import json
+
+    try:
+        with open(_rs.MODELO_META_PATH, encoding="utf-8") as f:
+            quantis = json.load(f).get("referencia_score_quantis")
+    except Exception:                             # noqa: BLE001 - sem meta, sem referência
+        return None
+    if not isinstance(quantis, list) or len(quantis) < 2:
+        return None
+    try:
+        return sorted(float(q) for q in quantis)
+    except (TypeError, ValueError):
+        return None
+
+
+def referencia_para_evento(tenant_id: str | None) -> tuple:
+    """(referência, origem) para posicionar UM evento do SDK (D4)."""
+    ref = _referencia_do_score.get(tenant_id)
+    if ref:
+        return ref, REGUA_BASE
+    ref = referencia_do_meta()
+    return (ref, REGUA_GLOBAL) if ref else (None, REGUA_GLOBAL)
+
+
+def _props_do_cliente(cliente: dict) -> dict:
+    """As props do risco, sem chave com None (a régua não aceita None)."""
+    campos = ("days_since_last", "features_used_30d", "mrr", *colunas_comportamentais_v3())
+    return {c: cliente.get(c) for c in campos if cliente.get(c) is not None}
+
+
+def _explicar_pelo_modelo(cliente: dict, posicao, criticality: str, faixas: tuple,
+                          idioma: str = "pt", promovido: bool = False) -> str:
+    """A frase da linha que o modelo posicionou: os números, a posição e, se
+    for o caso, por que o topo da lista não virou alarme."""
+    dias, uso = cliente.get("days_since_last"), cliente.get("features_used_30d")
+    partes = []
+    if dias is not None:
+        d = _inteiro_se_der(dias)
+        partes.append(_f("acessou_hoje", idioma) if d == 0
+                      else _f("sem_login", idioma).format(d=d, s="s" if d != 1 else ""))
+    else:
+        partes.append(_f("dias_desc_modelo", idioma))
+    if uso is not None:
+        u = _inteiro_se_der(uso)
+        partes.append(_f("uso_n", idioma).format(u=u, s="s" if u != 1 else ""))
+    else:
+        partes.append(_f("uso_desc_modelo", idioma))
+    partes.append(_f("mrr", idioma).format(v=_reais(cliente.get("mrr"), idioma)))
+    texto = ", ".join(partes)
+
+    grave_pct, preocupante_pct = faixas
+    if posicao is None:
+        return texto + " — " + _f("pos_sem_ref", idioma)
+    no_topo = posicao >= 1 - (grave_pct + preocupante_pct) / 100
+    if posicao >= 1 - grave_pct / 100:
+        texto += " — " + _f("pos_grave", idioma).format(x=_inteiro_se_der(grave_pct))
+    elif no_topo:
+        texto += " — " + _f("pos_preocupante", idioma).format(
+            x=_inteiro_se_der(grave_pct + preocupante_pct))
+    else:
+        texto += " — " + _f("pos_fora", idioma).format(
+            x=_inteiro_se_der(grave_pct + preocupante_pct))
+    if promovido:
+        return texto + _f("promovido_valor", idioma).format(x=_inteiro_se_der(FAIXA_VALOR_PCT))
+    if no_topo and not sinal_absoluto_de_desengajamento(dias, uso):
+        return texto + _frase_sem_sinal_absoluto(dias, uso, idioma)
+    return texto
+
+
+def pontuar_lista(clientes: list[dict], idioma: str = "pt", tenant_id: str | None = None,
+                  regua: dict | None = None) -> list[dict]:
+    """Uma linha do ranking por cliente, NA ORDEM de entrada (quem ordena é
+    `ordenar`).
+
+    Sem modelo v3 ativo: exatamente o de antes — `pontuar_cliente` com a régua
+    da lista (`regua`, ou `regua_da_base(clientes)`); com o modelo legado
+    ativo, também o de antes (ver `posicao_pelo_modelo_ativa`).
+
+    Com o modelo v3 ativo: risco por `decidir_risco` e criticidade pela posição
+    (ver o bloco acima). Com `tenant_id` (a base importada do tenant), a
+    referência do score dos clientes que o modelo decidiu é guardada para o
+    SDK daquele tenant.
+    """
+    if not posicao_pelo_modelo_ativa():
+        if regua is None:
+            regua = regua_da_base(clientes)
+        return [pontuar_cliente(c, regua, idioma) for c in clientes]
+
+    faixas = faixas_de_posicao(tenant_id)
+    decisoes = []
+    for c in clientes:
+        if c.get("days_since_last") is None and c.get("features_used_30d") is None:
+            decisoes.append(None)
+            continue
+        risco, por_modelo, _ = decidir_risco(EVENTO_DADO_ESTATICO, _props_do_cliente(c))
+        decisoes.append((risco, por_modelo))
+
+    ref_mrr = referencia_de_mrr(clientes)
+    if ref_mrr is not None and tenant_id is not None:
+        _referencia_do_mrr[tenant_id] = ref_mrr
+
+    referencias = {}
+    for por_modelo in (True, False):
+        scores = sorted(d[0] for d in decisoes if d is not None and d[1] == por_modelo)
+        if len(scores) >= MINIMO_LINHAS_POSICAO:
+            referencias[por_modelo] = (scores, REGUA_BASE)
+            if por_modelo and tenant_id is not None:
+                _referencia_do_score[tenant_id] = scores
+        elif por_modelo:
+            ref = referencia_do_meta()
+            referencias[por_modelo] = (ref, REGUA_GLOBAL)
+        else:
+            referencias[por_modelo] = (None, REGUA_GLOBAL)
+
+    linhas = []
+    for c, d in zip(clientes, decisoes):
+        dias, uso, mrr = c.get("days_since_last"), c.get("features_used_30d"), c.get("mrr")
+        linha = {
+            "customer_id_externo": c["customer_id_externo"],
+            "mrr": mrr,
+            "billing_profile": c.get("billing_profile"),
+            "days_since_last": dias,
+            "features_used_30d": uso,
+            "email": c.get("email"),
+            "importado_em": c.get("importado_em"),
+        }
+        if d is None:
+            linhas.append({**linha, "risk_score": None, "criticality": CRITICIDADE_SEM_DADO,
+                           "explicacao": explicar(c, None, CRITICIDADE_SEM_DADO, None, idioma),
+                           "origem_da_regua": REGUA_GLOBAL, "risco_decidido_por": None,
+                           "posicao_na_base": None})
+            continue
+        risco, por_modelo = d
+        ref, origem = referencias[por_modelo]
+        pos_mrr = _posicao_do_mrr(mrr, ref_mrr)
+        if por_modelo:
+            pos = posicao_no_score(risco, ref) if ref else None
+            crit = criticidade_por_posicao(pos, dias, uso, faixas, pos_mrr)
+            explicacao = _explicar_pelo_modelo(
+                c, pos, crit, faixas, idioma,
+                promovido=foi_promovido_pelo_valor(pos, dias, uso, faixas, pos_mrr))
+        elif ref:
+            pos = posicao_no_score(risco, ref)
+            crit = criticidade_por_posicao(pos, dias, uso, faixas, pos_mrr)
+            explicacao = explicar(c, risco, crit, None, idioma)
+        else:
+            pos = None
+            crit = classify_criticality(risco, mrr)
+            explicacao = explicar(c, risco, crit, None, idioma)
+        linhas.append({**linha, "risk_score": risco, "criticality": crit,
+                       "explicacao": explicacao, "origem_da_regua": origem,
+                       "risco_decidido_por": DECIDIDO_MODELO if por_modelo else DECIDIDO_REGRA,
+                       "posicao_na_base": None if pos is None else round(pos, 4)})
+    return linhas
+
+
+def criticidade_do_evento(tenant_id: str | None, risco: float, mrr, dias, uso,
+                          decidido_pelo_modelo: bool) -> dict:
+    """A criticidade de UM evento do SDK (D4).
+
+    Régua decidiu: `classify_criticality(risco, mrr)`, como sempre. Modelo
+    decidiu: posição contra a referência do tenant (última `pontuar_base`) ou,
+    sem ela, contra os quantis do treino gravados no meta; sem nenhuma, ninguém
+    é grave nem preocupante. A promoção pelo valor usa a referência de MRR do
+    tenant (última `pontuar_base`); sem ela, não promove. Devolve
+    `criticality`, `posicao_na_base`, `origem_da_posicao` e `mrr_no_topo`."""
+    if not decidido_pelo_modelo or _rs._contrato != _rs.CONTRATO_V3:
+        return {"criticality": classify_criticality(risco, mrr), "posicao_na_base": None,
+                "origem_da_posicao": None, "mrr_no_topo": None}
+    ref, origem = referencia_para_evento(tenant_id)
+    pos = posicao_no_score(risco, ref) if ref else None
+    pos_mrr = _posicao_do_mrr(mrr, _referencia_do_mrr.get(tenant_id))
+    return {"criticality": criticidade_por_posicao(pos, dias, uso,
+                                                   faixas_de_posicao(tenant_id), pos_mrr),
+            "posicao_na_base": None if pos is None else round(pos, 4),
+            "origem_da_posicao": origem if ref else None,
+            "mrr_no_topo": None if pos_mrr is None else mrr_no_topo(pos_mrr)}

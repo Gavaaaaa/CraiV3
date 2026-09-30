@@ -39,6 +39,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from anthropic import AsyncAnthropic
 
 from .state import ChurnVoluntaryState
+from . import batch_scoring
 from . import retention_log as trilha
 from .risk_scorer import (
     EVENTO_DADO_ESTATICO,
@@ -152,7 +153,14 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     avaliacao = avaliar_risco(state["event"], state["props"])
     risk = avaliacao["risco"]
     profile = classify_profile(state["props"])
-    criticality = classify_criticality(risk, state["props"].get("mrr"))
+    # Com o modelo decidindo, a criticidade sai da posição do score na base do
+    # tenant (promoção v3, Bloco 2, D4); com a régua, `classify_criticality`
+    # como sempre.
+    _props = state["props"] if isinstance(state.get("props"), dict) else {}
+    posicionamento = batch_scoring.criticidade_do_evento(
+        state.get("tenant_id"), risk, _props.get("mrr"), _props.get("days_since_last"),
+        _props.get("features_used_30d"), avaliacao["modelo"] != trilha.MODELO_REGRA)
+    criticality = posicionamento["criticality"]
     print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} "
           f"| perfil: {profile} | criticidade: {criticality}")
     # Trilha do Art. 20: a decisão de risco, com as features que ela viu —
@@ -165,6 +173,12 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         saida["regra"] = REGRA_DE_RISCO
         if avaliacao["motivo_da_regra"]:
             saida["motivo_da_regra"] = avaliacao["motivo_da_regra"]
+    else:
+        # Aninhado de propósito: `frase_da_decisao` pula dict na frase (não há
+        # rótulo para posição em `retention_log`), e o JSON da trilha guarda.
+        saida["posicao"] = {"na_base": posicionamento["posicao_na_base"],
+                            "referencia": posicionamento["origem_da_posicao"],
+                            "mrr_no_topo": posicionamento["mrr_no_topo"]}
     dec = trilha.decisao(
         state.get("tenant_id"), state["user_id"], trilha.DOMINIO_VOLUNTARIO,
         trilha.TIPO_RISCO, modelo, modelo_versao=versao,
