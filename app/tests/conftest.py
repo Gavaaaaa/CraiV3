@@ -229,6 +229,20 @@ def checkpoint_do_involuntario_limpo():
 
 
 @pytest.fixture(autouse=True)
+def relogio_desligado(monkeypatch):
+    """O relógio do serviço (`crai/api/relogio.py`) DESLIGADO em todo teste.
+
+    Todo `with TestClient(app)` roda o `lifespan`, e o `lifespan` liga o
+    relógio: sem isto, cada teste que abre o cliente ganharia uma tarefa de
+    fundo disparando tentativas e mandando mensagem pelo relógio REAL, no meio
+    do que o teste mede — e o resultado passaria a depender de quanto tempo o
+    teste levou. Os testes do próprio relógio ligam a env de propósito, e o
+    subprocesso dos testes de dois processos herda o `0` pelo ambiente.
+    """
+    monkeypatch.setenv("CRAI_RELOGIO", "0")
+
+
+@pytest.fixture(autouse=True)
 def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     """Redireciona o log de ciclos de retenção para `tmp_path` em cada teste.
 

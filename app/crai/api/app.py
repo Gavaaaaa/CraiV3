@@ -76,6 +76,7 @@ from .idempotencia import (
     chave_do_evento,
 )
 from . import clientes as clientes_api
+from . import relogio
 from . import titular as titular_api
 from ..security.webhook_verification import (
     verify_stripe_signature,
@@ -86,8 +87,11 @@ from ..security.webhook_verification import (
 
 logger = logging.getLogger(__name__)
 
+# `lifespan`: o relógio do serviço (Etapa 2, Bloco 1) — a tarefa de fundo que
+# dispara as tentativas 2 e 3 e varre os ciclos. Ver `api/relogio.py`.
 app = FastAPI(title="CRAI", version="2.0.0",
-              description="Agente autônomo de recuperação de receita — churn involuntário + voluntário")
+              description="Agente autônomo de recuperação de receita — churn involuntário + voluntário",
+              lifespan=relogio.ciclo_de_vida)
 
 
 def _json_representavel(valor):
@@ -909,7 +913,10 @@ async def metricas_de_recuperacao(desde: Optional[str] = None,
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "crai-agent-v2"}
+    """Sinal de vida, e o estado do relógio: sem ele, um ciclo parado em
+    `recobrando` não se distingue de um relógio que não está rodando."""
+    return {"status": "ok", "service": "crai-agent-v2",
+            "relogio": relogio.estado_para_health()}
 
 
 # ── Self-service (empresa autenticada via Supabase) ───────────────────────
