@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from crai.agent.main_agent import crai_agent
 from crai.api import app as app_module
 from crai.churn_voluntary.offer_bandit import TENANT_PADRAO as TENANT_PADRAO_VOLUNTARIO
-from crai.dunning import retry_state
+from crai.dunning import ciclo_cobranca, retry_state
 
 VALOR = 299.90
 TENANT_PADRAO = "default_tenant"
@@ -226,12 +226,15 @@ class TestFechamentoDeCicloAtribuido:
         assert resultado["ciclo"] == "recuperado"
         assert resultado["tenant_id"] == "empresa_dona"
 
-    def test_confirmacao_de_outro_tenant_nao_reatribui_a_recuperacao(self, cliente):
-        """Quem rodou a recuperação foi o tenant do ciclo — e o fee é dele.
+    def test_confirmacao_de_outro_tenant_nao_fecha_o_ciclo_de_ninguem(self, cliente, caplog):
+        """Uma confirmação declarando outro tenant ou é erro de integração do
+        cliente ou é tentativa de atribuição indevida.
 
-        Uma confirmação declarando outro tenant ou é erro de integração do
-        cliente ou é tentativa de atribuição indevida. Nos dois casos a
-        atribuição segue o ciclo.
+        Até a Etapa 2 ela fechava o ciclo da empresa dona (a busca caía em
+        "qualquer tenant") e a resposta devolvia à intrusa o `tenant_id` e o
+        `ciclo_id` da dona. Agora (Etapa 2, 0.5): a confirmação só fala de
+        ciclos do tenant que ela declara — fica sem ciclo, fee zero, WARNING
+        sem identificador da outra empresa, e o ciclo da dona continua aberto.
         """
         rec = "RN_s4_intruso"
         falha = _corpo(rec, f"E_{rec}_falha")
@@ -239,11 +242,19 @@ class TestFechamentoDeCicloAtribuido:
                      headers={**_assinar(falha), "x-tenant-id": "empresa_dona"})
 
         pago = _corpo(rec, f"E_{rec}_pago", evento="automatic_pix.charge_paid")
-        resultado = cliente.post("/webhooks/pix-automatico", content=pago,
-                                 headers={**_assinar(pago), "x-tenant-id": "empresa_intrusa"}).json()
+        with caplog.at_level("WARNING"):
+            resultado = cliente.post(
+                "/webhooks/pix-automatico", content=pago,
+                headers={**_assinar(pago), "x-tenant-id": "empresa_intrusa"}).json()
 
-        assert resultado["tenant_id"] == "empresa_dona", (
-            "a recuperação foi reatribuída ao tenant que mandou a confirmação")
+        assert resultado["ciclo"] == "sem_ciclo_aberto" and resultado["fee"] == 0.0
+        assert "empresa_dona" not in json.dumps(resultado), (
+            "a resposta à intrusa carregou o tenant da dona")
+        assert "ciclo_id" not in resultado
+        assert any("outro tenant" in r.getMessage() for r in caplog.records)
+        dono = ciclo_cobranca.ciclos_do_mandato("empresa_dona", rec)
+        assert [c["estado"] for c in dono] == [ciclo_cobranca.RECOBRANDO], (
+            "o ciclo da dona foi fechado por uma confirmação de outra empresa")
 
 
 class TestOComportamentoNaoMudaPorTenant:

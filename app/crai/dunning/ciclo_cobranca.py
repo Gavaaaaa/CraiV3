@@ -129,6 +129,29 @@ _COLUNA_DA_TRANSICAO = {
     DESCARTADO: "descartado_em",
 }
 
+# ── Os quatro status da tela (Etapa 2, R10) ──────────────────────────────
+# O dashboard não mostra os estados internos: mostra quatro status, e NENHUM
+# ciclo some — perdido e descartado aparecem como "encerrado sem recuperação".
+# `recobrando` se divide em dois pela existência de tentativa EXECUTADA (a que
+# saiu para o PSP ou tem resultado de execução, R2): sem nenhuma, o ciclo está
+# "em análise"; com uma, "em processo". A tabela abaixo é a fonte única das
+# duas traduções — `status_da_tela` (Python) e `_sql_status` (SQL, para filtrar
+# e paginar no banco) —, e um teste compara as duas sobre todos os estados.
+STATUS_EM_ANALISE = "em_analise"
+STATUS_EM_PROCESSO = "em_processo"
+STATUS_RECUPERADO = "recuperado"
+STATUS_ENCERRADO = "encerrado_sem_recuperacao"
+STATUS_DA_TELA = (STATUS_EM_ANALISE, STATUS_EM_PROCESSO, STATUS_RECUPERADO, STATUS_ENCERRADO)
+
+# Estados cujo status não depende das tentativas. `recobrando` fica de fora de
+# propósito: é o único que depende.
+_STATUS_POR_ESTADO = {
+    MENSAGEM_ENVIADA: STATUS_EM_PROCESSO,
+    RECUPERADO: STATUS_RECUPERADO,
+    PERDIDO: STATUS_ENCERRADO,
+    DESCARTADO: STATUS_ENCERRADO,
+}
+
 # ── Resultados de uma tentativa ──────────────────────────────────────────
 PENDENTE = "pendente"        # agendada, ou disparada e ainda sem resultado
 PAGA = "paga"
@@ -231,6 +254,9 @@ CREATE TABLE IF NOT EXISTS ciclos_cobranca (
 );
 CREATE INDEX IF NOT EXISTS idx_ciclo_mandato
     ON ciclos_cobranca (tenant_id, id_recorrencia, estado);
+-- Etapa 2, Bloco 2: a listagem do dashboard, paginada por (atualizado_em, id).
+CREATE INDEX IF NOT EXISTS idx_ciclo_tenant_atualizado
+    ON ciclos_cobranca (tenant_id, atualizado_em, id);
 
 CREATE TABLE IF NOT EXISTS tentativas_cobranca (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1091,7 +1117,8 @@ def ciclo_para_confirmacao(tenant_id: Optional[str], id_recorrencia: str,
     meio oferecido, com a janela do BACEN já fechada, e isso ainda é
     recuperação. Sem ciclo aberto, devolve o ciclo FECHADO mais recente do
     mandato, se houver, para o chamador dizer o que aconteceu (`perdido`,
-    `recuperado`, `descartado`) em vez de "sem ciclo".
+    `recuperado`, `descartado`) em vez de "sem ciclo". Sempre DENTRO do
+    tenant declarado: nenhum ciclo de outra empresa é devolvido (Etapa 2).
     """
     tenant = tenant_id or TENANT_PADRAO
     if id_cobranca:
@@ -1107,21 +1134,31 @@ def ciclo_para_confirmacao(tenant_id: Optional[str], id_recorrencia: str,
     ciclos = ciclos_do_mandato(tenant, id_recorrencia)
     if ciclos:
         return ciclos[0]
-    # A confirmação declarou um tenant que não tem ciclo deste mandato: ou é
-    # erro de integração do cliente, ou tentativa de atribuição indevida. O
-    # ciclo aberto do mandato em QUALQUER tenant é devolvido, e quem chama
-    # atribui a recuperação ao tenant DO CICLO (e loga a divergência) — a
-    # mesma regra de antes da Etapa 1, quando o checkpoint era por mandato.
+    # O tenant declarado não tem ciclo deste mandato. Até a Etapa 2 o ciclo
+    # aberto do mandato em QUALQUER tenant era devolvido aqui, e quem chamava
+    # atribuía a recuperação ao tenant do ciclo — e respondia a quem chamou
+    # com o `tenant_id` e o `ciclo_id` de outra empresa (diagnóstico de
+    # 29/09/2026, seção 1.4, ponto 11). Isso sai antes da API key: uma
+    # confirmação só fala dos ciclos do tenant que ela declara. Se existe
+    # ciclo aberto do mesmo mandato em OUTRO tenant, é erro de integração ou
+    # tentativa de atribuição indevida — fica no log, com a contagem e sem
+    # nenhum identificador da outra empresa, e a confirmação segue como
+    # "sem ciclo".
     conn = _conectar()
     try:
         marcas = ", ".join("?" * len(ESTADOS_ABERTOS))
-        return _linha(conn.execute(
-            f"""SELECT * FROM ciclos_cobranca
-                 WHERE id_recorrencia = ? AND estado IN ({marcas})
-              ORDER BY id DESC LIMIT 1""",
-            (str(id_recorrencia), *ESTADOS_ABERTOS)).fetchone())
+        outros = conn.execute(
+            f"""SELECT COUNT(*) FROM ciclos_cobranca
+                 WHERE id_recorrencia = ? AND tenant_id <> ? AND estado IN ({marcas})""",
+            (str(id_recorrencia), tenant, *ESTADOS_ABERTOS)).fetchone()[0]
     finally:
         conn.close()
+    if outros:
+        logger.warning("[CICLO] Confirmação do mandato %s declarou o tenant %r, que não tem "
+                       "ciclo dele; há %d ciclo(s) aberto(s) do mesmo mandato em outro tenant. "
+                       "Nada é atribuído entre empresas: a confirmação fica sem ciclo.",
+                       id_recorrencia, tenant, outros)
+    return None
 
 
 def fechar_como_recuperado(ciclo_id: int, fee: float, agora: Optional[datetime] = None,
@@ -1191,6 +1228,151 @@ def ciclos_recuperados_desde(limite: datetime) -> list[dict]:
              ORDER BY id""", (RECUPERADO, _iso(limite)))]
     finally:
         conn.close()
+
+
+# ── Leitura para o dashboard (Etapa 2, Bloco 2) ──────────────────────────
+#
+# Toda leitura aqui é POR TENANT, sem exceção: `ciclo_por_id` e
+# `tentativas_do_ciclo` não filtram tenant (são chamadas por dentro), e uma
+# rota que recebe `ciclo_id` de fora usa `ciclo_do_tenant`. Ciclo de outro
+# tenant e ciclo inexistente são o mesmo `None` — é assim que a rota responde
+# o mesmo 404 aos dois (R12).
+
+def status_da_tela(estado: str, tem_tentativa_executada: bool) -> str:
+    """O status R10 de um ciclo. `tem_tentativa_executada` só importa em
+    `recobrando`. Estado desconhecido levanta: um estado novo sem status é um
+    ciclo que sumiria da tela."""
+    if estado == RECOBRANDO:
+        return STATUS_EM_PROCESSO if tem_tentativa_executada else STATUS_EM_ANALISE
+    try:
+        return _STATUS_POR_ESTADO[estado]
+    except KeyError:
+        raise ValueError(f"estado sem status de tela: {estado!r}") from None
+
+
+def _sql_tentativa_executada(alias: str = "c") -> str:
+    marcas = ", ".join(repr(r) for r in sorted(RESULTADOS_EXECUTADOS))
+    return (f"EXISTS (SELECT 1 FROM tentativas_cobranca t WHERE t.ciclo_id = {alias}.id "
+            f"AND (t.disparada_em IS NOT NULL OR t.resultado IN ({marcas})))")
+
+
+def _sql_status(alias: str = "c") -> str:
+    """A mesma tabela de `status_da_tela`, como expressão SQL."""
+    ramos = [f"WHEN {alias}.estado = {RECOBRANDO!r} THEN CASE WHEN "
+             f"{_sql_tentativa_executada(alias)} THEN {STATUS_EM_PROCESSO!r} "
+             f"ELSE {STATUS_EM_ANALISE!r} END"]
+    ramos += [f"WHEN {alias}.estado = {estado!r} THEN {status!r}"
+              for estado, status in _STATUS_POR_ESTADO.items()]
+    return f"(CASE {' '.join(ramos)} END)"
+
+
+def _com_leitura(linha: dict) -> dict:
+    """Uma linha de ciclo com `status` e `tentativas_executadas`, já calculados."""
+    d = dict(linha)
+    d["tentativas_executadas"] = int(d.get("tentativas_executadas") or 0)
+    return d
+
+
+_SELECT_DE_LEITURA = f"""
+    SELECT c.*, {_sql_status()} AS status,
+           (SELECT COUNT(*) FROM tentativas_cobranca t
+             WHERE t.ciclo_id = c.id AND (t.disparada_em IS NOT NULL OR t.resultado IN
+                   ({", ".join(repr(r) for r in sorted(RESULTADOS_EXECUTADOS))})))
+               AS tentativas_executadas
+      FROM ciclos_cobranca c"""
+
+
+def ciclo_do_tenant(tenant_id: str, ciclo_id: int) -> Optional[dict]:
+    """O ciclo `ciclo_id` SE for deste tenant, com `status`; senão None."""
+    conn = _conectar()
+    try:
+        linha = conn.execute(f"{_SELECT_DE_LEITURA} WHERE c.tenant_id = ? AND c.id = ?",
+                             (tenant_id, int(ciclo_id))).fetchone()
+        return _com_leitura(linha) if linha is not None else None
+    finally:
+        conn.close()
+
+
+def listar_ciclos(tenant_id: str, status: Optional[list] = None,
+                  desde: Optional[datetime] = None, ate: Optional[datetime] = None,
+                  texto: Optional[str] = None, cursor: Optional[tuple] = None,
+                  limite: int = 50) -> list[dict]:
+    """Os ciclos DESTE tenant, do mais recentemente atualizado para o mais
+    antigo, com `status` e `tentativas_executadas`.
+
+    `status`: códigos de `STATUS_DA_TELA`. `desde`/`ate`: sobre `aberto_em`
+    (hora local, como gravado), `ate` exclusivo. `texto`: prefixo do
+    `id_recorrencia` ou o `id_cobranca_original` exato — sem `LIKE '%x%'`
+    varrendo a tabela. `cursor`: `(atualizado_em, id)` da última linha da
+    página anterior. Devolve até `limite` linhas; quem pagina pede uma a mais.
+    """
+    filtros, params = ["c.tenant_id = ?"], [tenant_id]
+    if status:
+        desconhecidos = set(status) - set(STATUS_DA_TELA)
+        if desconhecidos:
+            raise ValueError(f"status desconhecido: {sorted(desconhecidos)}")
+        filtros.append(f"{_sql_status()} IN ({', '.join('?' * len(status))})")
+        params += list(status)
+    if desde is not None:
+        filtros.append("c.aberto_em >= ?")
+        params.append(_iso(desde))
+    if ate is not None:
+        filtros.append("c.aberto_em < ?")
+        params.append(_iso(ate))
+    if texto:
+        # `!` como caractere de escape: `%` e `_` do texto são literais.
+        prefixo = texto.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        filtros.append("(c.id_recorrencia LIKE ? ESCAPE '!' OR c.id_cobranca_original = ?)")
+        params += [prefixo + "%", texto]
+    if cursor is not None:
+        atualizado_em, ultimo_id = cursor
+        filtros.append("(c.atualizado_em < ? OR (c.atualizado_em = ? AND c.id < ?))")
+        params += [atualizado_em, atualizado_em, int(ultimo_id)]
+    conn = _conectar()
+    try:
+        return [_com_leitura(l) for l in conn.execute(
+            f"""{_SELECT_DE_LEITURA} WHERE {' AND '.join(filtros)}
+             ORDER BY c.atualizado_em DESC, c.id DESC LIMIT ?""",
+            (*params, int(limite)))]
+    finally:
+        conn.close()
+
+
+def ciclos_com_desfecho(tenant_id: str, inicio: datetime, fim: datetime) -> list[dict]:
+    """Ciclos DESTE tenant com desfecho (recuperado, perdido, descartado) em
+    [inicio, fim), hora local. Cada um com `desfecho_em`. É a base das
+    métricas do mês e da série: taxa de recuperação sobre quem TEM desfecho
+    (D-E2-9) — ciclo ainda aberto não entra no denominador."""
+    conn = _conectar()
+    try:
+        linhas = conn.execute(
+            """SELECT c.id, c.estado, c.valor, c.fee,
+                      COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) AS desfecho_em
+                 FROM ciclos_cobranca c
+                WHERE c.tenant_id = ? AND c.estado IN (?, ?, ?)
+                  AND COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) >= ?
+                  AND COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) < ?
+             ORDER BY desfecho_em, c.id""",
+            (tenant_id, RECUPERADO, PERDIDO, DESCARTADO, _iso(inicio), _iso(fim))).fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        conn.close()
+
+
+def contagem_por_status(tenant_id: str, inicio: datetime, fim: datetime) -> dict:
+    """{status: quantos} dos ciclos DESTE tenant ABERTOS em [inicio, fim).
+    Os quatro status sempre presentes, com zero quando não há."""
+    conn = _conectar()
+    try:
+        linhas = conn.execute(
+            f"""SELECT {_sql_status()} AS status, COUNT(*) AS n FROM ciclos_cobranca c
+                 WHERE c.tenant_id = ? AND c.aberto_em >= ? AND c.aberto_em < ?
+              GROUP BY 1""", (tenant_id, _iso(inicio), _iso(fim))).fetchall()
+    finally:
+        conn.close()
+    contagem = {s: 0 for s in STATUS_DA_TELA}
+    contagem.update({l["status"]: int(l["n"]) for l in linhas})
+    return contagem
 
 
 # ── Deduplicação de webhook (1.2) ────────────────────────────────────────

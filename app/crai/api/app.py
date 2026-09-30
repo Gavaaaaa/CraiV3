@@ -75,6 +75,7 @@ from .idempotencia import (
     EVENTOS_DE_FALHA,
     chave_do_evento,
 )
+from . import ciclos as ciclos_api
 from . import clientes as clientes_api
 from . import relogio
 from . import titular as titular_api
@@ -422,7 +423,9 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
     # persistente desde a Etapa 1: um reenvio depois de reinício também para
     # aqui. `persistido` diz se a resposta veio do banco ou da memória do
     # processo (fallback por banco indisponível — ver B2-a abaixo).
-    chave = chave_do_evento(evento["id_recorrencia"], evento["e2e_id"])
+    # O TENANT faz parte da chave (Etapa 2, 0.5): dois inquilinos com o mesmo
+    # par de ids são dois eventos, e o do segundo não é descartado como reenvio.
+    chave = chave_do_evento(tenant_id, evento["id_recorrencia"], evento["e2e_id"])
     novo, persistido = EVENTOS_DE_FALHA.registrar_se_novo_detalhado(chave)
     if not novo:
         logger.info("[PIX] Cobrança falhada reenviada (recorrencia=%s, e2e=%s) — "
@@ -931,6 +934,8 @@ app.include_router(clientes_api.router)
 # O direito à explicação (LGPD Art. 20) para a CONTROLADORA — `api/titular.py`.
 # Autenticada por tenant; não existe rota pública para o titular.
 app.include_router(titular_api.router)
+# A aba do involuntário no dashboard (Etapa 2, Bloco 2) — `api/ciclos.py`.
+app.include_router(ciclos_api.router)
 
 
 @app.post("/clientes/importar")
@@ -1374,7 +1379,7 @@ async def _confirmar_cobranca_paga(evento: dict, tenant_id: str = TENANT_PADRAO)
         # Mesma política do C.2 e do B2-a: uma confirmação perdida é fee
         # perdida. 503 para o PSP reenviar, e a chave de deduplicação da
         # confirmação é esquecida para o reenvio contar.
-        chave = chave_do_evento(customer_id, evento["e2e_id"] or "e2e_desconhecido")
+        chave = chave_do_evento(tenant_id, customer_id, evento["e2e_id"] or "e2e_desconhecido")
         CICLOS_FECHADOS.esquecer(chave)
         logger.error("[PIX] FALHA de persistência ao fechar o ciclo (recorrencia=%s): %s — 503",
                      customer_id, e)
@@ -1463,7 +1468,8 @@ async def _fechar_ciclo_recuperado(
         ja_recuperado, ciclo_perdido, ciclo_descartado} e o `fee` contado.
     """
     # (a) Idempotência da confirmação: o mesmo e2e_id não conta fee duas vezes.
-    if not CICLOS_FECHADOS.registrar_se_novo(chave_do_evento(customer_id, e2e_id)):
+    # Com o tenant na chave, como a falha (Etapa 2, 0.5).
+    if not CICLOS_FECHADOS.registrar_se_novo(chave_do_evento(tenant_id, customer_id, e2e_id)):
         logger.info("[PIX] Confirmação reenviada (%s / %s) — fee não recontado.",
                     customer_id, e2e_id[:16])
         return {"ciclo": "reenvio", "fee": 0.0}
@@ -1478,16 +1484,9 @@ async def _fechar_ciclo_recuperado(
         if ciclo is None:
             return await _fechar_pela_linha_do_dataset(customer_id, e2e_id, valor, tenant_id, agora)
 
-        # O tenant AUTORITATIVO é o do ciclo, não o do evento de confirmação:
-        # quem rodou a recuperação foi aquele, e é a ele que o resultado é
-        # atribuído. A divergência fica registrada.
+        # O ciclo é sempre do tenant declarado: `ciclo_para_confirmacao` não
+        # procura mais em outras empresas (Etapa 2, 0.5).
         tenant_do_ciclo = ciclo["tenant_id"]
-        if tenant_id != TENANT_PADRAO and tenant_id != tenant_do_ciclo:
-            logger.warning(
-                "[PIX] Confirmação de %s declarou tenant %r, mas o ciclo foi "
-                "aberto por %r — atribuindo ao tenant do ciclo.",
-                customer_id, tenant_id, tenant_do_ciclo,
-            )
 
         if ciclo["estado"] == ciclo_cobranca.RECUPERADO:
             logger.info("[PIX] Ciclo %s de %s já constava como recuperado — "

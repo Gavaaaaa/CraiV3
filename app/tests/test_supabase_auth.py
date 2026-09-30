@@ -325,7 +325,9 @@ class TestWebhooksIntocados:
         # `/metrics` entrou aqui quando `/metrics/recovery` passou a tirar o
         # tenant do token em vez da query — é dado de negócio da empresa
         # autenticada, e só dela.
-        SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics")
+        # `/ciclos` entrou na Etapa 2 (Bloco 2): a aba do involuntário lê os
+        # ciclos da empresa do token, e só dela.
+        SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")
