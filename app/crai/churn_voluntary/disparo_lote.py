@@ -103,7 +103,7 @@ def _normalizar(bruto: dict) -> tuple[dict | None, str | None]:
             return None
         return f if f >= 0 and f == f else None
 
-    return {
+    cliente = {
         "customer_id_externo": cid.strip(),
         "mrr": mrr,
         "billing_profile": perfil_ok,
@@ -112,7 +112,14 @@ def _normalizar(bruto: dict) -> tuple[dict | None, str | None]:
         "email": bruto.get("email") if isinstance(bruto.get("email"), str) else None,
         "phone": bruto.get("phone"),
         "on_site_now": bool(bruto.get("on_site_now", False)),
-    }, None
+    }
+    # As colunas comportamentais do contrato v3, quando a linha as traz
+    # (promoção v3, Bloco 3). Só entram as numéricas; o risco decide o resto.
+    for coluna in colunas_comportamentais_v3():
+        valor = _num_ou_none(bruto.get(coluna))
+        if valor is not None:
+            cliente[coluna] = valor
+    return cliente, None
 
 
 def preparar(clientes: list[dict] | None, tenant_id: str) -> tuple[list[dict], list[dict], str]:

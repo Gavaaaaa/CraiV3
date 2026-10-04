@@ -281,3 +281,98 @@ treinar com eles — que é exatamente o que o §2 descreve.
 - [ ] Salvar `.joblib` + `_meta.json` em `crai/models/` (§5.1)
 - [ ] Revisitar os cortes 0.60 e 0.90 para a nova escala (§5.5)
 - [ ] `pytest tests/ -q` e `python test_pipeline.py` verdes
+
+---
+
+## 8. O modelo v3 (promoção de 30/09/2026)
+
+Os §§1-7 descrevem o encaixe original e o treino com **desfecho real**, que
+continua sendo o caminho de longo prazo. Esta seção registra o que existe desde a
+promoção do voluntário v3: um modelo treinado em **dado sintético com rótulo
+latente** (`docs/interno/RELATORIO_TREINO_V3_BLOCO*.md`), que o `risk_scorer`
+carrega por um contrato próprio.
+
+### 8.1 O contrato v3
+
+`carregar_modelo()` aceita dois contratos, e só esses (`risk_scorer.contrato_do_meta`):
+
+| contrato | o meta declara | vetor |
+|---|---|---|
+| legado | `features` == `FEATURES_DE_RISCO`, sem `contrato` e sem `features_versao` | o de sempre; ausente vira 0.0 |
+| v3 | `contrato: "v3"`, `features_versao: 1`, `features` == `FEATURES_DE_RISCO_V3` (`crai/ml/voluntario_v3.py`, 15 colunas) | ausente vira **NaN** |
+
+As 15 colunas do v3 são as 6 de `FEATURES_DE_RISCO` mais 9 comportamentais:
+`tenure_days`, `seats`, `logins_7d`, `logins_30d`, `avg_session_min`,
+`api_calls_7d`, `tickets_30d`, `failed_pay_90d`, `nps_last`. Com o v3 ativo, o
+modelo decide sempre que houver `days_since_last` ou `features_used_30d`
+(`N_MINIMO_COLUNAS_COMPORTAMENTAIS = 0`); sem os dois, a régua decide e a trilha
+do Art. 20 registra o motivo (`motivo_da_regra`). Quando o modelo decide, a
+trilha recebe as 3 maiores contribuições do TreeSHAP (`explicacao_v3.py`).
+
+### 8.2 Promover e reverter
+
+De dentro de `app/`:
+
+```
+python -m crai.scripts.promover_voluntario_v3 --promover
+python -m crai.scripts.promover_voluntario_v3 --reverter
+```
+
+O `--promover` copia `models/v3/voluntary_risk_v3.joblib` para `MODELO_PATH` e
+grava `MODELO_META_PATH` com `contrato: "v3"` e `referencia_score_quantis` (os
+quantis do score no holdout, que o `batch_scoring` usa para posicionar listas
+pequenas). Ele recusa se já houver modelo de produção. O `--reverter` move os
+dois arquivos para `models/historico/` e a régua volta. Os dois valem a partir do
+próximo reinício do processo (o carregamento é cacheado).
+
+**Trava:** com o v3 em produção, `VoluntaryRiskModel.ativar()` e
+`train_all --ativar-voluntario` **recusam**. Copiar o candidato v2 por cima
+trocaria o modelo de produção sem aviso. Para voltar ao candidato, rode antes o
+`--reverter`.
+
+### 8.3 O que o v3 mede, e a correção de um número
+
+| comparação (holdout por cliente da base v3) | modelo v3 | melhor régua | vantagem |
+|---|---|---|---|
+| todas as 15 colunas | 0,6929 | 0,6156 | 0,0773 |
+| só o vetor de produção de hoje (as 6 colunas), evento real | 0,6377 | 0,6156 | **0,0221** |
+| só as 6 colunas, evento fixo "Session Started" (o do lote) | 0,6329 | 0,6063 | 0,0266 |
+
+**Correção:** um relatório anterior citou 0,0164 como a vantagem "só com o vetor
+que a produção recebe hoje". 0,0164 é a vantagem do cenário (b) do treino v3, que
+também esconde `features_used_30d` e as flags de evento. O vetor de produção (as
+6 colunas de `FEATURES_DE_RISCO`) dá **0,6377, vantagem de 0,0221**. Números
+completos em `docs/evidencia_v3/metricas_v3.json`.
+
+**O rótulo é sintético e foi desenhado pelo projeto.** A vantagem do v3 é
+medida contra o próprio gerador, e não diz nada sobre churn observado. O caminho
+dos §§2-7, treinar com desfecho real de `ciclos_retencao`, continua sendo o
+único que mede isso. Limites declarados em `docs/LIMITACOES.md`.
+
+### 8.4 Regenerar o artefato (ele não vai para o git)
+
+O `.joblib` promovido **não entra no repositório**: o repositório é público, e um
+`.joblib` executa código ao ser carregado (pickle). `app/models/` e `app/data/` são
+ignorados pelo git. Num clone limpo, a sequência abaixo, de dentro de `app/`,
+regenera tudo. Ela foi conferida de ponta a ponta numa pasta temporária em 30/09/2026,
+com numpy 1.26.4, pandas 2.2.3 e scikit-learn 1.5.2 (`requirements.txt`).
+
+```
+python -m crai.scripts.gerar_bases_v2 --seed 42 --out data/v2/
+python -m crai.scripts.gerar_base_v3_voluntario --seed 42 --out data/v3/
+python -m crai.scripts.treinar_voluntario_v3 --base data/v3/ --out models/v3/
+python -m crai.scripts.promover_voluntario_v3 --promover
+```
+
+O que conferir:
+
+| etapa | o que deve bater |
+|---|---|
+| base v2 | o `hash_canonico` de cada tabela no `data/v2/MANIFESTO.json` igual ao de `docs/base-v2/HASH_CANONICO.json` (populacao `1cd4a2d65ef8ba28...`, voluntario `d60d3f9ac9da87de...`, e as outras três). O **sha256 do arquivo** muda de ambiente para ambiente e não serve para conferir a v2 |
+| base v3 | `data/v3/voluntario_v3.parquet` com sha256 `d33be11ee7fd93f6b3c278bc2ebd4d025b1f037a9015b1be523a28661ff7c397` e `hash_canonico` `2ef77ec8b25f7ee079b0aa1d1b181d9b0217a3ea045041a5927eaf436593a7aa` |
+| modelo | `models/v3/voluntary_risk_v3.joblib` com sha256 `b4ee00fd823f1e11b15b585c1d0525ffaffe31bb4f9cd1333c7f026cc11cfe7d`; o `--promover` imprime o mesmo início (`b4ee00fd823f1e11`) para `models/voluntary_risk.joblib` |
+| métricas | `models/v3/train_metrics_v3.json`: AUC do cenário (a) 0,6929, teto 0,7832 |
+
+Com outras versões de biblioteca, os sha256 da v3 e do joblib podem mudar. Nesse caso
+vale o `hash_canonico` da v3 e as métricas do treino. O `--promover` confere sozinho
+que a base é a do treino que gerou o modelo.

@@ -1,0 +1,188 @@
+{
+  "gerado_em": "2026-09-30T19:17:59",
+  "gerado_por": "docs/interno/antes_depois_promocao_v3.py",
+  "artefato": {
+    "joblib": "app/models/v3/voluntary_risk_v3.joblib",
+    "joblib_sha256": "b4ee00fd823f1e11b15b585c1d0525ffaffe31bb4f9cd1333c7f026cc11cfe7d",
+    "base_sha256": "d33be11ee7fd93f6b3c278bc2ebd4d025b1f037a9015b1be523a28661ff7c397"
+  },
+  "rotulo": "sintetico, latente, desenhado pelo projeto (Bloco 0 do treino v3); NAO e churn observado",
+  "antes": "regua (fixa no SDK, por percentil no lote)",
+  "depois": "modelo v3 (HistGradientBoosting, 15 features, contrato v3)",
+  "holdout_completo": {
+    "linhas": 24061,
+    "teto_bayes": 0.7832,
+    "antes_regua_fixa": 0.6074,
+    "antes_regua_percentil": 0.6156,
+    "depois_modelo_v3": 0.6929,
+    "vantagem_sobre_a_melhor_regua": 0.0773
+  },
+  "so_as_6_colunas_antigas": {
+    "evento_real": {
+      "antes_regua_fixa": 0.6074,
+      "antes_regua_percentil": 0.6156,
+      "depois_modelo_v3": 0.6377,
+      "vantagem_sobre_a_melhor_regua": 0.0221,
+      "nada_piora": true
+    },
+    "evento_sessao": {
+      "antes_regua_fixa": 0.6,
+      "antes_regua_percentil": 0.6063,
+      "depois_modelo_v3": 0.6329,
+      "vantagem_sobre_a_melhor_regua": 0.0266,
+      "nada_piora": true
+    }
+  },
+  "d1_groupkfold_n_zero": {
+    "evento_real": {
+      "modelo": {
+        "media": 0.6465,
+        "desvio": 0.0109,
+        "por_dobra": [
+          0.6337,
+          0.6578,
+          0.6371,
+          0.6477,
+          0.6564
+        ]
+      },
+      "regua_fixa": {
+        "media": 0.6146,
+        "desvio": 0.0049,
+        "por_dobra": [
+          0.6098,
+          0.6206,
+          0.6115,
+          0.6121,
+          0.619
+        ]
+      },
+      "regua_percentil": {
+        "media": 0.6197,
+        "desvio": 0.0053,
+        "por_dobra": [
+          0.6146,
+          0.6268,
+          0.6166,
+          0.6238,
+          0.6168
+        ]
+      },
+      "melhor_regua": "regua_percentil",
+      "vantagem": 0.0268,
+      "desvio_exigido": 0.0109,
+      "criterio_satisfeito": true
+    },
+    "evento_sessao": {
+      "modelo": {
+        "media": 0.6396,
+        "desvio": 0.0086,
+        "por_dobra": [
+          0.6314,
+          0.6482,
+          0.6303,
+          0.6405,
+          0.6476
+        ]
+      },
+      "regua_fixa": {
+        "media": 0.598,
+        "desvio": 0.0054,
+        "por_dobra": [
+          0.6016,
+          0.6019,
+          0.5889,
+          0.5974,
+          0.6004
+        ]
+      },
+      "regua_percentil": {
+        "media": 0.6035,
+        "desvio": 0.0064,
+        "por_dobra": [
+          0.6065,
+          0.6081,
+          0.5947,
+          0.6092,
+          0.5988
+        ]
+      },
+      "melhor_regua": "regua_percentil",
+      "vantagem": 0.0361,
+      "desvio_exigido": 0.0086,
+      "criterio_satisfeito": true
+    }
+  },
+  "n_minimo_colunas_comportamentais": 0,
+  "treino_v3_groupkfold": {
+    "candidato": {
+      "por_dobra": [
+        0.6954,
+        0.6988,
+        0.6817,
+        0.7098,
+        0.6975
+      ],
+      "media": 0.6966,
+      "desvio": 0.01
+    },
+    "regua_fixa": {
+      "por_dobra": [
+        0.6098,
+        0.6206,
+        0.6115,
+        0.6121,
+        0.619
+      ],
+      "media": 0.6146,
+      "desvio": 0.0049
+    },
+    "regua_percentil": {
+      "por_dobra": [
+        0.6146,
+        0.6268,
+        0.6166,
+        0.6238,
+        0.6168
+      ],
+      "media": 0.6197,
+      "desvio": 0.0053
+    }
+  },
+  "treino_v3_criterio": {
+    "declarado": "No GroupKFold 5 sobre o treino, cenario (a): media_candidato - media_regua > max(desvio_candidato, desvio_regua), onde regua e a MELHOR das duas (fixa ou por percentil) pela media. Declarado antes do treino. Satisfazer o criterio NAO promove nada: promover e decisao de quem le o relatorio.",
+    "regua_comparada": "percentil",
+    "media_candidato": 0.6966,
+    "media_regua": 0.6197,
+    "diferenca": 0.0769,
+    "desvio_exigido": 0.01,
+    "desvio_das_diferencas_pareadas": 0.0083,
+    "satisfeito": true,
+    "promovido": false
+  },
+  "experimentos_0_1": {
+    "sem_interacao": {
+      "teto_holdout": 0.7775,
+      "candidato_a": 0.6857,
+      "regua_fixa_a": 0.6075,
+      "regua_percentil_a": 0.6168,
+      "vantagem_a": 0.0689,
+      "groupkfold_diferenca": 0.0831,
+      "groupkfold_desvio_exigido": 0.0106,
+      "criterio_satisfeito": true,
+      "shap_evento_cancelamento": 0.00421
+    },
+    "intencao_forte": {
+      "teto_holdout": 0.7832,
+      "candidato_a": 0.7002,
+      "regua_fixa_a": 0.6335,
+      "regua_percentil_a": 0.6378,
+      "vantagem_a": 0.0624,
+      "groupkfold_diferenca": 0.059,
+      "groupkfold_desvio_exigido": 0.0101,
+      "criterio_satisfeito": true,
+      "shap_evento_cancelamento": 0.07117
+    }
+  },
+  "correcao_premissa_0_0164": "0,0164 e a vantagem do cenario (b) do treino v3 (sem features_used_30d e sem as flags de evento). O vetor de producao (as 6 colunas de FEATURES_DE_RISCO) com o modelo v3 da 0,6377 no holdout, vantagem de 0,0221 sobre a melhor regua (docs/interno/medicao_promocao_v3_0_3.txt, N = 0)."
+}

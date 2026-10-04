@@ -72,7 +72,18 @@ _modelo_consultado = False
 #            de produção, gravado pela promoção, declara.
 CONTRATO_LEGADO = "legado"
 CONTRATO_V3 = "v3"
-_contrato = CONTRATO_LEGADO
+# O contrato mora NO PRÓPRIO OBJETO carregado (atributo `_crai_contrato`,
+# gravado por `carregar_modelo`), e não num global ao lado de `_modelo`: um
+# global separado pode se descolar do modelo — foi o que a suíte mostrou no
+# Bloco 3, com testes que restauram `_modelo` sem saber do contrato e deixavam
+# o v3 carregado sendo lido como legado. Modelo injetado direto em `_modelo`
+# (sem passar por `carregar_modelo`) é legado.
+_ATRIBUTO_CONTRATO = "_crai_contrato"
+
+
+def contrato_ativo() -> str:
+    """O contrato do modelo carregado agora (legado se não houver)."""
+    return getattr(_modelo, _ATRIBUTO_CONTRATO, CONTRATO_LEGADO)
 
 # "Dado suficiente" para o modelo v3 decidir (D1): pelo menos uma das duas
 # colunas que a régua lê E pelo menos este número das colunas comportamentais
@@ -157,14 +168,13 @@ def carregar_modelo(forcar: bool = False) -> bool:
     modelo novo sem reiniciar, igual ao `load()` do classificador e do
     autoencoder. `forcar=True` existe para os testes.
     """
-    global _modelo, _modelo_consultado, _contrato
+    global _modelo, _modelo_consultado
 
     if _modelo_consultado and not forcar:
         return _modelo is not None
 
     _modelo_consultado = True
     _modelo = None
-    _contrato = CONTRATO_LEGADO
 
     if not MODELO_PATH.exists():
         # Silencioso: é o estado normal do projeto hoje, e um aviso a cada
@@ -189,8 +199,9 @@ def carregar_modelo(forcar: bool = False) -> bool:
                   f"plausível e errado.")
             return False
 
-        _modelo = joblib.load(MODELO_PATH)
-        _contrato = contrato
+        modelo = joblib.load(MODELO_PATH)
+        setattr(modelo, _ATRIBUTO_CONTRATO, contrato)
+        _modelo = modelo
         print(f"[RISK-VOL] Modelo de risco carregado de {MODELO_PATH} "
               f"({meta.get('algoritmo', 'algoritmo não declarado')}, "
               f"treinado em {meta.get('treinado_em', 'data não declarada')})")
@@ -310,7 +321,8 @@ def _dado_suficiente_v3(props: dict) -> bool:
 
 
 def _vetor_do_contrato(event: str, props: dict) -> list:
-    return _vetor_v3(event, props) if _contrato == CONTRATO_V3 else _vetor_de_features(event, props)
+    return (_vetor_v3(event, props) if contrato_ativo() == CONTRATO_V3
+            else _vetor_de_features(event, props))
 
 
 def _decidir(event: str, props: dict) -> tuple:
@@ -320,7 +332,7 @@ def _decidir(event: str, props: dict) -> tuple:
     se não). Contrato v3: o modelo só decide com dado suficiente (D1); sem ele,
     a régua decide e o motivo vai para a trilha.
     """
-    if carregar_modelo() and _contrato == CONTRATO_V3 and not _dado_suficiente_v3(props):
+    if carregar_modelo() and contrato_ativo() == CONTRATO_V3 and not _dado_suficiente_v3(props):
         return _risco_por_regras(event, props), False, MOTIVO_SEM_DADO_PARA_O_MODELO
     risco = _risco_do_modelo(event, props)
     if risco is not None:
@@ -342,7 +354,7 @@ def decidir_risco(event: str, props: dict) -> tuple:
 def entradas_comportamentais(props: dict) -> dict:
     """As colunas comportamentais do v3 presentes em `props`, para as entradas
     da trilha. Vazio sem modelo v3 ativo: o registro legado não muda."""
-    if _modelo is None or _contrato != CONTRATO_V3 or not isinstance(props, dict):
+    if _modelo is None or contrato_ativo() != CONTRATO_V3 or not isinstance(props, dict):
         return {}
     saida = {}
     for c in colunas_comportamentais_v3():
@@ -368,13 +380,13 @@ def avaliar_risco(event: str, props: dict) -> dict:
     else:
         modelo, versao = "regra", None
     contribuicoes = None
-    if por_modelo and _contrato == CONTRATO_V3:
+    if por_modelo and contrato_ativo() == CONTRATO_V3:
         from .explicacao_v3 import contribuicoes_shap
         contribuicoes = contribuicoes_shap(_modelo, _features_v3()[0],
                                            _vetor_v3(event, props), event)
     return {"risco": risco, "modelo": modelo, "modelo_versao": versao,
             "motivo_da_regra": motivo, "contribuicoes": contribuicoes,
-            "contrato": _contrato if por_modelo else None}
+            "contrato": contrato_ativo() if por_modelo else None}
 
 
 def calculate_risk(event: str, props: dict) -> float:
@@ -397,7 +409,7 @@ EVENTO_DADO_ESTATICO = "Session Started"
 
 
 def risco_por_features(days_since_last=None, features_used_30d=None, mrr=None,
-                       event: str | None = None) -> float:
+                       event: str | None = None, comportamentais: dict | None = None) -> float:
     """O MESMO risco de `calculate_risk`, sem exigir um evento pontual.
 
     Para a base importada (Sprint 3): a linha da planilha não é um evento de
@@ -410,8 +422,16 @@ def risco_por_features(days_since_last=None, features_used_30d=None, mrr=None,
     0.0, que é "sem risco nenhum", não "não sei avaliar". Quem chama com os
     dois ausentes tem que decidir ANTES se quer um número: `batch_scoring`
     não chama, e marca a linha como `dado_insuficiente`.
+
+    `comportamentais` (promoção v3, Bloco 3): as colunas do contrato v3 que a
+    linha trouxer (logins, chamados, NPS...). Só o modelo v3 as lê; a régua e
+    o contrato legado as ignoram, então sem modelo v3 o número não muda.
+    Ausente (None) continua ausente.
     """
     props = {}
+    for chave, valor in (comportamentais or {}).items():
+        if valor is not None:
+            props[chave] = valor
     if days_since_last is not None:
         props["days_since_last"] = days_since_last
     if features_used_30d is not None:

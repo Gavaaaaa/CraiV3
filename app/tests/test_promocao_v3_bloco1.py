@@ -54,7 +54,6 @@ def isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "MODELO_META_PATH", tmp_path / "voluntary_risk_meta.json")
     monkeypatch.setattr(rs, "_modelo", None)
     monkeypatch.setattr(rs, "_modelo_consultado", False)
-    monkeypatch.setattr(rs, "_contrato", rs.CONTRATO_LEGADO)
     monkeypatch.setattr(ob, "MODELS_DIR", tmp_path)
     monkeypatch.setattr(ob, "STATE_PATH", tmp_path / "bandit_state.json")
     return tmp_path
@@ -76,7 +75,7 @@ def _instalar(meta, joblib_de=V3 / "voluntary_risk_v3.joblib"):
 @pytest.fixture
 def v3_ativo():
     assert _instalar(_meta_v3()) is True
-    assert rs._contrato == rs.CONTRATO_V3
+    assert rs.contrato_ativo() == rs.CONTRATO_V3
 
 
 class TestContratoVersionado:
@@ -232,3 +231,19 @@ class TestTrilha:
         assert risco["tipo_decisao"] == "risco"
         assert risco["modelo"] == rs.NOME_DO_MODELO and risco["contribuicoes"]
         assert "regra" not in risco["saida"]
+
+
+class TestContratoNaoSeDescolaDoModelo:
+    """Bloco 3: o contrato mora no objeto carregado. Um teste antigo que troca
+    e restaura `_modelo` (sem saber do contrato) não pode deixar o v3 sendo
+    lido como legado, nem um modelo injetado ser lido como v3."""
+
+    def test_v3_restaurado_continua_v3_e_injetado_e_legado(self, v3_ativo):
+        v3 = rs._modelo
+        rs._modelo = object()                      # o que os testes antigos injetam
+        assert rs.contrato_ativo() == rs.CONTRATO_LEGADO
+        rs._modelo = v3                            # o que o monkeypatch restaura
+        assert rs.contrato_ativo() == rs.CONTRATO_V3
+
+    def test_sem_modelo_e_legado(self):
+        assert rs._modelo is None and rs.contrato_ativo() == rs.CONTRATO_LEGADO

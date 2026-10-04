@@ -354,7 +354,11 @@ def pontuar_cliente(cliente: dict, regua: dict | None = None,
         risk = risco_por_posicao(dias, uso, regua)
         crit = classify_criticality(risk, mrr, dias, uso)
     else:
-        risk = risco_por_features(dias, uso, mrr)
+        # Com modelo ativo, as colunas comportamentais da linha vão junto
+        # (promoção v3, Bloco 3); sem modelo a régua não as lê, e não se
+        # importa o contrato v3 à toa.
+        comportamentais = _comportamentais_da_linha(cliente) if modelo_ativo() else None
+        risk = risco_por_features(dias, uso, mrr, comportamentais=comportamentais)
         crit = classify_criticality(risk, mrr)
 
     return {
@@ -494,7 +498,7 @@ def posicao_pelo_modelo_ativa() -> bool:
     reproduz a escala absoluta dela (correlação 0,9974 com `risk_regra`): nele
     os cortes fixos de `classify_criticality` continuam fazendo sentido, e o
     comportamento de antes fica como estava."""
-    return modelo_ativo() and _rs._contrato == _rs.CONTRATO_V3
+    return modelo_ativo() and _rs.contrato_ativo() == _rs.CONTRATO_V3
 
 
 def faixas_de_posicao(tenant_id: str | None = None) -> tuple:
@@ -583,6 +587,12 @@ def referencia_para_evento(tenant_id: str | None) -> tuple:
         return ref, REGUA_BASE
     ref = referencia_do_meta()
     return (ref, REGUA_GLOBAL) if ref else (None, REGUA_GLOBAL)
+
+
+def _comportamentais_da_linha(cliente: dict) -> dict:
+    """As colunas comportamentais do contrato v3 presentes na linha."""
+    return {c: cliente.get(c) for c in colunas_comportamentais_v3()
+            if cliente.get(c) is not None}
 
 
 def _props_do_cliente(cliente: dict) -> dict:
@@ -686,6 +696,9 @@ def pontuar_lista(clientes: list[dict], idioma: str = "pt", tenant_id: str | Non
             "features_used_30d": uso,
             "email": c.get("email"),
             "importado_em": c.get("importado_em"),
+            # As colunas comportamentais presentes seguem na linha: o disparo
+            # recalcula o risco e o SHAP da trilha a partir dela.
+            **_comportamentais_da_linha(c),
         }
         if d is None:
             linhas.append({**linha, "risk_score": None, "criticality": CRITICIDADE_SEM_DADO,
@@ -727,7 +740,7 @@ def criticidade_do_evento(tenant_id: str | None, risco: float, mrr, dias, uso,
     é grave nem preocupante. A promoção pelo valor usa a referência de MRR do
     tenant (última `pontuar_base`); sem ela, não promove. Devolve
     `criticality`, `posicao_na_base`, `origem_da_posicao` e `mrr_no_topo`."""
-    if not decidido_pelo_modelo or _rs._contrato != _rs.CONTRATO_V3:
+    if not decidido_pelo_modelo or _rs.contrato_ativo() != _rs.CONTRATO_V3:
         return {"criticality": classify_criticality(risco, mrr), "posicao_na_base": None,
                 "origem_da_posicao": None, "mrr_no_topo": None}
     ref, origem = referencia_para_evento(tenant_id)

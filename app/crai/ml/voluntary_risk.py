@@ -236,6 +236,22 @@ class VoluntaryRiskModel:
         do processo — o scorer cacheia a ausência). Passo deliberadamente
         separado do treino.
         """
+        # TRAVA (promoção v3, Bloco 3, D8): com o v3 promovido, copiar o
+        # candidato por cima trocaria o modelo de produção pelo v2 sem aviso —
+        # e o contrato legado seria aceito. Voltar atrás é só pelo
+        # `promover_voluntario_v3 --reverter`, que guarda o v3 no histórico.
+        try:
+            with open(MODELO_META_PATH, encoding="utf-8") as f:
+                contrato_em_producao = json.load(f).get("contrato")
+        except (OSError, ValueError, AttributeError):
+            contrato_em_producao = None
+        if contrato_em_producao == "v3":
+            print("[RISK-VOL] ATIVACAO RECUSADA: o modelo de producao e o v3 (meta declara "
+                  "contrato 'v3'). Ativar o candidato substituiria o v3 pelo v2. Para voltar "
+                  "atras, use `python -m crai.scripts.promover_voluntario_v3 --reverter`; "
+                  "depois disso a ativacao volta a funcionar.")
+            return False
+
         origem = MODELS_DIR / f"{NOME_CANDIDATO}.joblib"
         origem_meta = MODELS_DIR / f"{NOME_CANDIDATO}_meta.json"
         if not origem.exists() or not origem_meta.exists():

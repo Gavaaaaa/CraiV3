@@ -428,7 +428,17 @@ class TestIsolamentoPorTenant:
 
 class TestPontosDeDecisao:
     @pytest.mark.asyncio
-    async def test_voluntario_risco_e_regra_com_contribuicoes_null_e_nomeia_a_regra(self):
+    async def test_voluntario_risco_e_regra_com_contribuicoes_null_e_nomeia_a_regra(
+            self, monkeypatch, tmp_path):
+        # A régua decide porque NÃO há modelo de produção: o teste aponta o
+        # modelo para uma pasta vazia, como `test_risk_pluggable.py`, e não
+        # depende do que estiver em `models/` (promoção v3, Bloco 3).
+        from crai.churn_voluntary import risk_scorer as rs
+        monkeypatch.setattr(rs, "MODELS_DIR", tmp_path)
+        monkeypatch.setattr(rs, "MODELO_PATH", tmp_path / "voluntary_risk.joblib")
+        monkeypatch.setattr(rs, "MODELO_META_PATH", tmp_path / "voluntary_risk_meta.json")
+        monkeypatch.setattr(rs, "_modelo", None)
+        monkeypatch.setattr(rs, "_modelo_consultado", False)
         s = await va.assess_risk(_estado_voluntario_sujo())
         (d,) = s["decisoes"]
         assert d["dominio"] == "voluntario" and d["tipo_decisao"] == "risco"
@@ -507,7 +517,17 @@ class TestPontosDeDecisao:
         assert "boleto" in oferta["explicacao"] and "WhatsApp" in canal["explicacao"]
 
     @pytest.mark.asyncio
-    async def test_lote_grava_risco_oferta_e_canal_por_cliente_numa_transacao(self):
+    async def test_lote_grava_risco_oferta_e_canal_por_cliente_numa_transacao(
+            self, monkeypatch, tmp_path):
+        # A régua decide porque NÃO há modelo de produção: o teste aponta o
+        # modelo para uma pasta vazia, como `test_risk_pluggable.py`, e não
+        # depende do que estiver em `models/` (promoção v3, Bloco 3).
+        from crai.churn_voluntary import risk_scorer as rs
+        monkeypatch.setattr(rs, "MODELS_DIR", tmp_path)
+        monkeypatch.setattr(rs, "MODELO_PATH", tmp_path / "voluntary_risk.joblib")
+        monkeypatch.setattr(rs, "MODELO_META_PATH", tmp_path / "voluntary_risk_meta.json")
+        monkeypatch.setattr(rs, "_modelo", None)
+        monkeypatch.setattr(rs, "_modelo_consultado", False)
         clientes = [
             {"customer_id_externo": f"c-{i}", "mrr": 300.0, "billing_profile": "CLT",
              "days_since_last": 45, "features_used_30d": 0, "phone": TELEFONE,

@@ -71,7 +71,6 @@ def isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "MODELO_META_PATH", tmp_path / "voluntary_risk_meta.json")
     monkeypatch.setattr(rs, "_modelo", None)
     monkeypatch.setattr(rs, "_modelo_consultado", False)
-    monkeypatch.setattr(rs, "_contrato", rs.CONTRATO_LEGADO)
     monkeypatch.setattr(bs, "_referencia_do_score", {})
     monkeypatch.setattr(ob, "MODELS_DIR", tmp_path)
     monkeypatch.setattr(ob, "STATE_PATH", tmp_path / "bandit_state.json")

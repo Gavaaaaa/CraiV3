@@ -190,6 +190,8 @@ mais recente.
 | `atualizado_em` | string ISO | não | `importado_em` (upload) ou `registrado_em` do último ciclo (sdk); é o que decide a fusão |
 | `evento` | string | sim | só na origem `sdk`: o último evento (`Cancellation Page Viewed`, `Downgrade Clicked`, `Session Started`) |
 | `origem_da_regua` | string | não | `base_do_tenant` \| `padrao_global` — qual régua mediu o risco (ver abaixo) |
+| `risco_decidido_por` | string | sim | `modelo` \| `regra` — quem decidiu o risco desta linha com o modelo v3 ativo; `null` em `dado_insuficiente`. **Só existe com o modelo v3 ativo** (ver "Com o modelo v3 ativo") |
+| `posicao_na_base` | number 0–1 (4 casas) | sim | fração da base da empresa com score **estritamente menor** que o deste cliente; `null` sem base de comparação ou em `dado_insuficiente`. **Só existe com o modelo v3 ativo** |
 
 **Criticidade** (`risk_scorer.classify_criticality`): duas portas independentes
 levam a `critico`. Por **risco**: `risk_score ≥ 0,90`. Por **valor**:
@@ -229,6 +231,35 @@ porquê:
 
 ```
 "sem login há 3 dias — acima de 75% da sua base, usa 9 funcionalidades nos últimos 30 dias — menos que 90% da sua base, MRR R$ 300,00 — primeiro da fila da sua base, mas sem sinal de abandono: entrou há menos de 7 dias e usa o produto"
+```
+
+**Com o modelo v3 ativo** (promoção do voluntário v3, 30/09/2026; decide o
+`risk_scorer` quando o meta de produção declara `contrato: "v3"`). O
+`risk_score` passa a ser a probabilidade do modelo, e a `criticality` sai da
+**posição** do cliente na base da empresa pelo score, não dos cortes 0,75/0,90:
+
+- `critico` (grave) — os 10 % de maior score;
+- `alto` (preocupante) — os 20 % seguintes; sobe para `critico` se o MRR do
+  cliente estiver entre os 20 % maiores da base (a porta de valor só
+  **promove**, nunca marca grave sozinha — por isso a fração de `critico` pode
+  passar de 10 %, com teto de 30 %);
+- `padrao` — o resto.
+
+Grave e preocupante exigem **sempre** o sinal absoluto de desengajamento acima.
+A base de comparação é a própria lista quando ela tem pelo menos 30 linhas; com
+menos, os quantis do score no treino gravados no meta de produção; sem nenhuma,
+ninguém é grave nem preocupante. Os dois campos novos aparecem só nesse modo:
+`risco_decidido_por` (`regra` quando o modelo estava ativo e falhou — a régua
+decide e a linha diz) e `posicao_na_base`. `origem_da_regua` continua com os
+dois valores de sempre: `base_do_tenant` quando a posição foi contra a própria
+base, `padrao_global` quando foi contra a referência do treino ou não houve
+referência. Sem o modelo v3 ativo, nada nesta seção vale e o contrato é o de
+sempre. Frases da `explicacao` nesse modo:
+
+```
+"sem login há 30 dias, usa 1 funcionalidade nos últimos 30 dias, MRR R$ 900,00 — entre os 10% de maior risco da sua base, pelo modelo"
+"sem login há 12 dias, usa 2 funcionalidades nos últimos 30 dias, MRR R$ 8.000,00 — entre os 30% de maior risco da sua base, pelo modelo — grave pelo valor da conta: tem risco e o MRR está entre os 20% maiores da sua base"
+"sem login há 2 dias, usa 5 funcionalidades nos últimos 30 dias, MRR R$ 900,00 — risco pelo modelo, sem base de comparação para posicionar"
 ```
 
 Para a tela: **ordene pelo `risk_score`, colora pela `criticality`**. Um
