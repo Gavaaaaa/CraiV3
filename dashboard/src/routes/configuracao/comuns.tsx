@@ -28,7 +28,7 @@ export function Bloco({ titulo, apoio, children, className }: { titulo: string; 
   )
 }
 
-export const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-[14px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none disabled:opacity-60'
+export const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none disabled:opacity-60'
 export const seletor = cx(campo, 'seletor')
 
 export function Rotulo({ children, apoio }: { children: ReactNode; apoio?: string }) {
@@ -45,7 +45,7 @@ export function Interruptor({ ligado, onChange, rotulo, apoio, disabled }: { lig
   return (
     <label className={cx('flex items-start justify-between gap-4 py-3', disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}>
       <span>
-        <span className="block text-[14px] text-paper">{rotulo}</span>
+        <span className="block text-apoio text-paper">{rotulo}</span>
         {apoio ? <span className="t-label block text-silver">{apoio}</span> : null}
       </span>
       <span className="relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center">
@@ -66,7 +66,7 @@ export function Aviso({ tom = 'neutro', children }: { tom?: 'neutro' | 'ok' | 'w
     danger: 'border-danger/40 bg-danger/[0.06] text-paper',
   }[tom]
   return (
-    <div role={tom === 'danger' || tom === 'warn' ? 'alert' : 'status'} className={cx('rounded-[10px] border px-3.5 py-2.5 text-[13.5px] leading-[1.5]', classes)}>
+    <div role={tom === 'danger' || tom === 'warn' ? 'alert' : 'status'} className={cx('rounded-[10px] border px-3.5 py-2.5 text-apoio leading-[1.5]', classes)}>
       {children}
     </div>
   )

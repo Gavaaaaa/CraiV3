@@ -59,7 +59,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
     onSimular({ nome: n, mensalidade: Math.round(valor * 100) / 100, perfil, verdade: { dias_ate_saldo: dias, chance_pagar: chance / 100, vai_revogar: revoga } })
   }
 
-  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-[14px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
+  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
 
   return (
     <form onSubmit={enviar} className="flex flex-col gap-5" aria-label="Cliente fictício">
@@ -93,7 +93,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
                 aria-checked={perfil === p.valor}
                 title={p.dica}
                 onClick={() => setPerfil(p.valor)}
-                className={cx('flex-1 rounded-[7px] py-1.5 text-[13px] font-[540] transition-colors', perfil === p.valor ? 'bg-paper text-ink' : 'text-silver hover:text-paper')}
+                className={cx('flex-1 rounded-[7px] py-1.5 text-rotulo font-[540] transition-colors', perfil === p.valor ? 'bg-paper text-ink' : 'text-silver hover:text-paper')}
               >
                 {p.rotulo}
               </button>
@@ -110,7 +110,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
           <Faixa rotulo="O dinheiro entra em" valor={dias === 0 ? 'já tem saldo' : `${dias} ${dias === 1 ? 'dia' : 'dias'}`} min={0} max={15} atual={dias} onChange={setDias} />
           <Faixa rotulo="Chance de pagar quando tem saldo" valor={`${chance}%`} min={0} max={100} passo={5} atual={chance} onChange={setChance} />
           <label className="flex cursor-pointer items-center justify-between gap-3">
-            <span className="text-[13.5px] text-paper">Vai revogar a autorização na 1ª tentativa</span>
+            <span className="text-apoio text-paper">Vai revogar a autorização na 1ª tentativa</span>
             <span className="relative inline-flex h-6 w-11 shrink-0 items-center">
               <input type="checkbox" checked={revoga} onChange={(e) => setRevoga(e.target.checked)} className="peer sr-only" />
               <span className="absolute inset-0 rounded-full bg-paper/[0.12] transition-colors peer-checked:bg-orange peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-amber" />
@@ -121,7 +121,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
       </fieldset>
 
       {erro ? (
-        <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-[13.5px] text-[#f5a29a]">
+        <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">
           {erro}
         </p>
       ) : null}
@@ -144,8 +144,8 @@ function Faixa({ rotulo, valor, min, max, passo = 1, atual, onChange }: { rotulo
   return (
     <label className="block">
       <span className="flex items-baseline justify-between gap-3">
-        <span className="text-[13.5px] text-paper">{rotulo}</span>
-        <span className="tabular text-[13.5px] font-[600] text-amber">{valor}</span>
+        <span className="text-apoio text-paper">{rotulo}</span>
+        <span className="tabular text-apoio font-[600] text-amber">{valor}</span>
       </span>
       <input
         type="range"

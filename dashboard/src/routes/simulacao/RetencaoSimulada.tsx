@@ -62,7 +62,7 @@ export function RetencaoSimulada() {
     setResultado(null)
   }
 
-  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-[14px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
+  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
   const faixa = resultado ? FAIXA[resultado.faixa] : null
 
   return (
@@ -88,7 +88,7 @@ export function RetencaoSimulada() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="t-label tracking-[0.08em] text-silver uppercase">Cliente em risco</div>
-              <div className="mt-0.5 text-[12px] text-muted">Churn voluntário · demonstração</div>
+              <div className="mt-0.5 text-rotulo text-muted">Churn voluntário · demonstração</div>
             </div>
             <Badge tone="amber">Dados fictícios</Badge>
           </div>
@@ -103,7 +103,7 @@ export function RetencaoSimulada() {
           </div>
           <div className="mt-6 flex flex-wrap items-center gap-2">
             {faixa ? (
-              <span className={cx('inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[12.5px] font-[520]', faixa.classe)}>
+              <span className={cx('inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-rotulo font-[520]', faixa.classe)}>
                 <span className={cx('h-1.5 w-1.5 rounded-full', faixa.ponto)} aria-hidden="true" />
                 {faixa.rotulo}
               </span>
@@ -125,12 +125,12 @@ export function RetencaoSimulada() {
               className={cx('w-full max-w-[460px] rounded-[14px] border p-4', resultado.aceitou ? 'border-ok/40 bg-ok/[0.06]' : 'border-danger/40 bg-danger/[0.06]')}
             >
               <div className="t-label text-silver">O que o sistema fez</div>
-              <div className="mt-1 text-[15px] font-[600] text-paper">
+              <div className="mt-1 text-normal font-[600] text-paper">
                 {OFERTA[resultado.oferta]} · por WhatsApp
               </div>
               <p className="t-apoio mt-1.5 text-silver">{resultado.porque}</p>
               <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-line pt-3">
-                <span className={cx('text-[15px] font-[640]', resultado.aceitou ? 'text-ok' : 'text-[#f08a80]')}>
+                <span className={cx('text-normal font-[640]', resultado.aceitou ? 'text-ok' : 'text-[#f08a80]')}>
                   {resultado.aceitou ? 'Cliente aceitou a oferta' : 'Cliente recusou a oferta'}
                 </span>
                 {resultado.aceitou ? <span className="tabular text-[17px] font-[680] text-paper">{fmt.brl(resultado.valor_mantido_liquido)} mantidos</span> : null}
@@ -159,10 +159,10 @@ export function RetencaoSimulada() {
               <h3 className="t-h3 text-paper">Como o sistema decidiu</h3>
               <p className="t-apoio mt-1 text-silver">Só com o que ele enxerga: os sinais de comportamento e o valor. A propensão escondida fica fora.</p>
             </div>
-            <ol className="flex flex-col gap-2 text-[13.5px] leading-[1.5]">
-              <li className="flex gap-2.5 text-silver"><span className="tabular text-[11px] text-muted">01</span>Faixa de risco pela régua: {faixa?.rotulo.toLowerCase()}. {resultado.motivo}</li>
-              <li className="flex gap-2.5 text-silver"><span className="tabular text-[11px] text-muted">02</span>{resultado.faixa === 'sem_risco' ? 'Sem risco: nenhuma oferta. Oferecer desconto a quem não ia sair só custa margem.' : `Oferta escolhida: ${OFERTA[resultado.oferta].toLowerCase()}. ${resultado.porque}`}</li>
-              <li className="flex gap-2.5 text-paper"><span className="tabular text-[11px] text-muted">03</span>{resultado.faixa === 'sem_risco' ? 'O cliente continua monitorado.' : resultado.aceitou ? 'A resposta veio da propensão escondida: aceitou. O valor entra no "Dinheiro mantido".' : 'A resposta veio da propensão escondida: recusou. O sistema registra e ajusta a próxima escolha.'}</li>
+            <ol className="flex flex-col gap-2 text-apoio leading-[1.5]">
+              <li className="flex gap-2.5 text-silver"><span className="tabular text-rotulo text-muted">01</span>Faixa de risco pela régua: {faixa?.rotulo.toLowerCase()}. {resultado.motivo}</li>
+              <li className="flex gap-2.5 text-silver"><span className="tabular text-rotulo text-muted">02</span>{resultado.faixa === 'sem_risco' ? 'Sem risco: nenhuma oferta. Oferecer desconto a quem não ia sair só custa margem.' : `Oferta escolhida: ${OFERTA[resultado.oferta].toLowerCase()}. ${resultado.porque}`}</li>
+              <li className="flex gap-2.5 text-paper"><span className="tabular text-rotulo text-muted">03</span>{resultado.faixa === 'sem_risco' ? 'O cliente continua monitorado.' : resultado.aceitou ? 'A resposta veio da propensão escondida: aceitou. O valor entra no "Dinheiro mantido".' : 'A resposta veio da propensão escondida: recusou. O sistema registra e ajusta a próxima escolha.'}</li>
             </ol>
             {cliente ? (
               <div className="rounded-[12px] border border-dashed border-amber/40 bg-amber/[0.04] p-3.5">
@@ -212,7 +212,7 @@ export function RetencaoSimulada() {
                     ['atraso', 'Pagou atrasado 2 vezes'],
                   ] as const
                 ).map(([k, r]) => (
-                  <label key={k} className="flex cursor-pointer items-center gap-3 rounded-[10px] border border-line bg-ink/30 px-3 py-2.5 text-[13.5px] text-paper has-[:checked]:border-orange/50">
+                  <label key={k} className="flex cursor-pointer items-center gap-3 rounded-[10px] border border-line bg-ink/30 px-3 py-2.5 text-apoio text-paper has-[:checked]:border-orange/50">
                     <input type="checkbox" checked={sinais[k]} onChange={(e) => setSinais({ ...sinais, [k]: e.target.checked })} className="h-4 w-4 accent-[#ef9311]" />
                     {r}
                   </label>
@@ -226,15 +226,15 @@ export function RetencaoSimulada() {
                 {OFERTAS.map((o) => (
                   <label key={o} className="block">
                     <span className="flex items-baseline justify-between gap-3">
-                      <span className="text-[13.5px] text-paper">{OFERTA[o]}</span>
-                      <span className="tabular text-[13.5px] font-[600] text-amber">{propensao[o]}%</span>
+                      <span className="text-apoio text-paper">{OFERTA[o]}</span>
+                      <span className="tabular text-apoio font-[600] text-amber">{propensao[o]}%</span>
                     </span>
                     <input type="range" min={0} max={100} step={5} value={propensao[o]} onChange={(e) => setPropensao({ ...propensao, [o]: Number(e.target.value) })} className="mt-1.5 w-full accent-[#ef9311]" />
                   </label>
                 ))}
               </div>
             </fieldset>
-            {erro ? <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-[13.5px] text-[#f5a29a]">{erro}</p> : null}
+            {erro ? <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">{erro}</p> : null}
             <Button type="submit" disabled={ocupado} className="w-full">
               {ocupado ? 'Avaliando…' : 'Criar cliente em risco'}
             </Button>

@@ -110,6 +110,47 @@ describe('token de desenvolvimento', () => {
     expect(chamadas[chamadas.length - 1].autorizacao).toBe('Bearer tok-2')
   })
 
+  it('o plano essencial vai no pedido do token; o premium, que é o padrão, não', async () => {
+    const chamadas = backendFalso([])
+    const http = await carregarHttp()
+    expect(http.planoDev()).toBe('premium')
+    await http.chamar('GET', '/integracao/chaves')
+    http.definirPlanoDev('essencial')
+    expect(http.planoDev()).toBe('essencial')
+    await http.chamar('GET', '/integracao/chaves')
+    const pedidos = chamadas.filter((c) => c.url.endsWith('/dev/token'))
+    expect(pedidos.map((c) => JSON.parse(c.corpo ?? '{}'))).toEqual([{ papel: 'owner' }, { papel: 'owner', plano: 'essencial' }])
+    expect(chamadas[chamadas.length - 1].autorizacao).toBe('Bearer tok-2')
+  })
+
+  it('a empresa dos testes ao vivo vai no pedido do token; a da demonstração, que é o padrão, não', async () => {
+    const chamadas = backendFalso([])
+    const http = await carregarHttp()
+    expect(http.empresaDev()).toBe('demo_dashboard')
+    await http.chamar('GET', '/ciclos')
+    http.definirEmpresaDev('demo_testes')
+    expect(http.empresaDev()).toBe('demo_testes')
+    await http.chamar('GET', '/ciclos')
+    http.definirPlanoDev('essencial')
+    await http.chamar('GET', '/ciclos')
+    const pedidos = chamadas.filter((c) => c.url.endsWith('/dev/token'))
+    expect(pedidos.map((c) => JSON.parse(c.corpo ?? '{}'))).toEqual([
+      { papel: 'owner' },
+      { papel: 'owner', empresa: 'demo_testes' },
+      { papel: 'owner', plano: 'essencial', empresa: 'demo_testes' },
+    ])
+    // Trocar a empresa esquece o token: o da outra empresa nunca é reaproveitado.
+    expect(chamadas[chamadas.length - 1].autorizacao).toBe('Bearer tok-3')
+  })
+
+  it('DELETE vai com o token e sem corpo', async () => {
+    const chamadas = backendFalso([{ status: 200, corpo: { chave: {}, ja_estava_revogada: false } }])
+    const http = await carregarHttp()
+    await http.chamar('DELETE', '/integracao/chaves/chv_1')
+    const ultima = chamadas[chamadas.length - 1]
+    expect([ultima.metodo, ultima.url, ultima.autorizacao, ultima.corpo]).toEqual(['DELETE', `${BASE}/integracao/chaves/chv_1`, 'Bearer tok-1', null])
+  })
+
   it('rota pública não pede nem manda token', async () => {
     const chamadas = backendFalso([{ status: 200, corpo: { status: 'ok' } }])
     const http = await carregarHttp()
@@ -154,6 +195,19 @@ describe('erros', () => {
     expect(erro.codigo).toBe('sem_permissao')
     expect(erro.message).toBe('Seu papel não permite esta ação.')
     expect(erro.motivo).toBe('papel_insuficiente')
+  })
+
+  it('403 por plano diz que gerar chave é do Premium, e o limite de chaves tem a sua frase', async () => {
+    backendFalso([
+      { status: 403, corpo: { detail: { motivo: 'plano_sem_api', detalhe: 'gerar chave de API faz parte do plano Premium' } } },
+      { status: 409, corpo: { detail: { motivo: 'limite_de_chaves', detalhe: 'a empresa já tem 5 chaves ativas' } } },
+    ])
+    const http = await carregarHttp()
+    const plano = await erroDe(http.chamar('POST', '/integracao/chaves', { nome: 'x' }))
+    expect([plano.codigo, plano.status, plano.motivo, plano.message]).toEqual(['sem_permissao', 403, 'plano_sem_api', 'Gerar chave faz parte do plano Premium.'])
+    const limite = await erroDe(http.chamar('POST', '/integracao/chaves', { nome: 'x' }))
+    expect([limite.codigo, limite.status, limite.motivo]).toEqual(['conflito', 409, 'limite_de_chaves'])
+    expect(limite.message).toBe('A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.')
   })
 
   it('404 e 409 têm mensagem em português', async () => {

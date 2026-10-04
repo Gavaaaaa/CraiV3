@@ -46,7 +46,7 @@ export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, on
           {estado.proxima_acao ? (
             <div className="text-right">
               <div className="t-label text-silver">Próxima ação do sistema</div>
-              <div className="mt-1 text-[14px] font-[560] text-paper">{estado.proxima_acao.descricao}</div>
+              <div className="mt-1 text-apoio font-[560] text-paper">{estado.proxima_acao.descricao}</div>
               <div className="t-label text-silver">{fmt.dataCurta(estado.proxima_acao.quando)}, {fmt.relativo(estado.proxima_acao.quando, new Date(estado.hoje))}</div>
             </div>
           ) : null}
@@ -85,7 +85,7 @@ export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, on
             <li key={i} className="relative">
               <span aria-hidden="true" className={cx('absolute top-1.5 -left-[25px] h-2.5 w-2.5 rounded-full ring-4 ring-[#1f1710]', TOM[e.tom ?? 'neutro'])} />
               <div className="t-label text-muted">{fmt.dataHora(e.em)}</div>
-              <div className="text-[14px] font-[560] text-paper">{e.titulo}</div>
+              <div className="text-apoio font-[560] text-paper">{e.titulo}</div>
               {e.detalhe ? <div className="t-apoio text-silver">{e.detalhe}</div> : null}
             </li>
           ))}
@@ -112,7 +112,7 @@ function Pensando({ linhas, chance, contribuicoes }: { linhas: string[]; chance:
           <span className="t-h3 text-paper">O que o sistema está pensando</span>
         </span>
         <span className="flex items-center gap-3">
-          {chance !== null ? <span className="tabular text-[15px] font-[640] text-orange">{Math.round(chance * 100)}% de chance</span> : null}
+          {chance !== null ? <span className="tabular text-normal font-[640] text-orange">{Math.round(chance * 100)}% de chance</span> : null}
           <IconArrowRight width={16} height={16} className={cx('text-silver transition-transform', aberto && 'rotate-90')} />
         </span>
       </button>
@@ -129,8 +129,8 @@ function Pensando({ linhas, chance, contribuicoes }: { linhas: string[]; chance:
             <div className="px-4 pb-4">
               <ol className="flex flex-col gap-2">
                 {linhas.map((l, i) => (
-                  <li key={i} className={cx('flex gap-2.5 text-[13.5px] leading-[1.5]', i === linhas.length - 1 ? 'text-paper' : 'text-silver')}>
-                    <span className="tabular mt-[3px] text-[11px] text-muted">{String(i + 1).padStart(2, '0')}</span>
+                  <li key={i} className={cx('flex gap-2.5 text-apoio leading-[1.5]', i === linhas.length - 1 ? 'text-paper' : 'text-silver')}>
+                    <span className="tabular mt-[3px] text-rotulo text-muted">{String(i + 1).padStart(2, '0')}</span>
                     {l}
                   </li>
                 ))}
@@ -140,7 +140,7 @@ function Pensando({ linhas, chance, contribuicoes }: { linhas: string[]; chance:
                   <div className="t-label mb-2 text-silver">Por que essa chance</div>
                   <ul className="flex flex-col gap-1">
                     {contribuicoes.map((c) => (
-                      <li key={c.fator} className="flex items-center justify-between gap-3 text-[13px]">
+                      <li key={c.fator} className="flex items-center justify-between gap-3 text-rotulo">
                         <span className="text-paper">{c.fator}</span>
                         <span className={cx('tabular shrink-0 font-[560]', c.pontos >= 0 ? 'text-ok' : 'text-[#f08a80]')}>
                           {c.pontos >= 0 ? '+' : ''}

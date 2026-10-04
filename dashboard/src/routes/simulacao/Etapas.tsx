@@ -36,7 +36,7 @@ export function Etapas({ estado }: { estado: EstadoSimulacao }) {
               <span className={cx('h-px flex-1', i === 0 ? 'bg-transparent' : concluida || atual || cancelada || fim ? 'bg-orange/50' : 'bg-line')} aria-hidden="true" />
               <span
                 className={cx(
-                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[12px] font-[600] transition-colors duration-300',
+                  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-rotulo font-[600] transition-colors duration-300',
                   fim && ok && 'border-ok bg-ok text-ink',
                   fim && !ok && 'border-graphite bg-graphite text-paper',
                   !fim && concluida && (pagas.has(e.valor) ? 'border-ok bg-ok text-ink' : 'border-orange bg-orange text-ink'),
@@ -50,7 +50,7 @@ export function Etapas({ estado }: { estado: EstadoSimulacao }) {
               </span>
               <span className={cx('h-px flex-1', i === ETAPAS.length - 1 ? 'bg-transparent' : concluida || fim ? 'bg-orange/50' : 'bg-line')} aria-hidden="true" />
             </div>
-            <span className={cx('mt-2 text-center text-[12.5px] font-[520] whitespace-nowrap', atual ? 'text-orange' : concluida || fim ? 'text-paper' : 'text-silver')}>
+            <span className={cx('mt-2 text-center text-rotulo font-[520] whitespace-nowrap', atual ? 'text-orange' : concluida || fim ? 'text-paper' : 'text-silver')}>
               {e.rotulo}
               <span className="sr-only">
                 {fim ? (ok ? ': recuperado' : ': encerrado') : concluida ? ': concluída' : atual ? ': etapa atual' : cancelada ? ': cancelada' : ''}

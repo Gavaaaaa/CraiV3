@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { IconAlert, IconCheck, IconClose, IconDownload, IconRefresh, IconShield, IconTable } from '../../components/icons/Icons'
+import { Link } from 'react-router-dom'
+import { IconArrowRight, IconCheck, IconClose, IconDownload, IconRefresh, IconShield, IconTable } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { CANAIS_DISPONIVEIS, MODO_REAL, api } from '../../data/api'
 import { AGORA } from '../../data/mock'
-import type { Canal, ChaveApi, Configuracao, EmpresaDetalhe, ExplicacaoDecisao, Integracao, Membro, Papel, ResultadoTesteIntegracao } from '../../data/tipos'
+import type { Canal, Configuracao, EmpresaDetalhe, ExplicacaoDecisao, Integracao, Membro, Papel, ResultadoTesteIntegracao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
 import { Aviso, Bloco, Interruptor, Rotulo, Secao, campo, seletor } from './comuns'
@@ -130,8 +131,8 @@ export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
         <ol className="flex flex-col gap-2">
           {c.canais.map((canal, i) => (
             <li key={canal} className="flex items-center gap-3 rounded-[10px] border border-line bg-ink/30 px-3 py-2">
-              <span className="tabular w-5 text-[12px] text-muted">{i + 1}</span>
-              <span className="flex-1 text-[14px] text-paper">{CANAL[canal]}</span>
+              <span className="tabular w-5 text-rotulo text-muted">{i + 1}</span>
+              <span className="flex-1 text-apoio text-paper">{CANAL[canal]}</span>
               <button type="button" aria-label={`Subir ${CANAL[canal]}`} disabled={!podeEditar || i === 0} onClick={() => mover(i, i - 1)} className="rounded-[6px] px-2 py-1 text-silver hover:bg-paper/[0.06] hover:text-paper disabled:opacity-30">↑</button>
               <button type="button" aria-label={`Descer ${CANAL[canal]}`} disabled={!podeEditar || i === c.canais.length - 1} onClick={() => mover(i, i + 1)} className="rounded-[6px] px-2 py-1 text-silver hover:bg-paper/[0.06] hover:text-paper disabled:opacity-30">↓</button>
               <button type="button" aria-label={`Desligar ${CANAL[canal]}`} disabled={!podeEditar || c.canais.length === 1} onClick={() => alternarCanal(canal)} className="rounded-[6px] p-1 text-muted hover:bg-paper/[0.06] hover:text-paper disabled:opacity-30">
@@ -180,7 +181,7 @@ export function SecaoEmpresa({ empresa }: { empresa: EmpresaDetalhe | null }) {
         </dl>
         <div className="mt-4 rounded-[12px] border border-line bg-slate/40 p-4">
           <div className="t-label mb-2 text-silver">Exemplo de como o cliente recebe</div>
-          <p className="text-[14px] leading-[1.55] text-paper/90">
+          <p className="text-apoio leading-[1.55] text-paper/90">
             Oi, Ana! A mensalidade de R$ 890,00 da {empresa?.nome_nas_mensagens ?? '…'} não pôde ser debitada este mês. Quando puder, regularize por este link.
             <br />
             <span className="text-silver">— {empresa?.assinatura ?? '…'}</span>
@@ -195,7 +196,7 @@ function Dado({ rotulo, valor, apoio }: { rotulo: string; valor?: string; apoio?
   return (
     <div>
       <dt className="t-label text-silver">{rotulo}</dt>
-      <dd className="mt-0.5 text-[15px] font-[560] text-paper">{valor ?? '—'}</dd>
+      <dd className="mt-0.5 text-normal font-[560] text-paper">{valor ?? '—'}</dd>
       {apoio ? <dd className="t-label text-muted">{apoio}</dd> : null}
     </div>
   )
@@ -285,38 +286,13 @@ export function SecaoEquipe({ membros, papelAtual, onMudar }: { membros: Membro[
 
 export function SecaoIntegracao({ premium, podeEditar }: { premium: boolean; podeEditar: boolean }) {
   const [dados, setDados] = useState<Integracao | null>(null)
-  const [nova, setNova] = useState<{ inteira: string; ambiente: 'live' | 'test' } | null>(null)
-  const [copiado, setCopiado] = useState(false)
   const [teste, setTeste] = useState<ResultadoTesteIntegracao | null>(null)
   const [testando, setTestando] = useState(false)
-  const [criando, setCriando] = useState(false)
 
   useEffect(() => {
     if (premium) api.integracao().then(setDados)
   }, [premium])
 
-  async function criar(ambiente: 'live' | 'test') {
-    setCriando(true)
-    const r = await api.criarChave(ambiente)
-    setNova({ inteira: r.inteira, ambiente })
-    setCopiado(false)
-    setDados((d) => (d ? { ...d, chaves: [r.chave, ...d.chaves] } : d))
-    setCriando(false)
-  }
-  async function revogar(c: ChaveApi) {
-    if (!window.confirm(`Revogar a chave ${c.inicio}…? Qualquer sistema que a use para de funcionar na hora.`)) return
-    const chaves = await api.revogarChave(c.id)
-    setDados((d) => (d ? { ...d, chaves } : d))
-  }
-  async function copiar() {
-    if (!nova) return
-    try {
-      await navigator.clipboard.writeText(nova.inteira)
-      setCopiado(true)
-    } catch {
-      setCopiado(false)
-    }
-  }
   async function testar() {
     setTestando(true)
     setTeste(await api.testarIntegracao())
@@ -330,9 +306,6 @@ export function SecaoIntegracao({ premium, podeEditar }: { premium: boolean; pod
       </Secao>
     )
   }
-
-  const ativas = (dados?.chaves ?? []).filter((c) => !c.revogada_em)
-  const revogadas = (dados?.chaves ?? []).filter((c) => c.revogada_em)
 
   return (
     <Secao
@@ -360,69 +333,20 @@ export function SecaoIntegracao({ premium, podeEditar }: { premium: boolean; pod
         </Aviso>
       ) : null}
 
-      <Bloco titulo="Chaves de API" apoio="Duas chaves: live para produção e test para testes, sem efeito nos dados reais. A chave inteira aparece uma vez só; depois, só o início.">
-        {nova ? (
-          <div className="mb-4 rounded-[12px] border border-amber/50 bg-amber/[0.08] p-4">
-            <div className="flex items-center gap-2 text-[14px] font-[600] text-amber">
-              <IconAlert width={16} height={16} /> Copie agora: esta chave não será mostrada de novo
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <code className="tabular flex-1 rounded-[8px] border border-line bg-ink/60 px-3 py-2 text-[13px] break-all text-paper">{nova.inteira}</code>
-              <Button size="sm" onClick={copiar}>
-                {copiado ? <IconCheck width={15} height={15} /> : null} {copiado ? 'Copiada' : 'Copiar'}
-              </Button>
-              <Button size="sm" variant="quiet" onClick={() => setNova(null)}>
-                Já guardei
-              </Button>
-            </div>
-          </div>
-        ) : null}
-        <div className="scroll-fino overflow-x-auto">
-          <table className="w-full min-w-[620px] text-left">
-            <thead>
-              <tr className="t-label text-silver">
-                <th className="py-2 pr-3 font-[500]">Chave</th>
-                <th className="px-3 py-2 font-[500]">Ambiente</th>
-                <th className="px-3 py-2 font-[500]">Criada</th>
-                <th className="px-3 py-2 font-[500]">Último uso</th>
-                <th className="py-2 pl-3 font-[500]"><span className="sr-only">Ações</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {ativas.map((c) => (
-                <tr key={c.id} className="border-t border-line">
-                  <td className="tabular py-3 pr-3 font-[560] text-paper">{c.inicio}…</td>
-                  <td className="px-3 py-3"><Badge tone={c.ambiente === 'live' ? 'orange' : 'neutral'}>{c.ambiente === 'live' ? 'Live' : 'Test'}</Badge></td>
-                  <td className="px-3 py-3 text-silver">{fmt.dataCurta(c.criada_em)}</td>
-                  <td className="px-3 py-3 text-silver">{c.ultimo_uso ? fmt.relativo(c.ultimo_uso, AGORA) : 'Nunca'}</td>
-                  <td className="py-3 pl-3 text-right">
-                    <Button size="sm" variant="quiet" disabled={!podeEditar} onClick={() => void revogar(c)}>Revogar</Button>
-                  </td>
-                </tr>
-              ))}
-              {revogadas.map((c) => (
-                <tr key={c.id} className="border-t border-line opacity-50">
-                  <td className="tabular py-3 pr-3 text-silver line-through">{c.inicio}…</td>
-                  <td className="px-3 py-3"><Badge>Revogada</Badge></td>
-                  <td className="px-3 py-3 text-silver">{fmt.dataCurta(c.criada_em)}</td>
-                  <td className="px-3 py-3 text-silver">Revogada em {c.revogada_em ? fmt.dataCurta(c.revogada_em) : ''}</td>
-                  <td />
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" disabled={!podeEditar || criando} onClick={() => void criar('live')}>Criar chave live</Button>
-          <Button size="sm" variant="ghost" disabled={!podeEditar || criando} onClick={() => void criar('test')}>Criar chave test</Button>
-        </div>
+      <Bloco titulo="Chaves de API" apoio="As chaves agora ficam na aba API: lá você gera, vê e revoga as chaves e encontra o exemplo de uso.">
+        <Link
+          to="/api"
+          className="inline-flex h-8 items-center gap-2 rounded-[8px] border border-graphite px-3 text-rotulo font-[560] text-paper transition-colors hover:border-silver hover:bg-paper/[0.04]"
+        >
+          Abrir a aba API <IconArrowRight width={15} height={15} />
+        </Link>
       </Bloco>
 
       <Bloco titulo="Webhook" apoio="A CRAI avisa o seu sistema quando uma cobrança é recuperada ou um cliente aceita uma oferta. Cada aviso vai assinado com o segredo.">
         <dl className="grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <dt className="t-label text-silver">Endereço</dt>
-            <dd className="tabular mt-0.5 text-[14px] break-all text-paper">{dados?.webhook.url ?? '—'}</dd>
+            <dd className="tabular mt-0.5 text-apoio break-all text-paper">{dados?.webhook.url ?? '—'}</dd>
           </div>
           <Dado rotulo="Segredo da assinatura" valor={dados?.webhook.segredo_inicio ? `${dados.webhook.segredo_inicio}…` : '—'} apoio="Só o início; o segredo inteiro foi mostrado na criação" />
           <Dado rotulo="Último evento entregue" valor={dados?.webhook.ultimo_evento ? fmt.relativo(dados.webhook.ultimo_evento, AGORA).replace(/^./, (x) => x.toUpperCase()) : 'Nenhum'} />
@@ -533,10 +457,10 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
           {explicacao ? (
             <div className="mt-4 rounded-[12px] border border-line bg-slate/40 p-4">
               <div className="t-label text-silver">Decisão de {fmt.dataCurta(explicacao.quando)}</div>
-              <p className="mt-1 text-[14px] leading-[1.55] text-paper">{explicacao.decisao}</p>
+              <p className="mt-1 text-apoio leading-[1.55] text-paper">{explicacao.decisao}</p>
               <ul className="mt-3 flex flex-col gap-1">
                 {explicacao.fatores.map((f) => (
-                  <li key={f.fator} className="flex items-center justify-between gap-3 text-[13.5px]">
+                  <li key={f.fator} className="flex items-center justify-between gap-3 text-apoio">
                     <span className="text-paper">{f.fator}</span>
                     <span className={cx('tabular font-[560]', f.pontos >= 0 ? 'text-ok' : 'text-[#f08a80]')}>{f.pontos >= 0 ? '+' : ''}{f.pontos} pts</span>
                   </li>
@@ -564,7 +488,7 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
 
       <Bloco titulo="Texto pronto para a sua política de privacidade" apoio="A lei pede que o seu cliente saiba que a CRAI existe e o que ela faz. Cole este parágrafo na sua política.">
         <div className="relative">
-          <textarea readOnly value={TEXTO_POLITICA} rows={8} className="scroll-fino w-full resize-none rounded-[12px] border border-line bg-ink/40 p-4 pr-4 text-[13.5px] leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none" aria-label="Texto para a política de privacidade" />
+          <textarea readOnly value={TEXTO_POLITICA} rows={8} className="scroll-fino w-full resize-none rounded-[12px] border border-line bg-ink/40 p-4 pr-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none" aria-label="Texto para a política de privacidade" />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button size="sm" variant="ghost" onClick={copiarPolitica}>

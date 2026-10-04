@@ -3,17 +3,34 @@
  *
  * Fora do `npm test` comum. Para rodar:
  *   1. backend no ar com ENV=development (ver docs/interno/COMO_RODAR_DASHBOARD.md);
- *   2. semente rodada: python docs/interno/semear_dashboard_demo.py;
+ *   2. semente da EMPRESA DOS TESTES: python docs/interno/semear_dashboard_demo.py --empresa demo_testes;
  *   3. npm run test:vivo
+ *
+ * A EMPRESA DOS TESTES (`demo_testes`). Estes testes geram chaves, escolhem mensagem e gravam
+ * configuração. Para não sujar a empresa da demonstração (`demo_dashboard`, a que aparece ao
+ * abrir o dashboard), eles usam uma segunda empresa fictícia, que só existe para isso.
  *
  * Cada execução ESCOLHE uma mensagem de um ciclo que aguardava escolha. Para rodar de novo,
  * rode a semente de novo (ela cria ciclos novos).
  *
  * LGPD: o backend só tem dado sintético da empresa fictícia; ainda assim o teste imprime só
  * contagens e status, nunca nome de cliente nem texto de mensagem.
+ *
+ * CHAVE DE API: o teste gera uma chave de verdade no backend local, usa e revoga. A chave
+ * nunca é impressa: só o status de cada chamada.
  */
 import { describe, expect, it } from 'vitest'
-import { ErroApi, MODO_REAL, ROTAS_REAIS, api, emDemonstracao, trocarPapelDeDesenvolvimento } from './api'
+import {
+  ENDERECO_DA_API,
+  ErroApi,
+  MODO_REAL,
+  ROTAS_REAIS,
+  api,
+  emDemonstracao,
+  trocarEmpresaDeDesenvolvimento,
+  trocarPapelDeDesenvolvimento,
+  trocarPlanoDeDesenvolvimento,
+} from './api'
 import type { CicloDetalhe, CicloResumo, StatusTela } from './tipos'
 
 const COM_FUSO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:\d{2}|Z)$/
@@ -42,8 +59,11 @@ async function cicloAguardando(lista: CicloResumo[]): Promise<CicloDetalhe> {
       return d
     }
   }
-  throw new Error('Nenhum ciclo aguardando escolha com canal. Rode a semente de novo: python docs/interno/semear_dashboard_demo.py')
+  throw new Error('Nenhum ciclo aguardando escolha com canal. Rode a semente de novo: python docs/interno/semear_dashboard_demo.py --empresa demo_testes')
 }
+
+// Tudo o que este arquivo faz acontece na empresa dos testes, nunca na da demonstração.
+trocarEmpresaDeDesenvolvimento('demo_testes')
 
 // Os testes de um arquivo rodam em ordem: cada passo usa o que o anterior deixou.
 describe('dashboard em modo real contra o backend local', () => {
@@ -202,7 +222,125 @@ describe('dashboard em modo real contra o backend local', () => {
     expect((await erroDe(api.regerarSugestoes(alvo.id))).status).toBe(409)
   })
 
+  const NOME_DA_CHAVE = 'Teste ao vivo do dashboard'
+  const CLIENTE_DO_TESTE = 'vivo-chave-api'
+
+  it('chave de API: gera pela camada, usa num POST /clientes, revoga, e a chamada seguinte dá 401', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    expect(emDemonstracao('chaves', 'criarChave', 'revogarChave')).toBe(false)
+
+    // Sobra de uma execução interrompida: revoga as chaves ativas com o nome deste teste.
+    const antes = await api.chaves()
+    for (const c of antes.chaves.filter((x) => x.nome === NOME_DA_CHAVE && !x.revogada_em)) await api.revogarChave(c.id)
+    expect(antes.pode_gerar).toBe(true)
+    expect(antes.limite_ativas).toBe(5)
+
+    const { chave, inteira } = await api.criarChave(NOME_DA_CHAVE)
+    expect(inteira).toMatch(/^crai_live_[A-Za-z0-9_-]{43}$/)
+    expect([chave.nome, chave.inicio, chave.final]).toEqual([NOME_DA_CHAVE, inteira.slice(0, 14), inteira.slice(-4)])
+    expect(chave.criada_em).toMatch(COM_FUSO)
+    expect([chave.ultimo_uso, chave.revogada_em]).toEqual([null, null])
+    // A lista traz a chave nova, e nunca a chave inteira.
+    const comANova = await api.chaves()
+    expect(comANova.chaves.find((c) => c.id === chave.id)?.inicio).toBe(chave.inicio)
+    expect(JSON.stringify(comANova)).not.toContain(inteira.slice('crai_live_'.length))
+
+    // O "sistema da empresa": chama a API só com a chave, sem login.
+    const usar = (metodo: string, caminho: string, corpo?: unknown) =>
+      fetch(`${ENDERECO_DA_API}${caminho}`, {
+        method: metodo,
+        headers: { Authorization: `Bearer ${inteira}`, 'Content-Type': 'application/json' },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+      })
+    const cliente = { customer_id_externo: CLIENTE_DO_TESTE, mrr: 100, billing_profile: 'PJ' }
+    const criado = await usar('POST', '/clientes', cliente)
+    expect(criado.status).toBe(200)
+    expect(((await criado.json()) as { cliente: { customer_id_externo: string } }).cliente.customer_id_externo).toBe(CLIENTE_DO_TESTE)
+    const atualizado = await usar('PATCH', `/clientes/${CLIENTE_DO_TESTE}`, { mrr: 120 })
+    expect(atualizado.status).toBe(200)
+    // A chave não abre o painel nem as próprias rotas de chave.
+    expect((await usar('GET', '/ciclos')).status).toBe(401)
+    expect((await usar('GET', '/integracao/chaves')).status).toBe(401)
+    // O uso ficou registrado.
+    const usada = (await api.chaves()).chaves.find((c) => c.id === chave.id)
+    expect(usada?.ultimo_uso).toMatch(COM_FUSO)
+    // O cliente do teste sai da base ativa (cancelado), ainda com a chave.
+    expect((await usar('DELETE', `/clientes/${CLIENTE_DO_TESTE}`)).status).toBe(200)
+
+    const revogada = await api.revogarChave(chave.id)
+    expect(revogada.revogada_em).toMatch(COM_FUSO)
+    const depois = await usar('POST', '/clientes', cliente)
+    expect(depois.status).toBe(401)
+    expect(((await depois.json()) as { detail: { motivo: string } }).detail.motivo).toBe('chave_invalida')
+    // Revogar de novo: a mesma data.
+    expect((await api.revogarChave(chave.id)).revogada_em).toBe(revogada.revogada_em)
+    console.log(`[vivo] chave de API: criada, POST /clientes ${criado.status}, PATCH ${atualizado.status}, revogada, POST seguinte ${depois.status}`)
+  })
+
+  it('chave de API: como membro, 403 ao gerar e ao revogar', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const { chave } = await api.criarChave(NOME_DA_CHAVE)
+
+    trocarPapelDeDesenvolvimento('membro')
+    const lista = await api.chaves() // membro vê a lista
+    expect([lista.pode_gerar, lista.pode_revogar, lista.plano_permite_gerar]).toEqual([false, false, true])
+    const gerar = await erroDe(api.criarChave(NOME_DA_CHAVE))
+    expect([gerar.codigo, gerar.status, gerar.motivo, gerar.message]).toEqual(['sem_permissao', 403, 'papel_insuficiente', 'Seu papel não permite esta ação.'])
+    const revogar = await erroDe(api.revogarChave(chave.id))
+    expect([revogar.status, revogar.motivo]).toEqual([403, 'papel_insuficiente'])
+
+    trocarPapelDeDesenvolvimento('owner')
+    expect((await api.chaves()).chaves.find((c) => c.id === chave.id)?.revogada_em).toBeNull()
+    await api.revogarChave(chave.id)
+    console.log(`[vivo] chave de API: membro ${gerar.status} ao gerar e ${revogar.status} ao revogar`)
+  })
+
+  it('chave de API: no plano essencial, lista e revoga; só gerar dá 403', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const { chave } = await api.criarChave(NOME_DA_CHAVE)
+
+    trocarPlanoDeDesenvolvimento('essencial')
+    expect((await api.empresa()).plano).toBe('essencial')
+    // Lista: 200, e a resposta diz que o plano não gera, mas o dono revoga.
+    const lista = await api.chaves()
+    expect(lista.chaves.some((c) => c.id === chave.id)).toBe(true)
+    expect([lista.plano_permite_gerar, lista.pode_gerar, lista.pode_revogar]).toEqual([false, false, true])
+    // Gerar: 403, com a frase do plano.
+    const gerar = await erroDe(api.criarChave(NOME_DA_CHAVE))
+    expect([gerar.codigo, gerar.status, gerar.motivo, gerar.message]).toEqual(['sem_permissao', 403, 'plano_sem_api', 'Gerar chave faz parte do plano Premium.'])
+    // Revogar: funciona.
+    const revogada = await api.revogarChave(chave.id)
+    expect(revogada.revogada_em).toMatch(COM_FUSO)
+    // O resto do painel continua funcionando no essencial.
+    expect((await api.configuracao()).prazo_escolha_horas).toBeGreaterThan(0)
+
+    trocarPlanoDeDesenvolvimento('premium')
+    expect((await api.empresa()).plano).toBe('premium')
+    console.log(`[vivo] chave de API no essencial: lista 200, gerar ${gerar.status} (${gerar.motivo}), revogar 200`)
+  })
+
+  it('nada do que os testes fizeram aparece na empresa da demonstração', async () => {
+    const dosTestes = await api.chaves()
+    expect(dosTestes.chaves.some((c) => c.nome === NOME_DA_CHAVE)).toBe(true)
+    const idsDosTestes = new Set(dosTestes.chaves.map((c) => c.id))
+    const ciclosDosTestes = new Set((await api.ciclos()).map((c) => c.id))
+
+    trocarEmpresaDeDesenvolvimento('demo_dashboard')
+    try {
+      const daDemonstracao = await api.chaves()
+      expect(daDemonstracao.chaves.some((c) => idsDosTestes.has(c.id))).toBe(false)
+      expect(daDemonstracao.chaves.some((c) => c.nome === NOME_DA_CHAVE || c.nome.startsWith('Tela ao vivo'))).toBe(false)
+      expect((await api.ciclos()).some((c) => ciclosDosTestes.has(c.id))).toBe(false)
+      console.log(`[vivo] empresa da demonstração: ${daDemonstracao.chaves.length} chave(s), nenhuma dos testes`)
+    } finally {
+      trocarEmpresaDeDesenvolvimento('demo_testes')
+    }
+  })
+
   it('o mapa de rotas reais é o desta etapa', () => {
-    expect(Object.keys(ROTAS_REAIS)).toHaveLength(9)
+    expect(Object.keys(ROTAS_REAIS)).toHaveLength(12)
   })
 })

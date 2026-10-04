@@ -102,6 +102,8 @@ export interface EventoLinhaDoTempo {
 
 export interface CicloDetalhe extends CicloResumo {
   chance_recuperar: number | null // 0..1; null quando o diagnóstico não registrou a estimativa
+  /** Desconto por comportamento fora do padrão já aplicado em `chance_recuperar` (em %), ou null. */
+  desconto_anomalia_pct: number | null
   dia_provavel_saldo: string | null
   contribuicoes: ContribuicaoTexto[]
   tentativas: Tentativa[]
@@ -162,17 +164,32 @@ export interface Membro {
   voce: boolean
 }
 
+/** Uma chave de API como a tela a mostra. A chave inteira NÃO está aqui: só o começo e o final. */
 export interface ChaveApi {
   id: string
-  ambiente: 'live' | 'test'
-  inicio: string // "crai_live_a1b2…"
+  /** O nome que a empresa deu à chave. */
+  nome: string
+  inicio: string // "crai_live_a1b2"
+  final: string // "9f3c"
   criada_em: string
   ultimo_uso: string | null
   revogada_em: string | null
 }
 
-export interface Integracao {
+/** `GET /integracao/chaves`: as chaves da empresa e o que quem está logado pode fazer. */
+export interface ChavesDaEmpresa {
   chaves: ChaveApi[]
+  ativas: number
+  limite_ativas: number
+  /** O papel revoga (dono e administrador), em qualquer plano. */
+  pode_revogar: boolean
+  /** A empresa é do plano premium: só nele se gera chave. */
+  plano_permite_gerar: boolean
+  /** O papel gera E o plano permite. */
+  pode_gerar: boolean
+}
+
+export interface Integracao {
   webhook: { url: string | null; segredo_inicio: string | null; ultimo_evento: string | null }
 }
 

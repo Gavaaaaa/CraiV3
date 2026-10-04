@@ -8,7 +8,7 @@ import { Card } from '../components/ui/Card'
 import { FaixaDemonstracao } from '../components/ui/Demonstracao'
 import { ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
-import { api, emDemonstracao } from '../data/api'
+import { api, etiquetaDeDemonstracao } from '../data/api'
 import type { PontoSerie } from '../data/tipos'
 import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
@@ -82,7 +82,7 @@ export function Voluntario() {
 
   const abas: Aba<AbaVol>[] = [
     { valor: 'base', rotulo: 'Sua base' },
-    { valor: 'clientes', rotulo: 'Clientes em risco', extra: graves ? <Badge tone="danger" className="px-1.5 py-0 text-[11px]">{graves} graves</Badge> : null },
+    { valor: 'clientes', rotulo: 'Clientes em risco', extra: graves ? <Badge tone="danger" className="px-1.5 py-0 text-rotulo">{graves} graves</Badge> : null },
     { valor: 'mantido', rotulo: 'Dinheiro mantido' },
     { valor: 'decisao', rotulo: 'Quem decide o risco' },
   ]
@@ -99,7 +99,7 @@ export function Voluntario() {
 
       {carga.erro ? <ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} /> : null}
       {semBase ? (
-        <div role="status" className="rounded-[12px] border border-amber/40 bg-amber/[0.06] px-4 py-3 text-[13.5px] text-paper">
+        <div role="status" className="rounded-[12px] border border-amber/40 bg-amber/[0.06] px-4 py-3 text-apoio text-paper">
           Ainda não há base de clientes. Anexe a planilha na aba "Sua base" ou ligue a API na configuração; a avaliação de risco começa em seguida.
         </div>
       ) : null}
@@ -110,7 +110,7 @@ export function Voluntario() {
           className="row-span-2 min-h-[210px] sm:col-span-2"
           tone="orange"
           hero
-          demo={emDemonstracao('resumoVoluntario')}
+          demo={etiquetaDeDemonstracao('resumoVoluntario')}
           rotulo="Mantido para você em setembro"
           valor={resumo ? fmt.brlInteiro(resumo.valor_liquido_mantido) : '—'}
           apoio={
@@ -122,17 +122,17 @@ export function Voluntario() {
             </div>
           }
         />
-        <StatTile demo={emDemonstracao('resumoVoluntario')} rotulo="Em risco grave" valor={resumo?.grave ?? '—'} apoio="Na base inteira; já receberam ou vão receber uma oferta" icone={<IconAlert width={17} height={17} />} />
-        <StatTile demo={emDemonstracao('resumoVoluntario')} rotulo="Preocupantes" valor={resumo?.preocupante ?? '—'} apoio="Oferta mais leve, ou só acompanhar" icone={<IconUsers width={17} height={17} />} />
+        <StatTile demo={etiquetaDeDemonstracao('resumoVoluntario')} rotulo="Em risco grave" valor={resumo?.grave ?? '—'} apoio="Na base inteira; já receberam ou vão receber uma oferta" icone={<IconAlert width={17} height={17} />} />
+        <StatTile demo={etiquetaDeDemonstracao('resumoVoluntario')} rotulo="Preocupantes" valor={resumo?.preocupante ?? '—'} apoio="Oferta mais leve, ou só acompanhar" icone={<IconUsers width={17} height={17} />} />
         <StatTile
-          demo={emDemonstracao('resumoVoluntario')}
+          demo={etiquetaDeDemonstracao('resumoVoluntario')}
           rotulo="Ofertas aceitas no mês"
           valor={resumo ? `${resumo.ofertas_aceitas} de ${resumo.ofertas_enviadas}` : '—'}
           apoio={resumo ? (resumo.ofertas_enviadas ? `${Math.round((resumo.ofertas_aceitas / resumo.ofertas_enviadas) * 100)}% de aceite` : 'Nenhuma oferta enviada ainda') : ''}
           icone={<IconSend width={17} height={17} />}
         />
         <StatTile
-          demo={emDemonstracao('baseClientes')}
+          demo={etiquetaDeDemonstracao('baseClientes')}
           rotulo="Quem decide o risco"
           valor={<span className="t-h3 text-paper">{base ? `Modelo de IA em ${Math.round((base.com_dados_comportamento / base.total) * 100)}% da base` : '—'}</span>}
           apoio="No resto, a régua. Detalhes na aba ao lado."
@@ -174,7 +174,7 @@ export function Voluntario() {
                 ) : (
                   <div className="min-h-[420px] animate-pulse rounded-[12px] bg-paper/[0.04]" aria-busy="true" />
                 )}
-                <p className="mt-4 rounded-[12px] border border-line bg-ink/25 px-4 py-3 text-[13.5px] leading-[1.5] text-silver">
+                <p className="mt-4 rounded-[12px] border border-line bg-ink/25 px-4 py-3 text-apoio leading-[1.5] text-silver">
                   <span className="font-[600] text-paper">Como o valor é contado:</span> 1 mês da mensalidade do cliente que aceitou a oferta, menos o desconto dado, líquido da taxa da CRAI, no dia do aceite. Se o cliente cancelar em até 30 dias, o valor é estornado.
                 </p>
               </Card>

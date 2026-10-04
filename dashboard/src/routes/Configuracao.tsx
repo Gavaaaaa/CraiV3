@@ -114,10 +114,10 @@ export function Configuracao() {
                       <s.Icone width={16} height={16} />
                     </span>
                     <span className="min-w-0">
-                      <span className={cx('flex items-center gap-2 text-[14px] font-[560] whitespace-nowrap', sel ? 'text-paper' : 'text-silver')}>
+                      <span className={cx('flex items-center gap-2 text-apoio font-[560] whitespace-nowrap', sel ? 'text-paper' : 'text-silver')}>
                         {s.rotulo}
-                        {bloqueada ? <Badge className="px-1.5 py-0 text-[10.5px]">Premium</Badge> : null}
-                        <Demonstracao de={s.de} className="px-1.5 py-0 text-[10.5px]" />
+                        {bloqueada ? <Badge className="px-1.5 py-0 text-rotulo">Premium</Badge> : null}
+                        <Demonstracao de={s.de} className="px-1.5 py-0 text-rotulo" />
                       </span>
                       <span className="t-label hidden text-muted lg:block">{s.apoio}</span>
                     </span>
@@ -128,7 +128,7 @@ export function Configuracao() {
           </ul>
           <div className="mt-4 hidden rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 lg:block">
             <div className="t-label text-silver">Você está como</div>
-            <div className="mt-0.5 text-[14px] font-[560] text-paper">{papel === 'owner' ? 'Dono' : papel === 'admin' ? 'Administrador' : 'Membro (só leitura)'}</div>
+            <div className="mt-0.5 text-apoio font-[560] text-paper">{papel === 'owner' ? 'Dono' : papel === 'admin' ? 'Administrador' : 'Membro (só leitura)'}</div>
           </div>
         </nav>
 
@@ -174,7 +174,7 @@ export function Configuracao() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             className={cx(
-              'fixed bottom-20 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-full border px-4 py-2 text-[13.5px] font-[560] shadow-[0_20px_50px_-20px_rgba(0,0,0,0.9)]',
+              'fixed bottom-20 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-full border px-4 py-2 text-apoio font-[560] shadow-[0_20px_50px_-20px_rgba(0,0,0,0.9)]',
               aviso.erro ? 'border-danger/50 bg-[#2a1c1a] text-[#f5a29a]' : 'border-ok/50 bg-[#1f2a22] text-ok',
             )}
           >

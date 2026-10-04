@@ -33,6 +33,16 @@
 
   --font-sans: 'Inter Variable', system-ui, sans-serif;
   --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /*
+   * OS TAMANHOS DE LETRA DO PAINEL, num lugar só. Nenhum texto fica abaixo do rótulo (13.5px).
+   * Cada um vira uma classe de tamanho (`text-rotulo`, `text-apoio`, `text-normal`), e as
+   * classes `.t-label` e `.t-apoio`, mais abaixo, usam os mesmos valores. Nas telas não se
+   * escreve tamanho pequeno direto (`text-[13px]`): usa-se uma destas classes.
+   */
+  --text-rotulo: 13.5px; /* rótulos, selos, legendas, cabeçalho de tabela */
+  --text-apoio: 15px; /* texto de apoio, linhas de tabela, botões e campos */
+  --text-normal: 16px; /* o texto normal */
 }
 
 :root {
@@ -48,7 +58,7 @@
     font-feature-settings: 'cv11' 1, 'ss01' 1;
     background: var(--color-ink);
     color: var(--color-paper);
-    font-size: 15px;
+    font-size: var(--text-normal);
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -86,13 +96,13 @@
     letter-spacing: -0.01em;
   }
   .t-label {
-    font-size: 12px;
+    font-size: var(--text-rotulo);
     font-weight: 500;
     line-height: 1.5;
     letter-spacing: 0.01em;
   }
   .t-apoio {
-    font-size: 13.5px;
+    font-size: var(--text-apoio);
     font-weight: 450;
     line-height: 1.5;
   }

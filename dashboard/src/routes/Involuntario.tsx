@@ -80,8 +80,8 @@ export function Involuntario() {
           <p className="t-apoio mt-1 text-silver">Cobranças Pix que falharam e o que o sistema está fazendo com cada uma.</p>
         </div>
         <nav className="flex gap-1 rounded-[10px] border border-line bg-slate/50 p-1" aria-label="Abas">
-          <span className="rounded-[7px] bg-paper px-3 py-1.5 text-[13px] font-[560] text-ink">Clientes em recuperação</span>
-          <span className="rounded-[7px] px-3 py-1.5 text-[13px] font-[520] text-silver">
+          <span className="rounded-[7px] bg-paper px-3 py-1.5 text-rotulo font-[560] text-ink">Clientes em recuperação</span>
+          <span className="rounded-[7px] px-3 py-1.5 text-rotulo font-[520] text-silver">
             Mensagens {metricas?.aguardando_escolha ? <Badge tone="orange" className="ml-1 px-1.5 py-0">{metricas.aguardando_escolha}</Badge> : null}
           </span>
         </nav>
@@ -138,13 +138,13 @@ export function Involuntario() {
                 aria-selected={filtro === f.valor}
                 onClick={() => setFiltro(f.valor)}
                 className={cx(
-                  'rounded-full border px-3 py-1.5 text-[13px] font-[520] transition-colors',
+                  'rounded-full border px-3 py-1.5 text-rotulo font-[520] transition-colors',
                   filtro === f.valor ? 'border-orange/60 bg-orange/10 text-orange' : 'border-line text-silver hover:border-graphite hover:text-paper',
                 )}
               >
                 {f.rotulo}
                 {filtro === 'todos' || filtro === f.valor ? (
-                  <span className="tabular ml-1.5 text-[12px] opacity-70">{contagem[f.valor]}</span>
+                  <span className="tabular ml-1.5 text-rotulo opacity-70">{contagem[f.valor]}</span>
                 ) : null}
               </button>
             ))}
@@ -155,7 +155,7 @@ export function Involuntario() {
             onChange={(e) => setBusca(e.target.value)}
             placeholder="Nome ou id da recorrência"
             aria-label="Buscar na lista"
-            className="h-9 w-64 rounded-[8px] border border-line bg-ink/40 px-3 text-[13.5px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
+            className="h-9 w-64 rounded-[8px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
           />
         </div>
 
@@ -266,7 +266,7 @@ function Tentativas({ feitas, total }: { feitas: number; total: number }) {
           <span key={i} className={cx('h-1.5 w-5 rounded-full', i < feitas ? 'bg-orange' : 'bg-paper/[0.12]')} />
         ))}
       </div>
-      <span className="tabular text-[12.5px] text-silver">
+      <span className="tabular text-rotulo text-silver">
         {feitas}/{total}
       </span>
     </div>

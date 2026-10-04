@@ -8,6 +8,7 @@ import { VisaoGeral } from './routes/VisaoGeral'
 const Voluntario = lazy(() => import('./routes/Voluntario').then((m) => ({ default: m.Voluntario })))
 const Simulacao = lazy(() => import('./routes/Simulacao').then((m) => ({ default: m.Simulacao })))
 const Assistente = lazy(() => import('./routes/Assistente').then((m) => ({ default: m.Assistente })))
+const PaginaApi = lazy(() => import('./routes/Api').then((m) => ({ default: m.PaginaApi })))
 const Configuracao = lazy(() => import('./routes/Configuracao').then((m) => ({ default: m.Configuracao })))
 
 function Carregando() {
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/voluntario" element={<Voluntario />} />
             <Route path="/simulacao" element={<Simulacao />} />
             <Route path="/assistente" element={<Assistente />} />
+            <Route path="/api" element={<PaginaApi />} />
             <Route path="/configuracao" element={<Configuracao />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

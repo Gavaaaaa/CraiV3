@@ -11,7 +11,7 @@ export function ErroCarregar({ mensagem, onTentar, className }: { mensagem: stri
         <IconAlert width={20} height={20} />
       </span>
       <div>
-        <div className="text-[15px] font-[600] text-paper">Não deu para carregar</div>
+        <div className="text-normal font-[600] text-paper">Não deu para carregar</div>
         <p className="t-apoio mt-1 max-w-md text-silver">{mensagem} Os seus dados continuam guardados; só a tela não conseguiu buscá-los agora.</p>
       </div>
       <Button size="sm" variant="ghost" onClick={onTentar}>
@@ -27,7 +27,7 @@ export function Vazio({ titulo, texto, acao, icone, className }: { titulo: strin
     <div className={cx('flex flex-col items-center justify-center gap-3 p-8 text-center', className)}>
       {icone ? <span className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-paper/[0.06] text-amber">{icone}</span> : null}
       <div>
-        <div className="text-[15px] font-[600] text-paper">{titulo}</div>
+        <div className="text-normal font-[600] text-paper">{titulo}</div>
         <p className="t-apoio mt-1 max-w-md text-silver">{texto}</p>
       </div>
       {acao}

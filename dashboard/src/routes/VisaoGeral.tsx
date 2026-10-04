@@ -8,7 +8,7 @@ import { Card } from '../components/ui/Card'
 import { FaixaDemonstracao } from '../components/ui/Demonstracao'
 import { Carregando, ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
-import { api, emDemonstracao } from '../data/api'
+import { api, etiquetaDeDemonstracao } from '../data/api'
 import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
 import { useReducedMotion } from '../lib/useReducedMotion'
@@ -112,7 +112,7 @@ export function VisaoGeral() {
 
   const mantido = resumo ? resumo.recuperado_involuntario + (resumo.retido_voluntario ?? 0) : null
   // Os cartões do topo ainda vêm de uma rota que o backend não tem (Etapa 3).
-  const demo = emDemonstracao('resumoVisaoGeral')
+  const demo = etiquetaDeDemonstracao('resumoVisaoGeral')
   const fonteDaAba: Record<AbaVisao, string[]> = {
     mantido: ['serieDupla'],
     caminho: ['funil'],

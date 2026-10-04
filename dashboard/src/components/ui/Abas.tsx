@@ -77,7 +77,7 @@ export function Abas<T extends string>({
               tabIndex={sel ? 0 : -1}
               onClick={() => onChange(a.valor)}
               className={cx(
-                'inline-flex items-center gap-2 rounded-[8px] px-3.5 py-2 text-[13.5px] whitespace-nowrap transition-colors duration-200',
+                'inline-flex items-center gap-2 rounded-[8px] px-3.5 py-2 text-apoio whitespace-nowrap transition-colors duration-200',
                 sel ? 'bg-paper font-[580] text-ink' : 'font-[520] text-silver hover:bg-paper/[0.05] hover:text-paper',
               )}
             >

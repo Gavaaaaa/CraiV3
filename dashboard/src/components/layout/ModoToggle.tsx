@@ -23,7 +23,7 @@ export function ModoToggle({ modo, onChange }: { modo: Modo; onChange: (m: Modo)
           aria-checked={modo === o.valor}
           onClick={() => onChange(o.valor)}
           className={cx(
-            'rounded-full px-3.5 py-1.5 text-[13px] font-[560] transition-colors duration-200',
+            'rounded-full px-3.5 py-1.5 text-rotulo font-[560] transition-colors duration-200',
             modo === o.valor ? 'bg-paper text-ink' : 'text-silver hover:text-paper',
           )}
         >

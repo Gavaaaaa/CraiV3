@@ -51,7 +51,7 @@ export function CartaoPix({ cliente, empresa, idRecorrencia, proximaCobranca, vi
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="t-label tracking-[0.08em] whitespace-nowrap text-silver uppercase">Pix Automático</div>
-          <div className="mt-0.5 text-[12px] text-muted">Autorização de débito recorrente</div>
+          <div className="mt-0.5 text-rotulo text-muted">Autorização de débito recorrente</div>
         </div>
         <Badge tone="amber">Dados fictícios</Badge>
       </div>
@@ -142,7 +142,7 @@ function Dado({ rotulo, valor, mono, grande }: { rotulo: string; valor: string; 
   return (
     <div className="min-w-0">
       <dt className="t-label text-muted">{rotulo}</dt>
-      <dd className={cx('truncate', grande ? 'mt-0.5 text-[18px] font-[640] text-paper' : 'text-[13.5px] font-[560] text-paper', mono && 'tabular')}>{valor}</dd>
+      <dd className={cx('truncate', grande ? 'mt-0.5 text-[18px] font-[640] text-paper' : 'text-apoio font-[560] text-paper', mono && 'tabular')}>{valor}</dd>
     </div>
   )
 }

@@ -14,7 +14,7 @@ export function StatusPill({ status, className }: { status: StatusTela; classNam
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[12.5px] font-[520] whitespace-nowrap',
+        'inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-rotulo font-[520] whitespace-nowrap',
         s.classe,
         className,
       )}

@@ -6,8 +6,14 @@
  * - Sem `VITE_CRAI_API_URL`, tudo devolve dados de demonstração (mock.ts) com um pequeno
  *   atraso, exatamente como antes.
  * - Com `VITE_CRAI_API_URL`, as funções listadas em `ROTAS_REAIS` chamam o backend (`http.ts`)
- *   e passam a resposta pelos adaptadores (`adaptadores.ts`). AS DEMAIS CONTINUAM COM O MOCK,
- *   e a tela marca esses blocos com a etiqueta "Demonstração" (`emDemonstracao`).
+ *   e passam a resposta pelos adaptadores (`adaptadores.ts`). AS DEMAIS CONTINUAM COM O MOCK.
+ *   `emDemonstracao` diz quais blocos ainda usam dado fictício. A etiqueta "Demonstração"
+ *   desses blocos só aparece na tela com `VITE_CRAI_MOSTRAR_DEMONSTRACAO=1`
+ *   (`etiquetaDeDemonstracao`); o padrão é não aparecer.
+ *
+ * A CHAVE DE API (Rodada 2) passa por aqui uma única vez, na resposta de `criarChave`, e vai
+ * direto para quem chamou: não é guardada neste módulo, nem em `localStorage`,
+ * `sessionStorage`, URL ou console.
  *
  * As telas não sabem de onde o dado veio: as assinaturas e os tipos são os mesmos.
  */
@@ -37,6 +43,8 @@ import {
 import {
   CANAIS_DO_BACKEND,
   abordagemParaApi,
+  adaptarChave,
+  adaptarChaves,
   adaptarCiclo,
   adaptarConfiguracao,
   adaptarDetalhe,
@@ -46,8 +54,11 @@ import {
   adaptarSerie,
   configuracaoParaApi,
   statusParaApi,
+  type ChaveCriadaApi,
+  type ChaveRevogadaApi,
   type CicloDetalheApi,
   type ConfiguracaoApi,
+  type ListaDeChavesApi,
   type ListaDeCiclosApi,
   type MensagemApi,
   type MetricasMesApi,
@@ -57,12 +68,13 @@ import {
 } from './adaptadores'
 import { responder } from './assistente'
 import { ErroApi } from './erros'
-import { MODO_REAL, chamar, definirPapelDev, papelDev } from './http'
+import { API_URL, MODO_REAL, chamar, definirEmpresaDev, definirPapelDev, definirPlanoDev, papelDev, planoDev } from './http'
 import { avancar, diasAteProximaAcao, escolherMensagem, estadoVazio, iniciar, simularRetencao } from './simulador'
 import type {
   Abordagem,
   Canal,
   ChaveApi,
+  ChavesDaEmpresa,
   EmpresaDetalhe,
   ExplicacaoDecisao,
   Integracao,
@@ -102,7 +114,7 @@ export { MODO_REAL, iniciarSessao } from './http'
 /**
  * O mapa único do que já fala com o backend quando o modo real está ligado. Tudo o que NÃO
  * está aqui continua em demonstração. Para ligar mais uma rota: implemente o ramo real na
- * função, acrescente o nome aqui e tire a etiqueta "Demonstração" do bloco que a usa.
+ * função e acrescente o nome aqui (a etiqueta "Demonstração" do bloco some sozinha).
  */
 export const ROTAS_REAIS = {
   ciclos: true, // GET /ciclos
@@ -114,6 +126,9 @@ export const ROTAS_REAIS = {
   metricasMes: true, // GET /metrics/involuntario/mes
   serie: true, // GET /metrics/involuntario/serie
   saude: true, // GET /health
+  chaves: true, // GET /integracao/chaves
+  criarChave: true, // POST /integracao/chaves
+  revogarChave: true, // DELETE /integracao/chaves/{id}
 } as const
 
 type RotaReal = keyof typeof ROTAS_REAIS
@@ -128,6 +143,22 @@ export function emDemonstracao(...funcoes: string[]): boolean {
   return MODO_REAL && funcoes.some((f) => !(f in ROTAS_REAIS))
 }
 
+/**
+ * As etiquetas "Demonstração" dos blocos fictícios (Rodada 2, Fase 3). Por decisão de
+ * produto elas NÃO aparecem mais na tela; o mecanismo continua inteiro e volta com
+ * `VITE_CRAI_MOSTRAR_DEMONSTRACAO=1` em `dashboard/.env.local`. O registro do que é real e
+ * do que é fictício mora no `README.md` da raiz e em `ROTAS_REAIS`.
+ *
+ * Não vale para a Simulação do gateway: o selo "Demo" do menu, o selo da página e as
+ * marcas dos dados simulados não passam por aqui e aparecem sempre.
+ */
+export const MOSTRAR_DEMONSTRACAO = String(import.meta.env.VITE_CRAI_MOSTRAR_DEMONSTRACAO ?? '').trim() === '1'
+
+/** A tela pergunta: mostro a etiqueta "Demonstração" neste bloco? Só com a variável ligada. */
+export function etiquetaDeDemonstracao(...funcoes: string[]): boolean {
+  return MOSTRAR_DEMONSTRACAO && emDemonstracao(...funcoes)
+}
+
 /** "Agora" para textos relativos: o relógio de verdade no modo real; o fixo do mock na demonstração. */
 export function agoraDaTela(): Date {
   return MODO_REAL ? new Date() : AGORA
@@ -139,6 +170,23 @@ export const CANAIS_DISPONIVEIS: Canal[] = MODO_REAL ? CANAIS_DO_BACKEND : ['wha
 /** O papel do login de desenvolvimento (só existe no modo real). */
 export const papelDeDesenvolvimento = papelDev
 export const trocarPapelDeDesenvolvimento = definirPapelDev
+/** O plano do login de desenvolvimento (premium por padrão; o essencial serve para testar o bloqueio). */
+export const trocarPlanoDeDesenvolvimento = definirPlanoDev
+/** A empresa fictícia do login de desenvolvimento: a da demonstração, ou `demo_testes` nos testes ao vivo. */
+export const trocarEmpresaDeDesenvolvimento = definirEmpresaDev
+
+/** O endereço da API que a aba "API" mostra: o mesmo `VITE_CRAI_API_URL`; na demonstração, um de exemplo. */
+export const ENDERECO_DA_API = MODO_REAL ? API_URL : 'https://api.exemplo-crai.com.br'
+
+/** O nome de uma chave: de 1 a 60 caracteres (a mesma regra do backend). */
+export const NOME_DA_CHAVE_MAX = 60
+
+/** A tela gera a chave com um clique, sem pedir nome: o nome é "Chave de API" mais a data. */
+export function nomePadraoDaChave(agora: Date = new Date()): string {
+  const dois = (n: number) => String(n).padStart(2, '0')
+  return `Chave de API ${dois(agora.getDate())}/${dois(agora.getMonth() + 1)}/${agora.getFullYear()}`
+}
+const LIMITE_DE_CHAVES_ATIVAS = 5
 
 /**
  * Estados de tela para testar sem backend: abra a página com `?estado=erro` (toda chamada
@@ -182,6 +230,7 @@ function detalheDeDemonstracao(id: number): CicloDetalhe | null {
   return {
     ...resumo,
     chance_recuperar: 0.58,
+    desconto_anomalia_pct: null,
     dia_provavel_saldo: null,
     contribuicoes: [
       { fator: 'Causa da falha', efeito: 'Aumentou a chance de recuperar' },
@@ -201,7 +250,7 @@ function detalheDeDemonstracao(id: number): CicloDetalhe | null {
 export const api = {
   /** A empresa logada. No modo real ainda não há rota: é a empresa fictícia do login de desenvolvimento. */
   async empresa(): Promise<Empresa> {
-    if (MODO_REAL) return { nome: 'Empresa de demonstração', plano: 'premium', papel: papelDev() }
+    if (MODO_REAL) return { nome: 'Empresa de demonstração', plano: planoDev(), papel: papelDev() }
     await espera(80)
     return empresa
   },
@@ -538,27 +587,65 @@ export const api = {
     return membrosAtuais
   },
 
-  /** GET /integracao (chaves só com o início; webhook) */
+  /** GET /integracao (o webhook; as chaves ficam na aba API) */
   async integracao(): Promise<Integracao> {
     await espera(120)
-    return { chaves: chavesAtuais, webhook: { url: 'https://api.nimbusflow.com.br/crai/webhook', segredo_inicio: 'whsec_9a1f', ultimo_evento: new Date(AGORA_MS - 40 * 60_000).toISOString() } }
+    return { webhook: { url: 'https://api.nimbusflow.com.br/crai/webhook', segredo_inicio: 'whsec_9a1f', ultimo_evento: new Date(AGORA_MS - 40 * 60_000).toISOString() } }
   },
 
-  /** POST /integracao/chaves {ambiente} — a chave inteira aparece UMA vez */
-  async criarChave(ambiente: 'live' | 'test'): Promise<{ chave: ChaveApi; inteira: string }> {
+  /* ---------------- Chaves de API ---------------- */
+
+  /** GET /integracao/chaves — a lista, sem a chave inteira */
+  async chaves(): Promise<ChavesDaEmpresa> {
+    if (real('chaves')) return adaptarChaves(await chamar<ListaDeChavesApi>('GET', '/integracao/chaves'))
+    await espera(120)
+    const lista = vazio ? [] : chavesAtuais
+    return {
+      chaves: lista,
+      ativas: lista.filter((c) => !c.revogada_em).length,
+      limite_ativas: LIMITE_DE_CHAVES_ATIVAS,
+      pode_revogar: empresa.papel !== 'membro',
+      plano_permite_gerar: empresa.plano === 'premium',
+      pode_gerar: empresa.papel !== 'membro' && empresa.plano === 'premium',
+    }
+  },
+
+  /**
+   * POST /integracao/chaves {nome} — a chave inteira aparece UMA vez, nesta resposta. Quem
+   * chama mostra e esquece: nada aqui a guarda. Sem `nome`, vai o nome padrão (a tela gera
+   * com um clique, sem perguntar).
+   */
+  async criarChave(nome: string = nomePadraoDaChave()): Promise<{ chave: ChaveApi; inteira: string }> {
+    if (real('criarChave')) {
+      const r = await chamar<ChaveCriadaApi>('POST', '/integracao/chaves', { nome })
+      return { chave: adaptarChave(r.chave), inteira: r.chave_inteira }
+    }
     await espera(400)
-    const sufixo = Math.random().toString(36).slice(2, 6)
-    const inteira = `crai_${ambiente}_${sufixo}${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`
-    const chave: ChaveApi = { id: `k${Date.now()}`, ambiente, inicio: inteira.slice(0, 14), criada_em: new Date().toISOString(), ultimo_uso: null, revogada_em: null }
+    const limpo = nome.trim()
+    if (!limpo || limpo.length > NOME_DA_CHAVE_MAX) throw new ErroApi('invalido', 'O servidor recusou os dados enviados. Confira os campos e tente de novo.', 422, 'nome_invalido')
+    if (chavesAtuais.filter((c) => !c.revogada_em).length >= LIMITE_DE_CHAVES_ATIVAS) {
+      throw new ErroApi('conflito', 'A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.', 409, 'limite_de_chaves')
+    }
+    // Chave de demonstração: tem a forma de uma chave, começa por DEMO e não abre nada.
+    const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    const sorteio = Array.from({ length: 39 }, () => letras[Math.floor(Math.random() * letras.length)]).join('')
+    const inteira = `crai_live_DEMO${sorteio}`
+    const chave: ChaveApi = { id: `k${Date.now()}`, nome: limpo, inicio: inteira.slice(0, 14), final: inteira.slice(-4), criada_em: new Date().toISOString(), ultimo_uso: null, revogada_em: null }
     chavesAtuais = [chave, ...chavesAtuais]
     return { chave, inteira }
   },
 
-  /** DELETE /integracao/chaves/{id} — revogação imediata */
-  async revogarChave(id: string): Promise<ChaveApi[]> {
+  /** DELETE /integracao/chaves/{id} — revogação imediata; revogar de novo mantém a data original */
+  async revogarChave(id: string): Promise<ChaveApi> {
+    if (real('revogarChave')) {
+      return adaptarChave((await chamar<ChaveRevogadaApi>('DELETE', `/integracao/chaves/${encodeURIComponent(id)}`)).chave)
+    }
     await espera(250)
-    chavesAtuais = chavesAtuais.map((c) => (c.id === id ? { ...c, revogada_em: new Date().toISOString() } : c))
-    return chavesAtuais
+    const atual = chavesAtuais.find((c) => c.id === id)
+    if (!atual) throw new ErroApi('nao_encontrado', 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, 'chave_nao_encontrada')
+    const revogada: ChaveApi = atual.revogada_em ? atual : { ...atual, revogada_em: new Date().toISOString() }
+    chavesAtuais = chavesAtuais.map((c) => (c.id === id ? revogada : c))
+    return revogada
   },
 
   /** POST /integracao/testar */

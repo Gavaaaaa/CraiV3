@@ -156,10 +156,13 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
               <p className="t-apoio mt-1 text-silver">
                 {ciclo.chance_recuperar !== null ? 'Chance de recuperar, estimada na abertura do ciclo' : 'Este ciclo não tem estimativa de recuperação registrada'}
               </p>
+              {ciclo.chance_recuperar !== null && ciclo.desconto_anomalia_pct !== null ? (
+                <p className="t-label mt-1 text-muted">Já com o desconto de {ciclo.desconto_anomalia_pct}% por comportamento fora do padrão.</p>
+              ) : null}
               {ciclo.contribuicoes.length ? (
                 <ul className="mt-3 flex flex-col gap-1.5">
                   {ciclo.contribuicoes.map((c, i) => (
-                    <li key={`${c.fator}-${i}`} className="flex items-center justify-between gap-3 text-[13.5px]">
+                    <li key={`${c.fator}-${i}`} className="flex items-center justify-between gap-3 text-apoio">
                       <span className="text-paper">{c.fator}</span>
                       {c.efeito ? (
                         <span className={cx('text-right font-[560]', c.efeito.startsWith('Aumentou') ? 'text-ok' : c.efeito.startsWith('Reduziu') ? 'text-[#f08a80]' : 'text-silver')}>
@@ -189,7 +192,7 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
                       : 'A recomendada será enviada automaticamente. Para escolher, mude o modo na configuração.'}
                 </p>
                 {erroAcao ? (
-                  <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-[13.5px] text-[#f5a29a]">
+                  <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-[#f5a29a]">
                     {erroAcao}
                   </p>
                 ) : null}

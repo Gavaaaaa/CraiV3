@@ -17,8 +17,15 @@ export const API_URL = String(import.meta.env.VITE_CRAI_API_URL ?? '')
 /** Com `VITE_CRAI_API_URL` definida, as rotas de `ROTAS_REAIS` (api.ts) chamam o backend. */
 export const MODO_REAL = API_URL !== ''
 
+export type Plano = 'essencial' | 'premium'
+
+/** As duas empresas fictícias do login de desenvolvimento: a da demonstração e a dos testes ao vivo. */
+export type EmpresaDev = 'demo_dashboard' | 'demo_testes'
+
 let token: string | null = null
 let papelAtual: Papel = 'owner'
+let planoAtual: Plano = 'premium'
+let empresaAtual: EmpresaDev = 'demo_dashboard'
 let pedidoDeToken: Promise<string> | null = null
 
 /** O papel do token de desenvolvimento em uso. */
@@ -27,6 +34,29 @@ export const papelDev = (): Papel => papelAtual
 /** Troca o papel de desenvolvimento: o token atual é esquecido e o próximo pedido usa o novo papel. */
 export function definirPapelDev(papel: Papel): void {
   papelAtual = papel
+  token = null
+  pedidoDeToken = null
+}
+
+/** O plano do token de desenvolvimento em uso (premium, a não ser que um teste peça o essencial). */
+export const planoDev = (): Plano => planoAtual
+
+/** Troca o plano de desenvolvimento, do mesmo jeito que o papel: o próximo pedido de token usa o novo. */
+export function definirPlanoDev(plano: Plano): void {
+  planoAtual = plano
+  token = null
+  pedidoDeToken = null
+}
+
+/** A empresa fictícia do token de desenvolvimento em uso (a da demonstração, a não ser que um teste troque). */
+export const empresaDev = (): EmpresaDev => empresaAtual
+
+/**
+ * Troca a empresa de desenvolvimento. Os testes ao vivo usam `demo_testes`, para não deixar
+ * chaves, escolhas nem configuração na empresa da demonstração.
+ */
+export function definirEmpresaDev(empresa: EmpresaDev): void {
+  empresaAtual = empresa
   token = null
   pedidoDeToken = null
 }
@@ -44,11 +74,15 @@ async function obterToken(): Promise<string> {
   if (token) return token
   if (!pedidoDeToken) {
     const papel = papelAtual
+    const plano = planoAtual
+    const empresa = empresaAtual
     const pedido = (async () => {
       const r = await requisitar('/dev/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ papel }),
+        // O backend emite premium, da empresa da demonstração, por padrão: o plano e a
+        // empresa só vão no corpo quando são outros.
+        body: JSON.stringify({ papel, ...(plano === 'premium' ? {} : { plano }), ...(empresa === 'demo_dashboard' ? {} : { empresa }) }),
       })
       if (!r.ok) {
         throw new ErroApi(
@@ -60,8 +94,8 @@ async function obterToken(): Promise<string> {
         )
       }
       const corpo = (await r.json()) as { token: string }
-      // Se o papel mudou enquanto o pedido estava no ar, este token não é guardado.
-      if (papel === papelAtual) token = corpo.token
+      // Se o papel, o plano ou a empresa mudou enquanto o pedido estava no ar, este token não é guardado.
+      if (papel === papelAtual && plano === planoAtual && empresa === empresaAtual) token = corpo.token
       return corpo.token
     })()
     pedidoDeToken = pedido
@@ -83,6 +117,11 @@ const CONFLITOS: Record<string, string> = {
   ciclo_nao_aguarda_escolha: 'Este ciclo não está mais esperando uma escolha. A mensagem já foi escolhida ou enviada.',
   prazo_de_escolha_vencido: 'O prazo de escolha acabou. A mensagem recomendada é enviada pelo sistema.',
   modo_automatico: 'A empresa está no modo automático: a mensagem sai sem esperar escolha.',
+  limite_de_chaves: 'A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.',
+}
+
+const SEM_PERMISSAO: Record<string, string> = {
+  plano_sem_api: 'Gerar chave faz parte do plano Premium.',
 }
 
 async function erroDaResposta(r: Response): Promise<ErroApi> {
@@ -101,7 +140,7 @@ async function erroDaResposta(r: Response): Promise<ErroApi> {
     case 401:
       return new ErroApi('nao_autorizado', 'O servidor não aceitou a sua sessão. Recarregue a página para entrar de novo.', 401, motivo)
     case 403:
-      return new ErroApi('sem_permissao', 'Seu papel não permite esta ação.', 403, motivo)
+      return new ErroApi('sem_permissao', (motivo && SEM_PERMISSAO[motivo]) || 'Seu papel não permite esta ação.', 403, motivo)
     case 404:
       return new ErroApi('nao_encontrado', 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, motivo)
     case 409:
@@ -128,7 +167,7 @@ export interface OpcoesDeChamada {
  * mais UMA vez (o token vale 1 h e morre quando o backend reinicia).
  */
 export async function chamar<T>(
-  metodo: 'GET' | 'POST' | 'PUT',
+  metodo: 'GET' | 'POST' | 'PUT' | 'DELETE',
   caminho: string,
   corpo?: unknown,
   opcoes: OpcoesDeChamada = {},

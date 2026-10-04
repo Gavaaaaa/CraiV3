@@ -150,3 +150,11 @@ export const IconShield = (p: P) => (
     <path d="M12 3 5 6v5.5c0 4.2 2.9 7.8 7 9.5 4.1-1.7 7-5.3 7-9.5V6z" />
   </svg>
 )
+export const IconKey = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="8" cy="15" r="4" />
+    <path d="m11 12 8.5-8.5" />
+    <path d="m16 7 3 3" />
+    <path d="m19.5 3.5 1.5 1.5" />
+  </svg>
+)

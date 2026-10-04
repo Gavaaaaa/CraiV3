@@ -260,6 +260,7 @@ export const detalhes: Record<number, CicloDetalhe> = {
   38: {
     ...ciclos.find((c) => c.id === 38)!,
     chance_recuperar: 0.72,
+    desconto_anomalia_pct: null,
     dia_provavel_saldo: d(-6, 9),
     contribuicoes: [
       { fator: 'Causa: saldo insuficiente', efeito: 'Aumentou a chance de recuperar' },
@@ -409,7 +410,7 @@ export const membros: Membro[] = [
 ]
 
 export const chavesApi: ChaveApi[] = [
-  { id: 'k1', ambiente: 'live', inicio: 'crai_live_7f3a', criada_em: '2026-09-02T14:00:00Z', ultimo_uso: new Date(AGORA.getTime() - 2 * 3_600_000).toISOString(), revogada_em: null },
-  { id: 'k2', ambiente: 'test', inicio: 'crai_test_c91d', criada_em: '2026-08-28T10:00:00Z', ultimo_uso: '2026-09-25T18:30:00Z', revogada_em: null },
-  { id: 'k0', ambiente: 'live', inicio: 'crai_live_2b8e', criada_em: '2026-08-15T10:00:00Z', ultimo_uso: '2026-09-01T09:00:00Z', revogada_em: '2026-09-02T14:05:00Z' },
+  { id: 'k1', nome: 'Sistema de cobrança', inicio: 'crai_live_7f3a', final: 'k2Qd', criada_em: '2026-09-02T14:00:00Z', ultimo_uso: new Date(AGORA.getTime() - 2 * 3_600_000).toISOString(), revogada_em: null },
+  { id: 'k2', nome: 'Planilha da equipe de sucesso', inicio: 'crai_live_c91d', final: 'x8Lm', criada_em: '2026-08-28T10:00:00Z', ultimo_uso: '2026-09-25T18:30:00Z', revogada_em: null },
+  { id: 'k0', nome: 'Integração antiga', inicio: 'crai_live_2b8e', final: 'p0Ra', criada_em: '2026-08-15T10:00:00Z', ultimo_uso: '2026-09-01T09:00:00Z', revogada_em: '2026-09-02T14:05:00Z' },
 ]

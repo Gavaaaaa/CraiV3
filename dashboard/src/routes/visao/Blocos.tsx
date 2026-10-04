@@ -15,7 +15,7 @@ import {
 } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
-import { agoraDaTela } from '../../data/api'
+import { MOSTRAR_DEMONSTRACAO, agoraDaTela } from '../../data/api'
 import { AGORA } from '../../data/mock'
 import type { Atividade, Funil, ItemDesempenho, LinhaExtrato, OQueFunciona, SaudeSistema, TipoAtividade } from '../../data/tipos'
 import { baixarCsv } from '../../lib/csv'
@@ -55,11 +55,11 @@ export function FunilInvoluntario({ funil }: { funil: Funil }) {
           {funil.etapas.map((e, i) => (
             <li key={e.etapa}>
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[13.5px] font-[560] text-paper">
+                <span className="text-apoio font-[560] text-paper">
                   {i > 0 ? <span className="tabular mr-2 text-muted">{i}</span> : null}
                   {e.rotulo}
                 </span>
-                <span className="tabular text-[13px] text-silver">
+                <span className="tabular text-rotulo text-silver">
                   <span className="font-[600] text-paper">{e.chegaram}</span> · {fmt.brlInteiro(e.valor)}
                 </span>
               </div>
@@ -170,11 +170,11 @@ function Bloco({
   return (
     <section className="min-w-0">
       <h4 className="t-label font-[600] tracking-[0.02em] text-silver">{titulo}</h4>
-      <p className="mt-1.5 min-h-[42px] text-[13.5px] leading-[1.5] text-paper">{conclusao}</p>
+      <p className="mt-1.5 min-h-[42px] text-apoio leading-[1.5] text-paper">{conclusao}</p>
       <ul className="mt-3 flex flex-col gap-3">
         {itens.map((it) => (
           <li key={it.rotulo}>
-            <div className="flex items-baseline justify-between gap-2 text-[13px]">
+            <div className="flex items-baseline justify-between gap-2 text-rotulo">
               <span className="truncate text-paper" title={it.rotulo}>
                 {it.rotulo}
               </span>
@@ -187,7 +187,7 @@ function Bloco({
               <span className="text-silver">
                 {medida.charAt(0).toUpperCase() + medida.slice(1)} · {it.casos} {it.casos === 1 ? 'caso' : 'casos'}
               </span>
-              {it.casos < POUCOS_CASOS ? <Badge className="px-1.5 py-0 text-[11px]">Poucos casos</Badge> : null}
+              {it.casos < POUCOS_CASOS ? <Badge className="px-1.5 py-0 text-rotulo">Poucos casos</Badge> : null}
             </div>
           </li>
         ))}
@@ -228,9 +228,9 @@ export function AtividadeRecente({ itens }: { itens: Atividade[] }) {
                   <span className="sr-only">{t.rotulo}</span>
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13.5px] leading-[1.45] text-paper">
+                  <p className="text-apoio leading-[1.45] text-paper">
                     {a.simulado ? (
-                      <Badge tone="amber" className="mr-1.5 align-[1px] px-1.5 py-0 text-[11px]">
+                      <Badge tone="amber" className="mr-1.5 align-[1px] px-1.5 py-0 text-rotulo">
                         Demonstração
                       </Badge>
                     ) : null}
@@ -273,7 +273,8 @@ export function saudeGeral(s: SaudeSistema | null): 'ok' | 'atencao' | 'carregan
 
 export function SaudeDoSistema({ saude }: { saude: SaudeSistema | null }) {
   const geral = saudeGeral(saude)
-  const demo = saude?.demonstracao ?? []
+  // As linhas que ainda são fictícias só ganham a etiqueta com a variável ligada (api.ts).
+  const demo = MOSTRAR_DEMONSTRACAO ? (saude?.demonstracao ?? []) : []
   const linhas: { ok: boolean; rotulo: string; detalhe: string; demo?: boolean }[] = saude
     ? [
         {
@@ -319,9 +320,9 @@ export function SaudeDoSistema({ saude }: { saude: SaudeSistema | null }) {
           <li key={l.rotulo} className="flex items-start gap-3 rounded-[12px] border border-line bg-ink/25 px-4 py-3.5">
             <span className={cx('mt-[7px] h-2 w-2 shrink-0 rounded-full', l.ok ? 'bg-ok' : 'bg-danger')} aria-hidden="true" />
             <div className="min-w-0">
-              <div className="text-[13.5px] font-[560] text-paper">
+              <div className="text-apoio font-[560] text-paper">
                 {l.rotulo}
-                {l.demo ? <Badge tone="amber" className="ml-2 px-1.5 py-0 text-[10.5px]">Demonstração</Badge> : null}
+                {l.demo ? <Badge tone="amber" className="ml-2 px-1.5 py-0 text-rotulo">Demonstração</Badge> : null}
                 <span className="sr-only">{l.ok ? ': funcionando' : ': com problema'}</span>
               </div>
               <div className="t-label text-silver">{l.detalhe}</div>
@@ -338,7 +339,7 @@ export function SeloSaude({ geral, compacto = false }: { geral: ReturnType<typeo
   return (
     <span
       className={cx(
-        'inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[12.5px] font-[520] whitespace-nowrap',
+        'inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-rotulo font-[520] whitespace-nowrap',
         geral === 'ok' ? 'border-ok/45 text-ok' : 'border-danger/50 text-[#f08a80]',
       )}
     >
@@ -364,7 +365,7 @@ export function GrupoDeControle() {
         <Badge>Planejado</Badge>
       </div>
       <div className="mt-3">
-        <p className="text-[14px] leading-[1.5] text-paper">
+        <p className="text-apoio leading-[1.5] text-paper">
           Esta tela mostra o que foi recuperado e mantido. Medir quanto disso aconteceu por causa da CRAI exige comparar com clientes que
           não recebem a ação.
         </p>
@@ -435,7 +436,7 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
         />
       </div>
       <div className="scroll-fino mt-4 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-[13.5px]">
+        <table className="w-full min-w-[760px] text-left text-apoio">
           <thead>
             <tr className="t-label text-silver">
               <th className="px-5 py-2.5 font-[500]">Data</th>
@@ -461,7 +462,7 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
                     <div className="flex items-center gap-2">
                       <span className="font-[560] text-paper">{l.cliente}</span>
                       {l.simulado ? (
-                        <Badge tone="amber" className="px-1.5 py-0 text-[11px]">
+                        <Badge tone="amber" className="px-1.5 py-0 text-rotulo">
                           Demonstração
                         </Badge>
                       ) : null}

@@ -221,15 +221,31 @@ fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
 | Involuntário (cartões, lista, painel do ciclo, escolher e pedir outras mensagens) | Real |
 | Configuração, seção Mensagens (modo, prazo, janela de contato, canais) | Real |
 | Visão geral, linha do relógio em "Saúde do sistema" | Real |
+| API (listar, gerar e revogar as chaves de API da empresa) | Real |
 | Visão geral (o resto), Voluntário, Assistente, Simulação do gateway | Demonstração |
-| Configuração: Empresa, Equipe, Integração, Notificações | Demonstração |
+| Configuração: Empresa, Equipe, Integração (webhook e teste), Notificações | Demonstração |
+| Configuração, Dados e privacidade | Os prazos de retenção são reais; exportar, anonimizar e explicar são demonstração |
+| **A tela não marca mais os blocos fictícios** | Esta tabela é o registro do que é real. A etiqueta "Demonstração" só aparece na Simulação do gateway. Para religar as etiquetas nos outros blocos, ver abaixo |
 
-Com o backend ligado, todo bloco que ainda usa dado fictício mostra a etiqueta
-"Demonstração". O envio das mensagens é simulado em qualquer caso: nenhum WhatsApp ou e-mail
-sai de verdade.
+**As etiquetas "Demonstração".** A tela não marca mais os blocos que usam dado fictício: o
+que é real e o que não é está na tabela acima. O mecanismo continua no código, desligado.
+Para religar, acrescente uma linha ao `dashboard/.env.local` e suba o `npm run dev` de novo:
+
+```powershell
+Add-Content -Path .env.local -Value "VITE_CRAI_MOSTRAR_DEMONSTRACAO=1" -Encoding ascii
+```
+
+Com ela, todo bloco que ainda usa dado fictício volta a mostrar a etiqueta (só com o backend
+ligado, como antes). Sem ela, ou com qualquer outro valor, as etiquetas não aparecem. A
+Simulação do gateway não depende dessa variável: o selo "Demo" do menu, o selo da página e
+as marcas dos dados simulados aparecem sempre.
+
+O envio das mensagens é simulado em qualquer caso: nenhum WhatsApp ou e-mail sai de verdade.
 
 Testes do dashboard, a partir de `dashboard/`: `npm run build`, `npm test` e, com o backend
-no ar, `npm run test:vivo`.
+no ar, `npm run test:vivo`. O teste ao vivo usa uma segunda empresa fictícia, `demo_testes`,
+para não deixar chaves nem escolhas na empresa da demonstração; ela precisa ter ciclos
+(o script de semente aceita `--empresa demo_testes`).
 
 ## Os dois pipelines
 

@@ -16,7 +16,7 @@ const variants: Record<Variant, string> = {
   ghost: 'rounded-[8px] border border-graphite text-paper hover:border-silver hover:bg-paper/[0.04]',
   quiet: 'rounded-[8px] text-silver hover:bg-paper/[0.06] hover:text-paper',
 }
-const sizes: Record<Size, string> = { sm: 'h-8 px-3 text-[13px]', md: 'h-10 px-4 text-[14px]' }
+const sizes: Record<Size, string> = { sm: 'h-8 px-3 text-rotulo', md: 'h-10 px-4 text-apoio' }
 
 export function Button({ variant = 'primary', size = 'md', className, children, ...rest }: Props) {
   return (

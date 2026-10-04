@@ -29,7 +29,7 @@ function Texto({ texto }: { texto: string }) {
   return (
     <>
       {texto.split(/\n\n+/).map((p, i) => (
-        <p key={i} className={cx('text-[14.5px] leading-[1.6]', i > 0 && 'mt-3')}>
+        <p key={i} className={cx('text-apoio leading-[1.6]', i > 0 && 'mt-3')}>
           {p.split(/(\*\*[^*]+\*\*)/).map((parte, j) =>
             parte.startsWith('**') ? (
               <strong key={j} className="font-[620] text-paper">
@@ -143,7 +143,7 @@ export function Assistente() {
                       className={cx('flex', m.de === 'voce' ? 'justify-end' : 'justify-start')}
                     >
                       {m.de === 'voce' ? (
-                        <div className="max-w-[85%] rounded-[16px] rounded-br-[6px] bg-paper px-4 py-2.5 text-[14.5px] leading-[1.55] text-ink">
+                        <div className="max-w-[85%] rounded-[16px] rounded-br-[6px] bg-paper px-4 py-2.5 text-apoio leading-[1.55] text-ink">
                           <span className="sr-only">Você: </span>
                           {m.texto}
                         </div>
@@ -163,7 +163,7 @@ export function Assistente() {
                                     <Link
                                       key={l.para}
                                       to={l.para}
-                                      className="inline-flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-[12.5px] font-[560] text-silver transition-colors hover:border-graphite hover:text-paper"
+                                      className="inline-flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-rotulo font-[560] text-silver transition-colors hover:border-graphite hover:text-paper"
                                     >
                                       {l.rotulo} <IconArrowRight width={13} height={13} />
                                     </Link>
@@ -210,7 +210,7 @@ export function Assistente() {
                     type="button"
                     onClick={() => void perguntar(s)}
                     disabled={pensando}
-                    className="rounded-full border border-line bg-ink/25 px-3 py-1.5 text-[13px] font-[520] text-paper transition-colors hover:border-amber/60 hover:bg-amber/[0.06] disabled:opacity-50"
+                    className="rounded-full border border-line bg-ink/25 px-3 py-1.5 text-rotulo font-[520] text-paper transition-colors hover:border-amber/60 hover:bg-amber/[0.06] disabled:opacity-50"
                   >
                     {s}
                   </button>
@@ -227,7 +227,7 @@ export function Assistente() {
                   onKeyDown={teclado}
                   rows={1}
                   placeholder="Escreva a sua pergunta"
-                  className="scroll-fino max-h-32 min-h-[44px] w-full resize-none rounded-[12px] border border-line bg-ink/40 px-4 py-2.5 text-[14.5px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
+                  className="scroll-fino max-h-32 min-h-[44px] w-full resize-none rounded-[12px] border border-line bg-ink/40 px-4 py-2.5 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
                 />
               </label>
               <Button type="submit" size="md" disabled={!texto.trim() || pensando} aria-label="Enviar pergunta">
@@ -253,7 +253,7 @@ export function Assistente() {
               </span>
               <h3 className="t-h3 text-paper">O que o assistente vê</h3>
             </div>
-            <ul className="mt-4 flex flex-col gap-2.5 text-[13.5px] leading-[1.5]">
+            <ul className="mt-4 flex flex-col gap-2.5 text-apoio leading-[1.5]">
               <Item ok>Os mesmos números que o painel mostra: valores, contagens, faixas de risco, funil.</Item>
               <Item ok>Como o sistema funciona: tentativas, mensagens, ofertas, taxa, prazos.</Item>
               <Item>E-mail, telefone, CPF ou chave Pix dos seus clientes. Nunca.</Item>

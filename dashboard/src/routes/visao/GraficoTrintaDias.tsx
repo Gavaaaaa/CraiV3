@@ -15,12 +15,15 @@ const INV = 'var(--color-serie-inv)'
 const VOL = 'var(--color-serie-vol)'
 const LINHA_ACUM = 'var(--color-paper)'
 
-const M = { esq: 64, dir: 20 }
-const TOPO = 22
+/** O menor tamanho de letra do painel (o mesmo `--text-rotulo` de index.css): vale também no gráfico. */
+const LETRA = 13.5
+// A margem esquerda guarda os valores do eixo ("R$ 12,5 mil") no tamanho da letra acima.
+const M = { esq: 78, dir: 20 }
+const TOPO = 24
 const ALT_ACUM = 112
 const ESPACO = 46
 const ALT_DIA = 196
-const ALT_EIXO = 26
+const ALT_EIXO = 30
 const ALT_TOTAL = TOPO + ALT_ACUM + ESPACO + ALT_DIA + ALT_EIXO
 
 const compacto = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 })
@@ -152,7 +155,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
         <button
           type="button"
           onClick={() => setTabela((t) => !t)}
-          className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-line px-2.5 text-[12.5px] font-[520] text-silver transition-colors hover:border-graphite hover:text-paper"
+          className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-line px-2.5 text-rotulo font-[520] text-silver transition-colors hover:border-graphite hover:text-paper"
         >
           {tabela ? <IconChart width={15} height={15} /> : <IconTable width={15} height={15} />}
           {tabela ? 'Ver como gráfico' : 'Ver como tabela'}
@@ -179,7 +182,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
 
       {tabela ? (
         <div className="scroll-fino mt-4 max-h-[400px] overflow-auto rounded-[12px] border border-line">
-          <table className="w-full text-left text-[13.5px]">
+          <table className="w-full text-left text-apoio">
             <thead className="sticky top-0 bg-card">
               <tr className="t-label text-silver">
                 <th className="px-4 py-2.5 font-[500]">Dia</th>
@@ -220,7 +223,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             onKeyDown={teclado}
           >
             {/* Grade: linhas finas, sólidas, discretas */}
-            <g className="tabular" fontSize={11} fill="var(--color-silver)">
+            <g className="tabular" fontSize={LETRA} fill="var(--color-silver)">
               {marcasAcum.map((v) => (
                 <g key={`a${v}`}>
                   <line x1={M.esq} x2={largura - M.dir} y1={yAcum(v)} y2={yAcum(v)} stroke="var(--color-line)" />
@@ -240,10 +243,10 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             </g>
 
             {/* Títulos dos painéis */}
-            <text x={M.esq} y={12} fontSize={11.5} fontWeight={560} fill="var(--color-silver)">
+            <text x={M.esq} y={13} fontSize={LETRA} fontWeight={560} fill="var(--color-silver)">
               Acumulado
             </text>
-            <text x={M.esq} y={baseAcum + ESPACO - 14} fontSize={11.5} fontWeight={560} fill="var(--color-silver)">
+            <text x={M.esq} y={baseAcum + ESPACO - 14} fontSize={LETRA} fontWeight={560} fill="var(--color-silver)">
               Por dia
             </text>
 
@@ -258,7 +261,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
                   x={cx0(dados.length - 1) - 10}
                   y={yAcum(ultimo.acum) - 12}
                   textAnchor="end"
-                  fontSize={12.5}
+                  fontSize={LETRA}
                   fontWeight={620}
                   fill="var(--color-paper)"
                 >
@@ -290,9 +293,9 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             <line x1={M.esq} x2={largura - M.dir} y1={baseDia} y2={baseDia} stroke="var(--color-graphite)" strokeOpacity={0.6} />
 
             {/* Eixo de datas */}
-            <g fontSize={11} fill="var(--color-silver)" className="tabular">
+            <g fontSize={LETRA} fill="var(--color-silver)" className="tabular">
               {marcasX.map(({ i, d }) => (
-                <text key={d.dia} x={cx0(i)} y={baseDia + 18} textAnchor="middle">
+                <text key={d.dia} x={cx0(i)} y={baseDia + 20} textAnchor="middle">
                   {i === dados.length - 1 ? 'Hoje' : diaMes(d.dia)}
                 </text>
               ))}
@@ -319,7 +322,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
               }
             >
               <div className="t-label text-silver">{ativo === dados.length - 1 ? `Hoje, ${diaMes(p.dia)}` : diaMes(p.dia)}</div>
-              <ul className="mt-2 flex flex-col gap-1.5 text-[13px]">
+              <ul className="mt-2 flex flex-col gap-1.5 text-rotulo">
                 <LinhaTip cor={s1.cor} tipo="barra" valor={p.v1} rotulo={s1.rotulo.split(' (')[0]} />
                 {s2 ? <LinhaTip cor={s2.cor} tipo="barra" valor={p.v2} rotulo={s2.rotulo.split(' (')[0]} /> : null}
                 {s2 ? (

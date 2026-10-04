@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cx } from '../../lib/cx'
-import { IconChat, IconGear, IconGrid, IconLogout, IconPlay, IconRefresh, IconUsers } from '../icons/Icons'
+import { IconChat, IconGear, IconGrid, IconKey, IconLogout, IconPlay, IconRefresh, IconUsers } from '../icons/Icons'
 
 interface Item {
   to: string
@@ -18,6 +18,8 @@ export function Sidebar({ premium }: { premium: boolean }) {
     { to: '/involuntario', rotulo: 'Churn involuntário', Icone: IconRefresh },
     { to: '/voluntario', rotulo: 'Churn voluntário', Icone: IconUsers, bloqueado: !premium },
     { to: '/assistente', rotulo: 'Assistente', Icone: IconChat },
+    // A aba API abre em qualquer plano: no essencial a empresa vê e revoga; só gerar é do premium.
+    { to: '/api', rotulo: 'API', Icone: IconKey },
   ]
   return (
     <nav
@@ -58,6 +60,8 @@ export function Sidebar({ premium }: { premium: boolean }) {
               className={({ isActive }) =>
                 cx(
                   'group relative mx-auto flex h-12 w-12 items-center justify-center rounded-[14px] transition-colors duration-200',
+                  // Com selo, o ícone sobe e o selo fica embaixo dele, dentro do mesmo quadrado.
+                  selo && 'flex-col gap-[3px]',
                   isActive ? 'bg-ink text-orange' : 'text-silver hover:bg-paper/[0.06] hover:text-paper',
                   bloqueado && 'opacity-45',
                 )
@@ -72,19 +76,16 @@ export function Sidebar({ premium }: { premium: boolean }) {
                       className="absolute -right-[14px] top-1/2 h-7 w-[3px] -translate-y-1/2 rounded-full bg-orange"
                     />
                   ) : null}
-                  <Icone width={21} height={21} />
+                  <Icone width={selo ? 18 : 21} height={selo ? 18 : 21} />
                   {selo ? (
-                    <span
-                      aria-hidden="true"
-                      className="absolute -top-1 -right-1 rounded-[5px] bg-amber px-1 text-[9px] leading-[14px] font-[700] tracking-[0.04em] text-ink uppercase"
-                    >
+                    <span aria-hidden="true" className="rounded-[5px] bg-amber px-1 text-rotulo leading-[1.15] font-[700] text-ink">
                       {selo}
                     </span>
                   ) : null}
                   {/* Rótulo flutuante ao passar o mouse */}
                   <span
                     role="tooltip"
-                    className="pointer-events-none absolute left-[calc(100%+14px)] z-40 rounded-[8px] max-md:hidden border border-line bg-slate px-2.5 py-1.5 text-[12.5px] whitespace-nowrap text-paper opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+                    className="pointer-events-none absolute left-[calc(100%+14px)] z-40 rounded-[8px] max-md:hidden border border-line bg-slate px-2.5 py-1.5 text-rotulo whitespace-nowrap text-paper opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
                   >
                     {rotulo}
                     {bloqueado ? <span className="text-silver"> · Plano premium</span> : null}

@@ -24,7 +24,7 @@ export const FAIXA: Record<FaixaRisco, { rotulo: string; classe: string; ponto: 
 export function FaixaPill({ faixa, className }: { faixa: FaixaRisco; className?: string }) {
   const f = FAIXA[faixa]
   return (
-    <span className={cx('inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[12.5px] font-[520] whitespace-nowrap', f.classe, className)}>
+    <span className={cx('inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-rotulo font-[520] whitespace-nowrap', f.classe, className)}>
       <span className={cx('h-1.5 w-1.5 rounded-full', f.ponto)} aria-hidden="true" />
       {f.rotulo}
     </span>
@@ -73,12 +73,12 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
               aria-selected={filtro === f.valor}
               onClick={() => setFiltro(f.valor)}
               className={cx(
-                'rounded-full border px-3 py-1.5 text-[13px] font-[520] transition-colors',
+                'rounded-full border px-3 py-1.5 text-rotulo font-[520] transition-colors',
                 filtro === f.valor ? 'border-orange/60 bg-orange/10 text-orange' : 'border-line text-silver hover:border-graphite hover:text-paper',
               )}
             >
               {f.rotulo}
-              <span className="tabular ml-1.5 text-[12px] opacity-70">{contagem(f.valor)}</span>
+              <span className="tabular ml-1.5 text-rotulo opacity-70">{contagem(f.valor)}</span>
             </button>
           ))}
         </div>
@@ -126,11 +126,11 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
                   </td>
                   <td className="tabular px-3 py-3.5 font-[560] whitespace-nowrap text-paper">{fmt.brl(c.mrr)}</td>
                   <td className="px-3 py-3.5"><FaixaPill faixa={c.faixa} /></td>
-                  <td className="max-w-[300px] px-3 py-3.5 text-[13.5px] leading-[1.45] text-silver">{c.motivo}</td>
+                  <td className="max-w-[300px] px-3 py-3.5 text-apoio leading-[1.45] text-silver">{c.motivo}</td>
                   <td className="px-3 py-3.5">
                     {c.abordagem ? (
                       <>
-                        <div className="text-[13.5px] text-paper">{OFERTA[c.abordagem.oferta]}</div>
+                        <div className="text-apoio text-paper">{OFERTA[c.abordagem.oferta]}</div>
                         <div className="t-label text-silver">
                           {CANAL[c.abordagem.canal]} · <span className={STATUS_OFERTA[c.abordagem.status].classe}>{STATUS_OFERTA[c.abordagem.status].rotulo}</span>
                         </div>
@@ -229,7 +229,7 @@ export function SuaBase({ base }: { base: BaseClientes | null }) {
           <span className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-paper/[0.06] text-amber">
             <IconTable width={22} height={22} />
           </span>
-          <div className="mt-3 text-[15px] font-[560] text-paper">{enviando ? 'Lendo o arquivo…' : 'Arraste a base aqui'}</div>
+          <div className="mt-3 text-normal font-[560] text-paper">{enviando ? 'Lendo o arquivo…' : 'Arraste a base aqui'}</div>
           <p className="t-apoio mt-1 text-silver">CSV ou XLSX, até 25 MB. Uma linha por cliente.</p>
           <Button variant="ghost" size="sm" className="mt-4" onClick={() => input.current?.click()} disabled={enviando}>
             Escolher arquivo
@@ -238,13 +238,13 @@ export function SuaBase({ base }: { base: BaseClientes | null }) {
             Os dados ficam só na sua conta. A CRAI usa a base para avaliar risco e falar com o cliente em seu nome; nunca para treinar modelos de outras empresas.
           </p>
         </div>
-        {erro ? <p role="alert" className="mt-3 rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-[13.5px] text-[#f5a29a]">{erro}</p> : null}
+        {erro ? <p role="alert" className="mt-3 rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">{erro}</p> : null}
         {resultado ? (
           <div role="status" className="mt-3 rounded-[14px] border border-ok/40 bg-ok/[0.06] p-4">
-            <div className="flex items-center gap-2 text-[14px] font-[600] text-ok">
+            <div className="flex items-center gap-2 text-apoio font-[600] text-ok">
               <IconCheck width={16} height={16} /> Base recebida: {resultado.arquivo}
             </div>
-            <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[13.5px] text-paper sm:grid-cols-4">
+            <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-apoio text-paper sm:grid-cols-4">
               <li><span className="tabular font-[640]">{fmt.numero(resultado.linhas)}</span> <span className="text-silver">linhas</span></li>
               <li><span className="tabular font-[640]">{resultado.novos}</span> <span className="text-silver">novos</span></li>
               <li><span className="tabular font-[640]">{resultado.atualizados}</span> <span className="text-silver">corrigidos</span></li>
@@ -265,7 +265,7 @@ function Dado({ rotulo, valor, apoio, pequeno }: { rotulo: string; valor: string
   return (
     <div className="rounded-[12px] border border-line bg-ink/25 px-3.5 py-3">
       <dt className="t-label text-silver">{rotulo}</dt>
-      <dd className={cx('mt-1 text-paper', pequeno ? 'text-[14px] font-[560]' : 'text-[20px] font-[640] tracking-[-0.01em]')}>{valor}</dd>
+      <dd className={cx('mt-1 text-paper', pequeno ? 'text-apoio font-[560]' : 'text-[20px] font-[640] tracking-[-0.01em]')}>{valor}</dd>
       {apoio ? <dd className="t-label mt-1 text-muted">{apoio}</dd> : null}
     </div>
   )
@@ -288,7 +288,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
               <QuemDecidiu por="modelo" />
               <span className="t-label text-silver">{pct !== null ? `${pct}% da base` : ''}</span>
             </div>
-            <p className="mt-2 text-[13.5px] leading-[1.5] text-paper">
+            <p className="mt-2 text-apoio leading-[1.5] text-paper">
               Um modelo de IA (versão 3, sendo promovido agora) aprende com o comportamento: uso, chamados, atrasos, tempo de casa. Decide quando o cliente tem esses dados.
             </p>
           </li>
@@ -297,14 +297,14 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
               <QuemDecidiu por="regua" />
               <span className="t-label text-silver">{pct !== null ? `${100 - pct}% da base` : ''}</span>
             </div>
-            <p className="mt-2 text-[13.5px] leading-[1.5] text-paper">
+            <p className="mt-2 text-apoio leading-[1.5] text-paper">
               Uma régua de regras fixas (atraso, chamados, queda de uso). Decide quando ainda não há dados de comportamento, como em clientes novos. É previsível, mas avisa menos cedo.
             </p>
           </li>
         </ul>
         <div className="mt-4 rounded-[14px] border border-line bg-ink/25 p-4">
           <h4 className="t-h3 text-paper">Como as faixas são definidas</h4>
-          <ul className="mt-2 flex flex-col gap-1.5 text-[13.5px] leading-[1.5] text-paper">
+          <ul className="mt-2 flex flex-col gap-1.5 text-apoio leading-[1.5] text-paper">
             <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" /><span><span className="font-[600]">Grave:</span> os 10% da base com mais risco, e só com um sinal real de abandono (uso caindo, chamados, atraso).</span></li>
             <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true" /><span><span className="font-[600]">Preocupante:</span> os 20% seguintes, também com sinal real.</span></li>
             <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ok" aria-hidden="true" /><span><span className="font-[600]">Sem risco:</span> o resto da base com dados. <span className="font-[600]">Sem dado suficiente:</span> ainda não dá para avaliar.</span></li>
@@ -318,7 +318,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
           {comparacao ? `Entre os ${fmt.numero(comparacao.clientes_com_dados)} clientes com dados de comportamento, ${comparacao.cancelamentos} cancelaram. Quem tinha avisado antes?` : ''}
         </p>
         {!comparacao ? (
-          <p className="mt-5 rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-[13.5px] leading-[1.5] text-silver">
+          <p className="mt-5 rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-silver">
             A comparação aparece depois que o modelo de IA estiver avaliando a sua base por 30 dias. Até lá, a régua decide e a tabela mostra isso.
           </p>
         ) : null}
@@ -339,7 +339,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
               modelo={comparacao.modelo.marcou_grave}
               max={Math.max(comparacao.regua.marcou_grave, comparacao.modelo.marcou_grave)}
             />
-            <p className="rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-[13.5px] leading-[1.5] text-paper">
+            <p className="rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-paper">
               O modelo avisou {comparacao.modelo.avisou_antes} dos {comparacao.cancelamentos} cancelamentos, marcando menos da metade dos clientes que a régua marcou. Menos alarme falso, mais aviso certo.
             </p>
           </div>
@@ -352,11 +352,11 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
 function Comparativo({ rotulo, apoio, regua, modelo, max, melhorMaior }: { rotulo: string; apoio: string; regua: number; modelo: number; max: number; melhorMaior?: boolean }) {
   const linha = (nome: string, v: number, cor: string, destaque: boolean) => (
     <div className="flex items-center gap-3">
-      <span className="w-[88px] shrink-0 text-[13px] text-silver">{nome}</span>
+      <span className="w-[88px] shrink-0 text-rotulo text-silver">{nome}</span>
       <div className="h-2 flex-1 rounded-full bg-paper/[0.06]" aria-hidden="true">
         <div className="h-2 rounded-full" style={{ width: `${max ? (v / max) * 100 : 0}%`, background: cor }} />
       </div>
-      <span className={cx('tabular w-14 shrink-0 text-right text-[14px]', destaque ? 'font-[680] text-paper' : 'font-[520] text-silver')}>
+      <span className={cx('tabular w-14 shrink-0 text-right text-apoio', destaque ? 'font-[680] text-paper' : 'font-[520] text-silver')}>
         {v}{melhorMaior ? ` de ${max}` : ''}
       </span>
     </div>
@@ -365,7 +365,7 @@ function Comparativo({ rotulo, apoio, regua, modelo, max, melhorMaior }: { rotul
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[13.5px] font-[560] text-paper">{rotulo}</span>
+        <span className="text-apoio font-[560] text-paper">{rotulo}</span>
         <span className="t-label text-muted">{apoio}</span>
       </div>
       <div className="mt-2 flex flex-col gap-2">

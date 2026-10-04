@@ -107,7 +107,7 @@ export function Simulacao() {
 
   const abas: Aba<AbaSim>[] = [
     { valor: 'cobranca', rotulo: 'Cobrança Pix (involuntário)' },
-    { valor: 'retencao', rotulo: 'Cliente em risco (voluntário)', extra: premium ? null : <Badge className="px-1.5 py-0 text-[11px]">Premium</Badge> },
+    { valor: 'retencao', rotulo: 'Cliente em risco (voluntário)', extra: premium ? null : <Badge className="px-1.5 py-0 text-rotulo">Premium</Badge> },
   ]
 
   return (
@@ -141,7 +141,7 @@ export function Simulacao() {
       ) : (
         <>
         {erro ? (
-          <div role="alert" className="rounded-[12px] border border-danger/40 bg-danger/[0.06] px-4 py-3 text-[13.5px] text-paper">
+          <div role="alert" className="rounded-[12px] border border-danger/40 bg-danger/[0.06] px-4 py-3 text-apoio text-paper">
             {erro} Nada foi perdido; tente a ação de novo.
           </div>
         ) : null}
@@ -318,7 +318,7 @@ function Faixa({ tom, icone, children }: { tom: 'orange' | 'danger' | 'ok' | 'am
     neutro: 'border-line bg-paper/[0.04] text-silver',
   }[tom]
   return (
-    <div role="status" className={cx('flex w-full flex-wrap items-center gap-2 rounded-[12px] border px-4 py-2.5 text-[14px] font-[600]', classes)}>
+    <div role="status" className={cx('flex w-full flex-wrap items-center gap-2 rounded-[12px] border px-4 py-2.5 text-apoio font-[600]', classes)}>
       {icone}
       <span className="flex flex-wrap items-baseline gap-x-1">{children}</span>
     </div>

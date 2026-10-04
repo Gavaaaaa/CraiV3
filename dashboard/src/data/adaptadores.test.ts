@@ -4,6 +4,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  adaptarChave,
+  adaptarChaves,
+  avisoDoDesconto,
   abordagemDaTela,
   abordagemParaApi,
   adaptarCiclo,
@@ -198,6 +201,37 @@ describe('detalhe do ciclo', () => {
   it('a chance de recuperar vem do diagnóstico; sem ele, null', () => {
     expect(d.chance_recuperar).toBe(0.72)
     expect(adaptarDetalhe({ ...DETALHE, linha_do_tempo: [] }).chance_recuperar).toBeNull()
+  })
+
+  it('sem desconto por anomalia, nada muda: o texto da decisão de risco aparece como veio', () => {
+    expect(d.desconto_anomalia_pct).toBeNull()
+    expect(d.linha_do_tempo.find((e) => e.titulo === 'Decisão registrada: avaliação da cobrança')?.detalhe).toBe(
+      'Pesaram, nesta ordem: 2 meses como cliente (reduziu a chance).',
+    )
+    // Um backend anterior, que não manda o campo, dá no mesmo.
+    expect(adaptarDetalhe({ ...DETALHE, diagnostico: { ...DETALHE.diagnostico!, desconto_por_anomalia: null } }).desconto_anomalia_pct).toBeNull()
+  })
+
+  it('com desconto por anomalia, o painel fica com um número só: o que o sistema usou', () => {
+    const comDesconto = adaptarDetalhe({
+      ...DETALHE,
+      diagnostico: { ...DETALHE.diagnostico!, desconto_por_anomalia: { percentual: 30, pontuacao_antes: 24, pontuacao_usada: 16 } },
+      linha_do_tempo: [
+        { quando: '2026-09-03T09:00:00-03:00', tipo: 'diagnostico', dados: { estrategia: 'mensagem_pagamento', recovery_score: 16, p_recovery: 0.1677 } },
+        { quando: '2026-09-03T09:00:00-03:00', tipo: 'decisao', dados: { tipo_decisao: 'risco', explicacao: 'O sistema avaliou o risco: pontuação de recuperação 24/100; probabilidade de recuperação 24%.' } },
+        { quando: '2026-09-03T09:00:01-03:00', tipo: 'decisao', dados: { tipo_decisao: 'retentativa', explicacao: 'A pontuação de recuperação foi reduzida em 30% por comportamento fora do padrão: de 24/100 para 16/100.' } },
+      ],
+    })
+    expect(comDesconto.chance_recuperar).toBe(0.1677)
+    expect(comDesconto.desconto_anomalia_pct).toBe(30)
+    const [diagnostico, risco, retentativa] = comDesconto.linha_do_tempo
+    expect(diagnostico.titulo).toBe('Diagnóstico: 17% de chance de recuperar')
+    // A avaliação inicial não repete a pontuação de antes do desconto.
+    expect(risco.detalhe).toBe(avisoDoDesconto(30))
+    expect(risco.detalhe).not.toMatch(/24/)
+    expect(risco.detalhe).toContain('desconto de 30% por comportamento fora do padrão')
+    // A decisão que aplicou o desconto conta de quanto para quanto, como a trilha gravou.
+    expect(retentativa.detalhe).toContain('de 24/100 para 16/100')
   })
 
   it('as contribuições são fator e efeito em texto, com maiúscula, sem pontos', () => {
@@ -539,5 +573,52 @@ describe('saúde', () => {
 
   it('o que o backend ainda não informa fica marcado como demonstração', () => {
     expect(saude({}).demonstracao).toEqual(['modelos', 'redator', 'base'])
+  })
+})
+
+describe('chaves de API (Rodada 2)', () => {
+  // Chave de exemplo, visivelmente falsa: o backend manda só o começo e o final.
+  const DO_BACKEND = {
+    id: 'chv_0123456789abcdef',
+    nome: 'Sistema de cobrança',
+    prefixo: 'crai_live_EXEM',
+    final: 'PLO0',
+    criada_em: '2026-10-04T09:00:00-03:00',
+    criada_por_papel: 'admin',
+    ultimo_uso_em: null,
+    revogada_em: null,
+    situacao: 'ativa' as const,
+    usos_hoje: 3,
+  }
+
+  it('a chave da tela tem o nome, o começo e o final, e nada além do que a tela mostra', () => {
+    const chave = adaptarChave(DO_BACKEND)
+    expect(chave).toEqual({
+      id: 'chv_0123456789abcdef',
+      nome: 'Sistema de cobrança',
+      inicio: 'crai_live_EXEM',
+      final: 'PLO0',
+      criada_em: '2026-10-04T09:00:00-03:00',
+      ultimo_uso: null,
+      revogada_em: null,
+    })
+    expect('ambiente' in chave).toBe(false)
+  })
+
+  it('campo a mais na resposta não chega à tela', () => {
+    const comExtra = { ...DO_BACKEND, hash: 'nao-deveria-vir', chave_inteira: 'nao-deveria-vir' }
+    expect(JSON.stringify(adaptarChave(comExtra))).not.toContain('nao-deveria-vir')
+  })
+
+  it('a lista leva o que a pessoa pode fazer', () => {
+    const revogada = { ...DO_BACKEND, id: 'chv_2', revogada_em: '2026-10-04T10:00:00-03:00', situacao: 'revogada' as const, ultimo_uso_em: '2026-10-04T09:30:00-03:00' }
+    const lista = adaptarChaves({ chaves: [DO_BACKEND, revogada], ativas: 1, limite_ativas: 5, pode_revogar: true, plano_permite_gerar: false, pode_gerar: false })
+    expect([lista.ativas, lista.limite_ativas, lista.pode_gerar]).toEqual([1, 5, false])
+    // Plano essencial com papel de dono: revoga, mas não gera.
+    expect([lista.pode_revogar, lista.plano_permite_gerar]).toEqual([true, false])
+    expect(lista.chaves.map((c) => [c.id, c.ultimo_uso, c.revogada_em])).toEqual([
+      ['chv_0123456789abcdef', null, null],
+      ['chv_2', '2026-10-04T09:30:00-03:00', '2026-10-04T10:00:00-03:00'],
+    ])
   })
 })

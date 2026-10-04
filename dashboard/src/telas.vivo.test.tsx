@@ -1,19 +1,29 @@
 // @vitest-environment jsdom
 /**
  * As telas de pé em MODO REAL, contra o backend local com a semente rodada. Roda junto com o
- * teste da camada de dados em `npm run test:vivo`. Só lê: não escolhe mensagem nem grava
- * configuração, então pode rodar quantas vezes for preciso.
+ * teste da camada de dados em `npm run test:vivo`, na EMPRESA DOS TESTES (`demo_testes`):
+ * nada daqui aparece na empresa da demonstração. Não escolhe mensagem nem grava configuração;
+ * gera uma chave de API e a revoga em seguida.
  *
- * O que se mede: o Involuntário e a Configuração mostram o que o backend respondeu; as
- * páginas e os blocos que ainda usam dado fictício mostram a etiqueta "Demonstração"; o
+ * O que se mede: o Involuntário e a Configuração mostram o que o backend respondeu; o
  * seletor de papel de desenvolvimento troca o que a pessoa pode fazer.
+ *
+ * AS ETIQUETAS "DEMONSTRAÇÃO" (Rodada 2, Fase 3). Por padrão elas não aparecem mais, e este
+ * arquivo confere isso. Para conferir que voltam como eram, rode com a variável ligada:
+ *   PowerShell:  $env:VITE_CRAI_MOSTRAR_DEMONSTRACAO = "1"; npm run test:vivo
+ * Com ela, os mesmos testes exigem as contagens da Etapa 4A.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import App from './App'
-import { MODO_REAL, trocarPapelDeDesenvolvimento } from './data/api'
+import { ENDERECO_DA_API, MODO_REAL, MOSTRAR_DEMONSTRACAO, trocarEmpresaDeDesenvolvimento, trocarPapelDeDesenvolvimento } from './data/api'
+import { prepararJsdom } from './testes/modoRealFalso'
 
 beforeAll(() => {
+  // A empresa dos testes ao vivo, e não a da demonstração.
+  trocarEmpresaDeDesenvolvimento('demo_testes')
+  // O que o jsdom não tem e as telas usam (o gráfico de 30 dias mede a própria largura).
+  prepararJsdom()
   window.matchMedia = ((consulta: string) => ({
     matches: false,
     media: consulta,
@@ -90,7 +100,7 @@ describe('telas em modo real', () => {
     expect(within(painel).getByText(/Cobrança de R\$\s3\.200,00, já descontada a taxa da CRAI\./)).toBeTruthy()
   })
 
-  it('configuração: mensagens de verdade; as outras seções com a etiqueta', async () => {
+  it('configuração: mensagens de verdade; as outras seções, com a etiqueta só se a variável estiver ligada', async () => {
     abrir('/configuracao')
     expect(await screen.findByText('Quem escolhe a mensagem', {}, ESPERA)).toBeTruthy()
     expect(screen.getByText('Salvar')).toBeTruthy()
@@ -98,7 +108,8 @@ describe('telas em modo real', () => {
     expect(screen.queryByText('SMS')).toBeNull()
     expect(screen.queryByText('Ligar SMS')).toBeNull()
     // Cinco seções ainda são de demonstração: Empresa, Equipe, Integração, Dados e Notificações.
-    expect(etiquetas()).toHaveLength(5)
+    // A etiqueta delas só aparece com VITE_CRAI_MOSTRAR_DEMONSTRACAO=1.
+    expect(etiquetas()).toHaveLength(MOSTRAR_DEMONSTRACAO ? 5 : 0)
   })
 
   it('o seletor de papel de desenvolvimento troca o que a pessoa pode fazer', async () => {
@@ -112,28 +123,109 @@ describe('telas em modo real', () => {
     expect(screen.getByText('Membro (só leitura)')).toBeTruthy()
   })
 
-  it('visão geral, voluntário e assistente continuam em demonstração, com a etiqueta', async () => {
+  it('visão geral, voluntário e assistente continuam em demonstração; a etiqueta obedece à variável', async () => {
+    /** Com a variável: pelo menos `minimo` etiquetas, como na Etapa 4A. Sem ela: nenhuma. */
+    const conferir = async (minimo: number) => {
+      if (MOSTRAR_DEMONSTRACAO) {
+        await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(minimo), ESPERA)
+      } else {
+        await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
+        expect(etiquetas()).toHaveLength(0)
+      }
+    }
     abrir('/')
     expect(await screen.findByText('Olá, Empresa de demonstração', {}, ESPERA)).toBeTruthy()
     expect(await screen.findByText('Mantido para você nos últimos 30 dias', {}, ESPERA)).toBeTruthy()
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(7), ESPERA)
+    await conferir(7)
     cleanup()
     abrir('/voluntario')
     expect(await screen.findByText('Mantido para você em setembro', {}, ESPERA)).toBeTruthy()
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(6), ESPERA)
+    await conferir(6)
     cleanup()
     abrir('/assistente')
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(1), ESPERA)
+    expect(await screen.findByText('O que o assistente vê', { exact: false }, ESPERA)).toBeTruthy()
+    await conferir(1)
   })
 
-  it('saúde do sistema: o relógio é o de verdade, e o resto está marcado', async () => {
+  it('a Simulação do gateway mantém o selo dela, com ou sem a variável', async () => {
+    abrir('/simulacao')
+    const titulo = await screen.findByRole('heading', { name: 'Simulação do gateway' }, ESPERA)
+    expect(titulo.parentElement?.textContent).toBe('Simulação do gatewayDemonstração')
+    expect(screen.getByRole('link', { name: 'Simulação do gateway' }).textContent).toContain('Demo')
+  })
+
+  it('aba API: gera com um clique, a chave aparece no campo, e revoga com confirmação na tela', async () => {
+    abrir('/api')
+    const chaveDeApi = () => within(screen.getByRole('region', { name: 'Chave de API' }))
+    const campos = () => chaveDeApi().queryAllByRole('textbox') as HTMLInputElement[]
+    // O endereço mostrado é o do backend.
+    expect(((await screen.findByRole('textbox', { name: 'Endereço da API' }, ESPERA)) as HTMLInputElement).value).toBe(ENDERECO_DA_API)
+    // O exemplo vem fechado; aberto, traz o marcador, não uma chave.
+    expect(document.querySelector('pre')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^Exemplo de uso/ }))
+    expect(document.querySelector('pre')?.textContent).toContain('Authorization: Bearer SUA_CHAVE_AQUI')
+    expect(document.querySelector('pre')?.textContent).not.toMatch(/crai_live_/)
+
+    // Gerar: um clique, sem nome. (Com ou sem chave ativa na empresa dos testes.)
+    const gerar = await screen.findByRole('button', { name: /^Gerar (outra )?chave$/ }, ESPERA)
+    const antes = campos().length
+    fireEvent.click(gerar)
+    const campo = (await chaveDeApi().findByRole('textbox', { name: 'Chave de API, inteira' }, ESPERA)) as HTMLInputElement
+    const chave = campo.value
+    expect(chave).toMatch(/^crai_live_[A-Za-z0-9_-]{43}$/)
+    expect(screen.getByText('Copie agora. Por segurança, ela não aparece de novo.')).toBeTruthy()
+    await waitFor(() => expect(campos()).toHaveLength(antes + 1), ESPERA)
+    const linha = campo.closest('[data-testid="chave-ativa"]') as HTMLElement
+    expect(within(linha).getByText(/Último uso: nunca$/)).toBeTruthy()
+    expect(within(linha).getByRole('button', { name: 'Copiar' })).toBeTruthy()
+    expect(window.localStorage.length + window.sessionStorage.length).toBe(0)
+    expect(window.location.href).not.toContain('crai_live_')
+    expect(document.querySelector('table')).toBeNull()
+
+    // Revogar, com a confirmação dentro da tela: o campo some e a chave vai para as revogadas.
+    fireEvent.click(within(linha).getByRole('button', { name: 'Revogar' }))
+    fireEvent.click(within(linha).getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(campos()).toHaveLength(antes), ESPERA)
+    expect(document.documentElement.outerHTML).not.toContain(chave.slice('crai_live_'.length))
+    const revogadas = await screen.findByRole('button', { name: /^Ver chaves revogadas \(\d+\)$/ }, ESPERA)
+    fireEvent.click(revogadas)
+    expect(within(screen.getByRole('list', { name: 'Chaves revogadas' })).getAllByText(`${chave.slice(0, 14)}••••••${chave.slice(-4)}`).length).toBe(1)
+    expect(etiquetas()).toHaveLength(0)
+  })
+
+  it('aba API: como membro, as chaves aparecem com o aviso e sem os botões', async () => {
+    abrir('/api')
+    expect(await screen.findByRole('button', { name: /^Gerar (outra )?chave$/ }, ESPERA)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Papel do login de desenvolvimento'), { target: { value: 'membro' } })
+    expect(await screen.findByText('Seu papel não permite gerar nem revogar chaves.', {}, ESPERA)).toBeTruthy()
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull(), ESPERA)
+    expect(screen.queryByRole('button', { name: 'Revogar' })).toBeNull()
+  })
+
+  it('a barra "Mostrar" só aparece no Involuntário, no Voluntário e na Visão geral', async () => {
+    const barra = () => screen.queryByRole('radiogroup', { name: 'Modo dos dados' })
+    abrir('/involuntario')
+    expect(await screen.findByText(`Recuperado para você em ${mesAtual}`, {}, ESPERA)).toBeTruthy()
+    expect(barra()).toBeTruthy()
+    cleanup()
+    abrir('/api')
+    expect(await screen.findByRole('textbox', { name: 'Endereço da API' }, ESPERA)).toBeTruthy()
+    expect(barra()).toBeNull()
+    cleanup()
+    abrir('/configuracao')
+    expect(await screen.findByText('Quem escolhe a mensagem', {}, ESPERA)).toBeTruthy()
+    expect(barra()).toBeNull()
+  })
+
+  it('saúde do sistema: o relógio é o de verdade; o resto só é marcado com a variável ligada', async () => {
     abrir('/?aba=saude')
     expect(await screen.findByText('Relógio das tentativas', {}, ESPERA)).toBeTruthy()
     expect(screen.getByText(/^Ativo\. /)).toBeTruthy()
     const item = (rotulo: string) => screen.getByText(rotulo).closest('li')!
     expect(within(item('Relógio das tentativas')).queryByText('Demonstração')).toBeNull()
     for (const rotulo of ['Decisões automáticas', 'Redator de mensagens', 'Base de clientes']) {
-      expect(within(item(rotulo)).getByText('Demonstração'), rotulo).toBeTruthy()
+      if (MOSTRAR_DEMONSTRACAO) expect(within(item(rotulo)).getByText('Demonstração'), rotulo).toBeTruthy()
+      else expect(within(item(rotulo)).queryByText('Demonstração'), rotulo).toBeNull()
     }
   })
 })

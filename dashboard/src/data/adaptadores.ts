@@ -13,6 +13,8 @@ import type {
   Abordagem,
   Canal,
   CausaFalha,
+  ChaveApi,
+  ChavesDaEmpresa,
   CicloDetalhe,
   CicloResumo,
   Configuracao,
@@ -96,6 +98,11 @@ export interface CicloDetalheApi {
     explicacao: string
     com_modelo: boolean
     contribuicoes: { fator: string; efeito: string | null }[]
+    /**
+     * O desconto por comportamento fora do padrão que o sistema aplicou sobre a pontuação do
+     * diagnóstico (Rodada 2). Ausente num backend anterior; null quando não houve desconto.
+     */
+    desconto_por_anomalia?: { percentual: number; pontuacao_antes: number | null; pontuacao_usada: number | null } | null
   } | null
   mensagens: MensagemApi[]
   modo_mensagem: 'automatico' | 'escolha'
@@ -420,12 +427,32 @@ export function adaptarEvento(e: EventoApi): EventoLinhaDoTempo | null {
   }
 }
 
+/**
+ * O que a linha do tempo diz, num ciclo com desconto, no lugar do texto da avaliação
+ * inicial: aquele texto traz a pontuação de ANTES do desconto, e o painel mostra um número
+ * só, o que o sistema usou.
+ */
+export function avisoDoDesconto(percentual: number): string {
+  return `Avaliação inicial da cobrança. O número do topo é o que o sistema usou e já tem o desconto de ${percentual}% por comportamento fora do padrão.`
+}
+
 /** `GET /ciclos/{id}`: o painel lateral. */
 export function adaptarDetalhe(d: CicloDetalheApi): CicloDetalhe {
   const diagnostico = d.linha_do_tempo.find((e) => e.tipo === 'diagnostico')
+  const desconto = numero(d.diagnostico?.desconto_por_anomalia?.percentual)
+  const evento = (e: EventoApi): EventoLinhaDoTempo | null => {
+    const adaptado = adaptarEvento(e)
+    // Com desconto, a decisão de risco não repete na tela a pontuação de antes dele.
+    if (adaptado && desconto !== null && e.tipo === 'decisao' && e.dados?.tipo_decisao === 'risco') {
+      return { ...adaptado, detalhe: avisoDoDesconto(desconto) }
+    }
+    return adaptado
+  }
   return {
     ...adaptarCiclo(d.ciclo),
+    // O número que o sistema usou para decidir (com o desconto, quando houve).
     chance_recuperar: diagnostico ? numero(diagnostico.dados?.p_recovery) : null,
+    desconto_anomalia_pct: desconto,
     dia_provavel_saldo: null,
     contribuicoes: adaptarContribuicoes(d.diagnostico?.contribuicoes ?? []),
     tentativas: [],
@@ -434,7 +461,7 @@ export function adaptarDetalhe(d: CicloDetalheApi): CicloDetalhe {
     escolha_ate: d.escolha_ate,
     escolha_por: d.escolhida_por,
     motivo_descarte: motivoLegivel(d.ciclo.motivo_descarte),
-    linha_do_tempo: d.linha_do_tempo.map(adaptarEvento).filter((e): e is EventoLinhaDoTempo => e !== null),
+    linha_do_tempo: d.linha_do_tempo.map(evento).filter((e): e is EventoLinhaDoTempo => e !== null),
   }
 }
 
@@ -533,5 +560,69 @@ export function adaptarSaude(h: SaudeApi, demonstracao: SaudeSistema): SaudeSist
     redator: { ...demonstracao.redator },
     base: demonstracao.base ? { ...demonstracao.base } : null,
     demonstracao: ['modelos', 'redator', 'base'],
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chaves de API (Rodada 2)                                             */
+/* ------------------------------------------------------------------ */
+
+/** Uma chave como o backend a devolve em `/integracao/chaves`. Sem o hash e sem a chave inteira. */
+export interface ChaveApiBackend {
+  id: string
+  nome: string
+  prefixo: string
+  final: string
+  criada_em: string
+  criada_por_papel: string
+  ultimo_uso_em: string | null
+  revogada_em: string | null
+  situacao: 'ativa' | 'revogada'
+  usos_hoje: number
+}
+
+/** `GET /integracao/chaves` */
+export interface ListaDeChavesApi {
+  chaves: ChaveApiBackend[]
+  ativas: number
+  limite_ativas: number
+  pode_revogar: boolean
+  plano_permite_gerar: boolean
+  pode_gerar: boolean
+}
+
+/** `POST /integracao/chaves`: a única resposta que traz a chave inteira. */
+export interface ChaveCriadaApi {
+  chave: ChaveApiBackend
+  chave_inteira: string
+}
+
+/** `DELETE /integracao/chaves/{id}` */
+export interface ChaveRevogadaApi {
+  chave: ChaveApiBackend
+  ja_estava_revogada: boolean
+}
+
+/** Só os campos conhecidos passam: se o backend um dia mandar algo a mais, não chega à tela. */
+export function adaptarChave(c: ChaveApiBackend): ChaveApi {
+  return {
+    id: c.id,
+    nome: c.nome,
+    inicio: c.prefixo,
+    final: c.final,
+    criada_em: c.criada_em,
+    ultimo_uso: c.ultimo_uso_em,
+    revogada_em: c.revogada_em,
+  }
+}
+
+export function adaptarChaves(r: ListaDeChavesApi): ChavesDaEmpresa {
+  return {
+    chaves: r.chaves.map(adaptarChave),
+    ativas: r.ativas,
+    limite_ativas: r.limite_ativas,
+    pode_revogar: r.pode_revogar,
+    plano_permite_gerar: r.plano_permite_gerar,
+    pode_gerar: r.pode_gerar,
   }
 }

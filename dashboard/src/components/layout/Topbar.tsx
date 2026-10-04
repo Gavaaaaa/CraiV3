@@ -21,7 +21,7 @@ export function Topbar({ empresa, onTrocarPapel }: { empresa: Empresa | null; on
           <input
             type="search"
             placeholder="Buscar cliente"
-            className="h-10 w-56 rounded-[10px] border border-line bg-slate/60 pr-3 pl-9 text-[14px] text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
+            className="h-10 w-56 rounded-[10px] border border-line bg-slate/60 pr-3 pl-9 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
           />
         </label>
         {MODO_REAL && onTrocarPapel ? (
@@ -31,7 +31,7 @@ export function Topbar({ empresa, onTrocarPapel }: { empresa: Empresa | null; on
               aria-label="Papel do login de desenvolvimento"
               value={empresa?.papel ?? 'owner'}
               onChange={(e) => onTrocarPapel(e.target.value as Papel)}
-              className="h-8 rounded-[8px] border border-line bg-slate/60 px-2 text-[12.5px] text-silver focus:border-amber/60 focus:outline-none"
+              className="h-8 rounded-[8px] border border-line bg-slate/60 px-2 text-rotulo text-silver focus:border-amber/60 focus:outline-none"
             >
               <option value="owner">Dono</option>
               <option value="admin">Administrador</option>
@@ -49,7 +49,7 @@ export function Topbar({ empresa, onTrocarPapel }: { empresa: Empresa | null; on
         </button>
         <div className="hidden items-center gap-3 rounded-[10px] border border-line bg-slate/60 px-3 py-2 lg:flex">
           <div className="text-right">
-            <div className="text-[13px] font-[560] text-paper">{fmt.dataLonga(agoraDaTela())}</div>
+            <div className="text-rotulo font-[560] text-paper">{fmt.dataLonga(agoraDaTela())}</div>
             <div className="t-label text-silver">{empresa?.plano === 'premium' ? 'Plano premium' : 'Plano essencial'}</div>
           </div>
           <Badge tone={empresa?.papel === 'owner' ? 'orange' : 'neutral'}>{empresa ? empresa.papel.charAt(0).toUpperCase() + empresa.papel.slice(1) : '—'}</Badge>
