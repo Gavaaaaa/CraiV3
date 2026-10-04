@@ -138,10 +138,11 @@ class TestValidacaoReusada:
         assert r.json()["cliente"]["billing_profile"] == "PJ"
 
     def test_campo_desconhecido_e_422(self, api):
-        r = api.post(A, "/clientes", _corpo("c", nome="Fulano"))
+        # `nome` virou campo do contrato na Etapa 2; `cpf` continua fora dele.
+        r = api.post(A, "/clientes", _corpo("c", cpf="11122233344"))
         assert r.status_code == 422
         assert r.json()["detail"]["motivo"] == "campo_desconhecido"
-        assert r.json()["detail"]["campo"] == "nome"
+        assert r.json()["detail"]["campo"] == "cpf"
 
     def test_reativar_nao_booleano_e_422(self, api):
         r = api.post(A, "/clientes", _corpo("c", reativar="sim"))
@@ -266,11 +267,11 @@ class TestLote:
         assert {c["customer_id_externo"] for c in ci.listar(A)} == {"ok-1", "ok-2"}
 
     def test_item_que_nao_e_objeto_e_item_com_campo_estranho_sao_rejeitados(self, api):
-        r = api.post(A, "/clientes/lote", {"clientes": ["texto", _corpo("x", nome="n"), _corpo("ok")]})
+        r = api.post(A, "/clientes/lote", {"clientes": ["texto", _corpo("x", cpf="1"), _corpo("ok")]})
         assert r.json()["importados"] == 1
         motivos = {e["indice"]: e["motivo"] for e in r.json()["rejeitados"]}
         assert "não é um objeto" in motivos[0]
-        assert "nome" in motivos[1]
+        assert "cpf" in motivos[1]
 
     def test_id_repetido_no_lote_a_ultima_vence(self, api):
         r = api.post(A, "/clientes/lote", {"clientes": [_corpo("c", mrr=1.0), _corpo("c", mrr=2.0)]})

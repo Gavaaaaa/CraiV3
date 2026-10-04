@@ -23,6 +23,12 @@ SEM `SUPABASE_PROJECT_URL` NÃO HÁ VALIDAÇÃO — e isso é uma falha ALTA
 aceita qualquer coisa porque a env não foi configurada é pior que um endpoint
 fora do ar. Lido a cada chamada, como `modo_real()` e `caminho_do_banco()`:
 a suíte liga e desliga env por teste.
+
+O TOKEN DE DESENVOLVIMENTO (Etapa 2, Bloco 4) é a única exceção ao JWKS, e só
+com `ENV=development`: um token com `kid` de prefixo `crai-dev-` é validado
+contra a chave que o próprio serviço gerou na subida (`api/dev_token.py`), sem
+Supabase. Fora de `development` esse `kid` é recusado antes de qualquer
+consulta de chave — ver `_claims_de_desenvolvimento`.
 """
 
 import json
@@ -159,6 +165,53 @@ def _chave_do_token(token: str) -> tuple:
     return chave, alg
 
 
+# ── O token de desenvolvimento (Etapa 2, Bloco 4) ─────────────────────────
+
+def _claims_de_desenvolvimento(token: str):
+    """As claims, se o token é o de DESENVOLVIMENTO desta subida; None se o
+    token não é de desenvolvimento (e segue para o JWKS do Supabase).
+
+    O token de desenvolvimento (`api/dev_token.py`) se identifica pelo `kid`
+    com o prefixo `crai-dev-`. FORA de `ENV=development` ele é RECUSADO aqui,
+    antes de qualquer consulta de chave — nem a chave de desenvolvimento, nem o
+    JWKS: um `kid` com esse prefixo nunca é aceito em produção, venha de onde
+    vier. Em `development`, vale só a chave gerada NESTA subida do serviço, só
+    ES256, com a mesma audiência e a mesma exigência de `exp` do Supabase.
+    """
+    from ..api import dev_token                  # import tardio: `api` importa `accounts`
+
+    try:
+        header = jwt.get_unverified_header(token)
+    except InvalidTokenError:
+        return None                               # o caminho normal diz `token_malformado`
+    kid = header.get("kid")
+    if not dev_token.e_kid_de_desenvolvimento(kid):
+        return None
+    if not dev_token.ambiente_de_desenvolvimento():
+        raise TokenInvalido("token_de_desenvolvimento_recusado",
+                            "token de desenvolvimento só é aceito com ENV=development")
+    if header.get("alg") != dev_token.ALGORITMO:
+        raise TokenInvalido("algoritmo_recusado",
+                            f"alg={header.get('alg')!r} não é aceito no token de "
+                            f"desenvolvimento; só {dev_token.ALGORITMO}")
+    chave = dev_token.chave_publica(kid)
+    if chave is None:
+        raise TokenInvalido("chave_de_desenvolvimento_desconhecida",
+                            "token de desenvolvimento de outra subida do serviço — "
+                            "peça outro em POST /dev/token")
+    try:
+        return jwt.decode(token, chave, algorithms=[dev_token.ALGORITMO], audience=AUDIENCIA,
+                          issuer=dev_token.EMISSOR, options={"require": ["exp"]})
+    except jwt.ExpiredSignatureError as e:
+        raise TokenInvalido("token_expirado", "token expirado — peça outro em "
+                            "POST /dev/token") from e
+    except jwt.InvalidSignatureError as e:
+        raise TokenInvalido("assinatura_invalida",
+                            "assinatura não confere com a chave de desenvolvimento") from e
+    except InvalidTokenError as e:
+        raise TokenInvalido("token_invalido", str(e)) from e
+
+
 # ── Validação ─────────────────────────────────────────────────────────────
 
 def validar_token(token: str) -> dict:
@@ -174,6 +227,10 @@ def validar_token(token: str) -> dict:
     if not isinstance(token, str) or not token.strip():
         raise TokenInvalido("token_ausente", "token vazio")
     token = token.strip()
+
+    claims = _claims_de_desenvolvimento(token)
+    if claims is not None:
+        return claims
 
     chave, alg = _chave_do_token(token)
     try:

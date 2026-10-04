@@ -551,7 +551,11 @@ class TestAutorizacaoRevogada:
         assert _post(cliente, _revogada(rec, f"E_{rec}_rev2")).json()["ciclo"] == "sem_ciclo_aberto"
         assert len(espioes["mensagens"]) == 1
         decisoes = _decisoes("default_tenant", rec)
-        assert [d["saida"].get("payment_method") for d in decisoes if d["tipo_decisao"] == trilha.TIPO_OFERTA] == ["boleto"]
+        # Etapa 2 (R9): a escolha entre as 3 sugestões também é uma decisão
+        # `oferta`, sem meio de pagamento; a oferta do meio é a da campanha.
+        assert [d["saida"].get("payment_method") for d in decisoes
+                if d["tipo_decisao"] == trilha.TIPO_OFERTA
+                and d["saida"].get("regra") != "escolha_entre_sugestoes"] == ["boleto"]
 
     def test_falha_de_tentativa_com_causa_revogada_tambem(self, cliente, relogio, espioes):
         rec = "RN_d_rev_falha"
@@ -773,7 +777,7 @@ class TestB3aReservaDeMensagem:
         assert depois["mensagem_confirmada_em"] == agora.isoformat()
         assert len(espioes["mensagens"]) == 1
 
-    def test_excecao_no_envio_volta_a_recobrando_e_a_passagem_seguinte_manda_uma(
+    def test_excecao_no_envio_desfaz_a_reserva_e_a_passagem_seguinte_manda_uma(
             self, monkeypatch, espioes, caplog):
         ciclo = self._ciclo_pronto_para_mensagem("RN_b3a_exc")
         original = workflow_module._dunning.run_campaign
@@ -790,7 +794,11 @@ class TestB3aReservaDeMensagem:
             resultado = asyncio.run(workflow_module.concluir_ciclo_por_resultado(ciclo["id"], agora))
         assert resultado is None
         depois = cc.ciclo_por_id(ciclo["id"])
-        assert depois["estado"] == cc.RECOBRANDO, "a reserva ficou órfã"
+        # Etapa 2: a reserva desfeita volta a `aguardando_escolha` (a mensagem
+        # já foi escolhida entre as 3 e a escolha é preservada), não a
+        # `recobrando`.
+        assert depois["estado"] == cc.AGUARDANDO_ESCOLHA, "a reserva ficou órfã"
+        assert cc.mensagem_escolhida(ciclo["id"])["enviada_em"] is None
         assert depois["mensagem_em"] is None and depois["mensagem_confirmada_em"] is None
         assert [m for m in caplog.messages if "reservada e NÃO enviada" in m]
         assert espioes["mensagens"] == []

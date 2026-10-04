@@ -104,25 +104,39 @@ BUSY_TIMEOUT_MS = 5000
 
 # ── Estados do ciclo ─────────────────────────────────────────────────────
 RECOBRANDO = "recobrando"              # tentativas automáticas em curso (ou por decidir)
+AGUARDANDO_ESCOLHA = "aguardando_escolha"  # as 3 sugestões existem; a mensagem ainda não saiu
 MENSAGEM_ENVIADA = "mensagem_enviada"  # a mensagem saiu; aguarda pagamento pelo meio oferecido
 RECUPERADO = "recuperado"              # pagamento confirmado; fee contada
 PERDIDO = "perdido"                    # prazo de recuperação vencido sem pagamento
 DESCARTADO = "descartado"              # o sistema decidiu não agir — com motivo (R6)
 
-ESTADOS = (RECOBRANDO, MENSAGEM_ENVIADA, RECUPERADO, PERDIDO, DESCARTADO)
-ESTADOS_ABERTOS = frozenset({RECOBRANDO, MENSAGEM_ENVIADA})
+ESTADOS = (RECOBRANDO, AGUARDANDO_ESCOLHA, MENSAGEM_ENVIADA, RECUPERADO, PERDIDO, DESCARTADO)
+ESTADOS_ABERTOS = frozenset({RECOBRANDO, AGUARDANDO_ESCOLHA, MENSAGEM_ENVIADA})
 
 # Transições permitidas. `recobrando` é o estado de abertura: o ciclo nasce
-# antes do diagnóstico, então "descartado" e "mensagem_enviada" saem dele.
+# antes do diagnóstico, então "descartado" e a mensagem saem dele.
+#
+# `aguardando_escolha` (Etapa 2, R7/R8): as 3 sugestões foram geradas e a
+# mensagem ainda não saiu — espera a escolha da empresa (até o prazo), a janela
+# de contato, ou um contato entregável. É um ESTADO, antes da reserva de envio,
+# e não uma reserva longa. Sai para `mensagem_enviada` (a reserva do envio),
+# para `recuperado` (o cliente pagou antes) ou para `perdido` — este só pela
+# varredura D-E2-11 (30 dias sem canal entregável), com `motivo_perdido`.
+#
+# `recobrando → mensagem_enviada` continua permitida (testes da Etapa 1 a usam
+# como montagem), mas nenhum caminho de produção a usa: toda mensagem passa
+# por `aguardando_escolha` — há uma catraca de texto que confere.
 # Os três últimos são terminais.
 TRANSICOES = {
-    RECOBRANDO: frozenset({MENSAGEM_ENVIADA, RECUPERADO, DESCARTADO}),
+    RECOBRANDO: frozenset({AGUARDANDO_ESCOLHA, MENSAGEM_ENVIADA, RECUPERADO, DESCARTADO}),
+    AGUARDANDO_ESCOLHA: frozenset({MENSAGEM_ENVIADA, RECUPERADO, PERDIDO}),
     MENSAGEM_ENVIADA: frozenset({RECUPERADO, PERDIDO}),
     RECUPERADO: frozenset(),
     PERDIDO: frozenset(),
     DESCARTADO: frozenset(),
 }
 _COLUNA_DA_TRANSICAO = {
+    AGUARDANDO_ESCOLHA: "aguardando_escolha_em",
     MENSAGEM_ENVIADA: "mensagem_em",
     RECUPERADO: "recuperado_em",
     PERDIDO: "perdido_em",
@@ -146,11 +160,24 @@ STATUS_DA_TELA = (STATUS_EM_ANALISE, STATUS_EM_PROCESSO, STATUS_RECUPERADO, STAT
 # Estados cujo status não depende das tentativas. `recobrando` fica de fora de
 # propósito: é o único que depende.
 _STATUS_POR_ESTADO = {
+    AGUARDANDO_ESCOLHA: STATUS_EM_PROCESSO,
     MENSAGEM_ENVIADA: STATUS_EM_PROCESSO,
     RECUPERADO: STATUS_RECUPERADO,
     PERDIDO: STATUS_ENCERRADO,
     DESCARTADO: STATUS_ENCERRADO,
 }
+
+# ── As três mensagens (Etapa 2, R7 a R9) ─────────────────────────────────
+ABORDAGENS = ("lembrete_cordial", "facilitacao", "urgencia_respeitosa")
+# Quem escolheu a mensagem que sai: o papel de quem escolheu (nunca o nome),
+# o prazo de R8, ou o modo automático da empresa.
+ESCOLHIDA_POR = ("owner", "admin", "prazo", "automatico")
+CANAIS_DE_MENSAGEM = ("whatsapp", "email", "sem_canal")
+ORIGENS_DE_TEXTO = ("llm", "template")
+# D-E2-11: mensagem sem canal entregável, depois de tantos dias contados da
+# geração das sugestões, leva o ciclo a `perdido` com `motivo_perdido`.
+PRAZO_SEM_CANAL_DIAS = 30
+MOTIVO_PERDIDO_SEM_CANAL = "sem_canal"
 
 # ── Resultados de uma tentativa ──────────────────────────────────────────
 PENDENTE = "pendente"        # agendada, ou disparada e ainda sem resultado
@@ -221,8 +248,10 @@ class TransicaoInvalida(ValueError):
     """Transição de estado que `TRANSICOES` não permite."""
 
 
-_SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS ciclos_cobranca (
+# O DDL da tabela de ciclos com o nome como parâmetro: a migração do `CHECK`
+# de estado (Etapa 2) cria a tabela nova com o MESMO texto, sob outro nome.
+_DDL_CICLOS = """
+CREATE TABLE IF NOT EXISTS {nome} (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id             TEXT    NOT NULL,
     id_recorrencia        TEXT    NOT NULL,
@@ -234,14 +263,14 @@ CREATE TABLE IF NOT EXISTS ciclos_cobranca (
     janela_inicio         TEXT    NOT NULL,
     janela_fim            TEXT    NOT NULL,
     estado                TEXT    NOT NULL
-        CHECK (estado IN ({", ".join(repr(e) for e in ESTADOS)})),
+        CHECK (estado IN ({estados})),
     estrategia            TEXT,
     motivo_descarte       TEXT,
     recovery_score        REAL,
     p_recovery            REAL,
     eprofit               REAL,
     fee                   REAL    NOT NULL DEFAULT 0,
-    origem                TEXT    NOT NULL DEFAULT '{ORIGEM_WEBHOOK}',
+    origem                TEXT    NOT NULL DEFAULT '{origem}',
     aberto_em             TEXT    NOT NULL,
     mensagem_em           TEXT,
     recuperado_em         TEXT,
@@ -250,13 +279,25 @@ CREATE TABLE IF NOT EXISTS ciclos_cobranca (
     atualizado_em         TEXT    NOT NULL,
     decidido_em           TEXT,
     mensagem_confirmada_em TEXT,
+    aguardando_escolha_em TEXT,
+    motivo_perdido        TEXT,
+    estornado_em          TEXT,
+    valor_estornado       REAL,
+    fee_estornada         REAL,
     UNIQUE (tenant_id, id_cobranca_original)
 );
+""".replace("{estados}", ", ".join(repr(e) for e in ESTADOS)).replace(
+    "{origem}", ORIGEM_WEBHOOK)
+
+_INDICES_CICLOS = """
 CREATE INDEX IF NOT EXISTS idx_ciclo_mandato
     ON ciclos_cobranca (tenant_id, id_recorrencia, estado);
 -- Etapa 2, Bloco 2: a listagem do dashboard, paginada por (atualizado_em, id).
 CREATE INDEX IF NOT EXISTS idx_ciclo_tenant_atualizado
     ON ciclos_cobranca (tenant_id, atualizado_em, id);
+"""
+
+_SCHEMA = _DDL_CICLOS.replace("{nome}", "ciclos_cobranca") + _INDICES_CICLOS + f"""
 
 CREATE TABLE IF NOT EXISTS tentativas_cobranca (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,6 +327,65 @@ CREATE TABLE IF NOT EXISTS eventos_vistos (
 );
 CREATE INDEX IF NOT EXISTS idx_eventos_vistos_ttl
     ON eventos_vistos (escopo, visto_em);
+
+-- Etapa 2, R7 a R9: as sugestões de mensagem de cada ciclo, em rodadas de 3.
+-- O TEXTO mora aqui, separado do ciclo, e nunca vai para o dataset de treino
+-- nem para a trilha (lá fica só a abordagem). Nenhum contato: canal e motivo,
+-- sim; telefone, e-mail e nome, nunca (o texto tem no máximo o primeiro nome).
+-- Retenção: 90 dias depois do desfecho, o texto é apagado (`texto_apagado_em`)
+-- e fica só a abordagem.
+CREATE TABLE IF NOT EXISTS mensagens_ciclo (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ciclo_id          INTEGER NOT NULL REFERENCES ciclos_cobranca(id),
+    rodada            INTEGER NOT NULL CHECK (rodada >= 1),
+    abordagem         TEXT    NOT NULL
+        CHECK (abordagem IN ({", ".join(repr(a) for a in ABORDAGENS)})),
+    texto             TEXT,
+    causa             TEXT    NOT NULL,
+    metodo_pagamento  TEXT,
+    tom               TEXT,
+    canal             TEXT    NOT NULL
+        CHECK (canal IN ({", ".join(repr(c) for c in CANAIS_DE_MENSAGEM)})),
+    motivo_canal      TEXT    NOT NULL,
+    recomendada       INTEGER NOT NULL CHECK (recomendada IN (0, 1)),
+    origem_texto      TEXT    NOT NULL
+        CHECK (origem_texto IN ({", ".join(repr(o) for o in ORIGENS_DE_TEXTO)})),
+    codigo_template   TEXT,
+    gerada_em         TEXT    NOT NULL,
+    escolhida         INTEGER NOT NULL DEFAULT 0 CHECK (escolhida IN (0, 1)),
+    escolhida_por     TEXT
+        CHECK (escolhida_por IN ({", ".join(repr(e) for e in ESCOLHIDA_POR)})),
+    escolhida_em      TEXT,
+    por_prazo         INTEGER NOT NULL DEFAULT 0 CHECK (por_prazo IN (0, 1)),
+    enviada_em        TEXT,
+    nao_entregavel_em TEXT,
+    texto_apagado_em  TEXT,
+    UNIQUE (ciclo_id, rodada, abordagem)
+);
+-- O BANCO garante uma escolhida por ciclo e uma recomendada por rodada.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mensagem_escolhida
+    ON mensagens_ciclo (ciclo_id) WHERE escolhida = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mensagem_recomendada
+    ON mensagens_ciclo (ciclo_id, rodada) WHERE recomendada = 1;
+
+-- Etapa 2, Bloco 5: cada AVISO de devolução que o PSP mandou sobre um ciclo
+-- recuperado. O total mora no ciclo (`valor_estornado`, `fee_estornada`); aqui
+-- mora o histórico, que três regras pedem: o mesmo aviso reenviado conta uma
+-- vez (E7 — a UNIQUE abaixo é quem garante), cada estorno aparece no mês em que
+-- aconteceu (E5), e o aviso fora do prazo fica registrado sem mudar valor (E4).
+-- Nenhum dado do pagador: só o id que o PSP deu à devolução, valores e datas.
+CREATE TABLE IF NOT EXISTS estornos_ciclo (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ciclo_id          INTEGER NOT NULL REFERENCES ciclos_cobranca(id),
+    id_devolucao      TEXT    NOT NULL,
+    valor_devolvido   REAL    NOT NULL CHECK (valor_devolvido > 0),
+    valor_considerado REAL    NOT NULL CHECK (valor_considerado >= 0),
+    fee_devolvida     REAL    NOT NULL CHECK (fee_devolvida >= 0),
+    no_prazo          INTEGER NOT NULL CHECK (no_prazo IN (0, 1)),
+    recebido_em       TEXT    NOT NULL,
+    UNIQUE (ciclo_id, id_devolucao)
+);
+CREATE INDEX IF NOT EXISTS idx_estorno_recebido ON estornos_ciclo (recebido_em);
 """
 
 # Colunas acrescentadas DEPOIS do schema original, com o tipo: um banco criado
@@ -306,14 +406,32 @@ CREATE INDEX IF NOT EXISTS idx_eventos_vistos_ttl
 #                Reserva sem confirmação há mais de PRAZO_RESERVA_DE_MENSAGEM é
 #                um processo que morreu no meio: a varredura desfaz a reserva
 #                e a passagem reenvia. O prazo de recuperação (A3) conta daqui.
+#   aguardando_escolha_em (Etapa 2) — o instante em que as sugestões começaram
+#                a ser geradas (a entrada em `aguardando_escolha`). O prazo de
+#                escolha de R8 conta daqui, e não é reiniciado pela regeração.
+#   motivo_perdido (Etapa 2, D-E2-11) — por que o ciclo foi a `perdido` quando
+#                não foi o prazo de recuperação (hoje: `sem_canal`).
+#   estornado_em, valor_estornado, fee_estornada (Etapa 2, Bloco 5) — o
+#                estorno da fee. O dinheiro recuperado voltou ao pagador dentro
+#                do prazo: `valor_estornado` é quanto da cobrança voltou e
+#                `fee_estornada` quanto da fee foi devolvido à empresa, os dois
+#                ACUMULADOS; `estornado_em` é o instante do último estorno no
+#                prazo. O estado continua `recuperado`, e `valor` e `fee` NUNCA
+#                mudam: são o que foi recuperado, e é com eles que um mês já
+#                fechado continua igual (E5). Cada aviso mora em `estornos_ciclo`.
 _COLUNAS_ACRESCENTADAS: tuple = (("ciclos_cobranca", "decidido_em", "TEXT"),
-                                 ("ciclos_cobranca", "mensagem_confirmada_em", "TEXT"))
+                                 ("ciclos_cobranca", "mensagem_confirmada_em", "TEXT"),
+                                 ("ciclos_cobranca", "aguardando_escolha_em", "TEXT"),
+                                 ("ciclos_cobranca", "motivo_perdido", "TEXT"),
+                                 ("ciclos_cobranca", "estornado_em", "TEXT"),
+                                 ("ciclos_cobranca", "valor_estornado", "REAL"),
+                                 ("ciclos_cobranca", "fee_estornada", "REAL"))
 
 # Campos de `ciclos_cobranca` que `atualizar`/`transicionar` aceitam por nome.
 _CAMPOS_ATUALIZAVEIS = frozenset({
     "estrategia", "motivo_descarte", "recovery_score", "p_recovery", "eprofit",
     "fee", "causa_original", "codigo_falha_original", "e2e_falha_original",
-    "decidido_em", "mensagem_confirmada_em",
+    "decidido_em", "mensagem_confirmada_em", "motivo_perdido",
 })
 
 _schema_garantido_lock = threading.Lock()
@@ -371,6 +489,7 @@ def _garantir_schema(conn: sqlite3.Connection, alvo: str) -> None:
         conn.executescript(_SCHEMA)
         _migrar_colunas(conn)
         conn.commit()
+        _migrar_check_de_estado(conn)
         _schema_garantido.add(alvo)
     # Fora da trava do schema: a migração abre a própria transação e pode
     # chamar de volta o módulo (via `retry_state`) sem deadlock.
@@ -386,6 +505,73 @@ def _migrar_colunas(conn: sqlite3.Connection) -> None:
         existentes = {linha[1] for linha in conn.execute(f"PRAGMA table_info({tabela})")}
         if coluna not in existentes:
             conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+
+
+def _check_de_estado_atual(conn: sqlite3.Connection) -> bool:
+    linha = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' "
+                         "AND name = 'ciclos_cobranca'").fetchone()
+    return linha is not None and all(repr(e) in linha[0] for e in ESTADOS)
+
+
+def _migrar_check_de_estado(conn: sqlite3.Connection) -> bool:
+    """Etapa 2: leva o `CHECK (estado IN (...))` de um banco antigo ao de
+    `ESTADOS` (que ganhou `aguardando_escolha`). True se migrou agora.
+
+    SQLite não altera `CHECK` com `ALTER TABLE`: é o procedimento de recriação
+    da documentação do SQLite, numa transação só — cria a tabela nova com o
+    DDL atual, copia TODAS as linhas pelas colunas em comum, apaga a antiga,
+    renomeia a nova, repõe a sequência do AUTOINCREMENT e os índices, e confere
+    as chaves estrangeiras antes do COMMIT. A tabela antiga NÃO é renomeada:
+    desde o SQLite 3.26 isso reescreveria a FK de `tentativas_cobranca` e de
+    `mensagens_ciclo` para o nome antigo.
+
+    Uma vez só: sai sem fazer nada se o `CHECK` já tem todos os estados. Dois
+    processos migrando juntos: o segundo relê sob `BEGIN IMMEDIATE` e sai.
+    """
+    if _check_de_estado_atual(conn):
+        return False
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if _check_de_estado_atual(conn):
+                conn.rollback()
+                return False
+            antigas = [l[1] for l in conn.execute("PRAGMA table_info(ciclos_cobranca)")]
+            conn.execute("DROP TABLE IF EXISTS ciclos_cobranca_nova")
+            conn.execute(_DDL_CICLOS.replace("{nome}", "ciclos_cobranca_nova"))
+            novas = {l[1] for l in conn.execute("PRAGMA table_info(ciclos_cobranca_nova)")}
+            comuns = ", ".join(c for c in antigas if c in novas)
+            antes = conn.execute("SELECT COUNT(*) FROM ciclos_cobranca").fetchone()[0]
+            seq = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'ciclos_cobranca'"
+                               ).fetchone()
+            conn.execute(f"INSERT INTO ciclos_cobranca_nova ({comuns}) "
+                         f"SELECT {comuns} FROM ciclos_cobranca")
+            conn.execute("DROP TABLE ciclos_cobranca")
+            conn.execute("ALTER TABLE ciclos_cobranca_nova RENAME TO ciclos_cobranca")
+            if seq is not None:
+                conn.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?) "
+                             "WHERE name = 'ciclos_cobranca'", (seq[0],))
+            # Os índices comando a comando: `executescript` faria COMMIT no meio.
+            for comando in _INDICES_CICLOS.split(";"):
+                sql = " ".join(l for l in comando.splitlines() if not l.strip().startswith("--"))
+                if sql.strip():
+                    conn.execute(sql)
+            depois = conn.execute("SELECT COUNT(*) FROM ciclos_cobranca").fetchone()[0]
+            if depois != antes:
+                raise sqlite3.DatabaseError(f"migração perderia linhas: {antes} -> {depois}")
+            quebradas = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if quebradas:
+                raise sqlite3.DatabaseError(f"chave estrangeira quebrada na migração: {quebradas[:3]}")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.warning("[CICLO] CHECK de estado migrado para %s (%d ciclo(s) copiado(s)).",
+                   ", ".join(ESTADOS), antes)
+    return True
 
 
 def esquecer_schema_garantido() -> None:
@@ -895,7 +1081,7 @@ def associar_falha(tenant_id: Optional[str], id_recorrencia: str, id_cobranca: O
         ciclo = ciclo_da_cobranca(tenant, e2e_id)
         if ciclo is not None:
             return _resultado_ou_tardia(ciclo)
-    absorventes = (RECOBRANDO, MENSAGEM_ENVIADA, DESCARTADO)
+    absorventes = (RECOBRANDO, AGUARDANDO_ESCOLHA, MENSAGEM_ENVIADA, DESCARTADO)
     recente = ciclo_aberto_do_mandato(tenant, id_recorrencia, estados=absorventes)
     if recente is not None:
         fim = _data(recente["janela_fim"])
@@ -924,26 +1110,33 @@ def confirmar_mensagem(ciclo_id: int, agora: Optional[datetime] = None) -> bool:
 def desfazer_reserva_de_mensagem(ciclo_id: int, motivo: str,
                                  agora: Optional[datetime] = None) -> bool:
     """B3-a: a mensagem foi RESERVADA e não saiu (exceção no envio, ou processo
-    morto). O ciclo volta a `recobrando` para a próxima passagem tentar de
-    novo. É a única transição `mensagem_enviada → recobrando` que existe, e
-    por isso é uma função própria, fora de `TRANSICOES`: só vale sem
+    morto). O ciclo volta ao estado de onde a reserva saiu para a próxima
+    passagem tentar de novo: `aguardando_escolha` quando há mensagem escolhida
+    em `mensagens_ciclo` (a escolha é preservada — Etapa 2), `recobrando`
+    senão. É a única volta de `mensagem_enviada` que existe, e por isso é uma
+    função própria, fora de `TRANSICOES`: só vale sem
     `mensagem_confirmada_em`, sob a trava de escrita, e loga em WARNING."""
     conn = _conectar()
     try:
         conn.execute("BEGIN IMMEDIATE")
         marca = _agora_texto(agora)
         cur = conn.execute(
-            """UPDATE ciclos_cobranca SET estado = ?, mensagem_em = NULL, atualizado_em = ?
+            """UPDATE ciclos_cobranca
+                  SET estado = CASE WHEN EXISTS (SELECT 1 FROM mensagens_ciclo m
+                                                  WHERE m.ciclo_id = ciclos_cobranca.id
+                                                    AND m.escolhida = 1)
+                                    THEN ? ELSE ? END,
+                      mensagem_em = NULL, atualizado_em = ?
                 WHERE id = ? AND estado = ? AND mensagem_confirmada_em IS NULL""",
-            (RECOBRANDO, marca, ciclo_id, MENSAGEM_ENVIADA))
+            (AGUARDANDO_ESCOLHA, RECOBRANDO, marca, ciclo_id, MENSAGEM_ENVIADA))
         conn.commit()
         desfeita = cur.rowcount == 1
     finally:
         conn.close()
     if desfeita:
         logger.warning("[CICLO] ciclo %s: mensagem reservada e NÃO enviada (%s) — reserva "
-                       "desfeita, o ciclo volta a recobrando e a próxima passagem reenvia.",
-                       ciclo_id, motivo)
+                       "desfeita, o ciclo volta ao estado anterior e a próxima passagem "
+                       "reenvia.", ciclo_id, motivo)
     return desfeita
 
 
@@ -1091,6 +1284,34 @@ def varrer_prazo_de_recuperacao(agora: datetime) -> list[int]:
         conn.close()
 
 
+def varrer_sem_canal_vencidos(agora: datetime) -> list[int]:
+    """D-E2-11: ciclo em `aguardando_escolha` cuja mensagem escolhida NÃO pôde
+    ser entregue (sem canal) e que passou `PRAZO_SEM_CANAL_DIAS` desde a
+    geração das sugestões sem entrega vai a `perdido`, com `motivo_perdido =
+    sem_canal` — nunca um descarte silencioso."""
+    limite = _iso(agora - timedelta(days=PRAZO_SEM_CANAL_DIAS))
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ciclos = [l["id"] for l in conn.execute(
+            """SELECT c.id FROM ciclos_cobranca c
+                WHERE c.estado = ? AND c.aguardando_escolha_em < ?
+                  AND EXISTS (SELECT 1 FROM mensagens_ciclo m WHERE m.ciclo_id = c.id
+                                AND m.escolhida = 1 AND m.enviada_em IS NULL
+                                AND m.nao_entregavel_em IS NOT NULL)""",
+            (AGUARDANDO_ESCOLHA, limite))]
+        marca = _iso(agora)
+        for ciclo_id in ciclos:
+            conn.execute(
+                """UPDATE ciclos_cobranca SET estado = ?, perdido_em = ?, motivo_perdido = ?,
+                          atualizado_em = ? WHERE id = ? AND estado = ?""",
+                (PERDIDO, marca, MOTIVO_PERDIDO_SEM_CANAL, marca, ciclo_id, AGUARDANDO_ESCOLHA))
+        conn.commit()
+        return ciclos
+    finally:
+        conn.close()
+
+
 def varrer(agora: datetime) -> dict:
     """As varreduras, na ordem, mais TODOS os ciclos que precisam de mensagem
     — inclusive os que ficaram devendo de uma passagem anterior (envio que
@@ -1100,9 +1321,11 @@ def varrer(agora: datetime) -> dict:
     janelas = varrer_janelas_encerradas(agora)
     orfas = varrer_reservas_orfas(agora)
     perdidos = varrer_prazo_de_recuperacao(agora)
+    sem_canal = varrer_sem_canal_vencidos(agora)
     devidas = ciclos_precisando_de_mensagem(agora)
     return {"sem_retorno": sem_retorno, "janelas_encerradas": janelas,
-            "reservas_orfas": orfas, "perdidos": perdidos, "mensagem_devida": devidas}
+            "reservas_orfas": orfas, "perdidos": perdidos, "perdidos_sem_canal": sem_canal,
+            "mensagem_devida": devidas, **pendencias_de_mensagem(agora)}
 
 
 # ── Confirmação de pagamento (R4, A3) ────────────────────────────────────
@@ -1238,10 +1461,30 @@ def ciclos_recuperados_desde(limite: datetime) -> list[dict]:
 # tenant e ciclo inexistente são o mesmo `None` — é assim que a rota responde
 # o mesmo 404 aos dois (R12).
 
-def status_da_tela(estado: str, tem_tentativa_executada: bool) -> str:
+# Bloco 5: a folga de comparação entre "quanto voltou" e "quanto foi cobrado".
+# Os dois são dinheiro em REAL; meio centavo absorve o arredondamento.
+_FOLGA_DE_CENTAVO = 0.005
+MOTIVO_ENCERRADO_POR_ESTORNO = "estorno_no_prazo"
+
+
+def estornado_por_inteiro(ciclo: dict) -> bool:
+    """O ciclo foi recuperado e TODO o dinheiro voltou dentro do prazo (E2)."""
+    valor = float(ciclo.get("valor") or 0.0)
+    return (ciclo.get("estado") == RECUPERADO and valor > 0
+            and float(ciclo.get("valor_estornado") or 0.0) >= valor - _FOLGA_DE_CENTAVO)
+
+
+def status_da_tela(estado: str, tem_tentativa_executada: bool,
+                   estorno_total: bool = False) -> str:
     """O status R10 de um ciclo. `tem_tentativa_executada` só importa em
     `recobrando`. Estado desconhecido levanta: um estado novo sem status é um
-    ciclo que sumiria da tela."""
+    ciclo que sumiria da tela.
+
+    `estorno_total` (Bloco 5) só importa em `recuperado`: o dinheiro voltou
+    inteiro dentro do prazo, a recuperação não valeu, e a tela mostra
+    "encerrado sem recuperação". O ESTADO continua `recuperado`."""
+    if estado == RECUPERADO and estorno_total:
+        return STATUS_ENCERRADO
     if estado == RECOBRANDO:
         return STATUS_EM_PROCESSO if tem_tentativa_executada else STATUS_EM_ANALISE
     try:
@@ -1258,7 +1501,10 @@ def _sql_tentativa_executada(alias: str = "c") -> str:
 
 def _sql_status(alias: str = "c") -> str:
     """A mesma tabela de `status_da_tela`, como expressão SQL."""
-    ramos = [f"WHEN {alias}.estado = {RECOBRANDO!r} THEN CASE WHEN "
+    ramos = [f"WHEN {alias}.estado = {RECUPERADO!r} AND {alias}.valor > 0 AND "
+             f"COALESCE({alias}.valor_estornado, 0) >= {alias}.valor - {_FOLGA_DE_CENTAVO} "
+             f"THEN {STATUS_ENCERRADO!r}",
+             f"WHEN {alias}.estado = {RECOBRANDO!r} THEN CASE WHEN "
              f"{_sql_tentativa_executada(alias)} THEN {STATUS_EM_PROCESSO!r} "
              f"ELSE {STATUS_EM_ANALISE!r} END"]
     ramos += [f"WHEN {alias}.estado = {estado!r} THEN {status!r}"
@@ -1373,6 +1619,505 @@ def contagem_por_status(tenant_id: str, inicio: datetime, fim: datetime) -> dict
     contagem = {s: 0 for s in STATUS_DA_TELA}
     contagem.update({l["status"]: int(l["n"]) for l in linhas})
     return contagem
+
+
+# ── As três mensagens (Etapa 2, R7 a R9) ─────────────────────────────────
+#
+# Toda escrita aqui é sob `BEGIN IMMEDIATE` e confere o ESTADO do ciclo na
+# mesma transação: a escolha humana, o prazo de 8 h, a regeração e o envio
+# disputam o mesmo ciclo, e só um vence cada disputa. O índice único parcial
+# `uq_mensagem_escolhida` é a segunda linha: o banco não aceita duas escolhidas.
+
+def gravar_rodada(ciclo_id: int, sugestoes: list[dict], canal: str, motivo_canal: str,
+                  causa: str, metodo_pagamento: Optional[str], tom: Optional[str],
+                  agora: Optional[datetime] = None) -> Optional[int]:
+    """Grava UMA rodada de 3 sugestões. Devolve o número da rodada, ou None se
+    o ciclo já não aceita rodada nova (não está `aguardando_escolha`, ou já tem
+    escolhida). `sugestoes`: `{abordagem, texto, recomendada, origem_texto,
+    codigo_template}`, uma por abordagem de `ABORDAGENS`."""
+    if sorted(s_["abordagem"] for s_ in sugestoes) != sorted(ABORDAGENS):
+        raise ValueError("uma rodada tem exatamente uma sugestão por abordagem")
+    if sum(1 for s_ in sugestoes if s_.get("recomendada")) != 1:
+        raise ValueError("uma rodada tem exatamente uma recomendada")
+    marca = _agora_texto(agora)
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ciclo = conn.execute("SELECT estado FROM ciclos_cobranca WHERE id = ?", (ciclo_id,)).fetchone()
+        escolhida = conn.execute("SELECT 1 FROM mensagens_ciclo WHERE ciclo_id = ? AND escolhida = 1",
+                                 (ciclo_id,)).fetchone()
+        if ciclo is None or ciclo["estado"] != AGUARDANDO_ESCOLHA or escolhida is not None:
+            conn.rollback()
+            return None
+        rodada = conn.execute("SELECT COALESCE(MAX(rodada), 0) + 1 FROM mensagens_ciclo "
+                              "WHERE ciclo_id = ?", (ciclo_id,)).fetchone()[0]
+        for s_ in sugestoes:
+            conn.execute(
+                """INSERT INTO mensagens_ciclo
+                       (ciclo_id, rodada, abordagem, texto, causa, metodo_pagamento, tom, canal,
+                        motivo_canal, recomendada, origem_texto, codigo_template, gerada_em)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (ciclo_id, rodada, s_["abordagem"], s_["texto"], str(causa), metodo_pagamento, tom,
+                 canal, motivo_canal, 1 if s_.get("recomendada") else 0, s_["origem_texto"],
+                 s_.get("codigo_template"), marca))
+        conn.execute("UPDATE ciclos_cobranca SET atualizado_em = ? WHERE id = ?", (marca, ciclo_id))
+        conn.commit()
+        return int(rodada)
+    finally:
+        conn.close()
+
+
+def registrar_escolha(ciclo_id: int, rodada: Optional[int], abordagem: Optional[str],
+                      escolhida_por: str, agora: Optional[datetime] = None) -> Optional[dict]:
+    """Marca a mensagem escolhida. Devolve a linha escolhida, ou None se não há
+    o que escolher (ciclo fora de `aguardando_escolha`, já escolhida, ou a
+    rodada/abordagem não existe).
+
+    `escolhida_por == "prazo"` (e `"automatico"`) escolhe a RECOMENDADA da
+    ÚLTIMA rodada — decidido DENTRO da transação, para uma regeração que
+    acabou de gravar não perder a corrida para o prazo (R8). Os outros
+    (`owner`, `admin`) escolhem a `rodada` e a `abordagem` dadas, de qualquer
+    rodada (D-E2-12)."""
+    if escolhida_por not in ESCOLHIDA_POR:
+        raise ValueError(f"escolhida_por inválido: {escolhida_por!r}")
+    marca = _agora_texto(agora)
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ciclo = conn.execute("SELECT estado FROM ciclos_cobranca WHERE id = ?", (ciclo_id,)).fetchone()
+        ja = conn.execute("SELECT 1 FROM mensagens_ciclo WHERE ciclo_id = ? AND escolhida = 1",
+                          (ciclo_id,)).fetchone()
+        if ciclo is None or ciclo["estado"] != AGUARDANDO_ESCOLHA or ja is not None:
+            conn.rollback()
+            return None
+        if escolhida_por in ("prazo", "automatico"):
+            alvo = conn.execute(
+                """SELECT * FROM mensagens_ciclo WHERE ciclo_id = ? AND recomendada = 1
+                    ORDER BY rodada DESC LIMIT 1""", (ciclo_id,)).fetchone()
+        else:
+            alvo = conn.execute(
+                "SELECT * FROM mensagens_ciclo WHERE ciclo_id = ? AND rodada = ? AND abordagem = ?",
+                (ciclo_id, rodada, abordagem)).fetchone()
+        if alvo is None:
+            conn.rollback()
+            return None
+        conn.execute(
+            """UPDATE mensagens_ciclo SET escolhida = 1, escolhida_por = ?, escolhida_em = ?,
+                      por_prazo = ? WHERE id = ?""",
+            (escolhida_por, marca, 1 if escolhida_por == "prazo" else 0, alvo["id"]))
+        conn.execute("UPDATE ciclos_cobranca SET atualizado_em = ? WHERE id = ?", (marca, ciclo_id))
+        conn.commit()
+        return _linha(conn.execute("SELECT * FROM mensagens_ciclo WHERE id = ?",
+                                   (alvo["id"],)).fetchone())
+    finally:
+        conn.close()
+
+
+def desfazer_escolha_nao_enviada(ciclo_id: int, agora: Optional[datetime] = None) -> bool:
+    """D-E2-7: a revogação chega com uma escolha ainda NÃO enviada (esperando a
+    janela ou um canal). A escolha oferecia o Pix Automático que o cliente
+    acabou de fechar: ela é desfeita para uma rodada nova, com a causa
+    revogada, ser gerada. Nunca desfaz mensagem enviada."""
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """UPDATE mensagens_ciclo SET escolhida = 0, escolhida_por = NULL, escolhida_em = NULL,
+                      por_prazo = 0
+                WHERE ciclo_id = ? AND escolhida = 1 AND enviada_em IS NULL
+                  AND EXISTS (SELECT 1 FROM ciclos_cobranca c WHERE c.id = ? AND c.estado = ?)""",
+            (ciclo_id, ciclo_id, AGUARDANDO_ESCOLHA))
+        conn.execute("UPDATE ciclos_cobranca SET atualizado_em = ? WHERE id = ?",
+                     (_agora_texto(agora), ciclo_id))
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def mensagens_do_ciclo(ciclo_id: int) -> list[dict]:
+    """Todas as sugestões do ciclo, por rodada e na ordem de `ABORDAGENS`."""
+    ordem = {a: i for i, a in enumerate(ABORDAGENS)}
+    conn = _conectar()
+    try:
+        linhas = [dict(l) for l in conn.execute(
+            "SELECT * FROM mensagens_ciclo WHERE ciclo_id = ? ORDER BY rodada", (ciclo_id,))]
+    finally:
+        conn.close()
+    return sorted(linhas, key=lambda l: (l["rodada"], ordem.get(l["abordagem"], 99)))
+
+
+def mensagem_escolhida(ciclo_id: int) -> Optional[dict]:
+    conn = _conectar()
+    try:
+        return _linha(conn.execute("SELECT * FROM mensagens_ciclo WHERE ciclo_id = ? AND escolhida = 1",
+                                   (ciclo_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def marcar_mensagem(mensagem_id: int, agora: Optional[datetime] = None, *,
+                    enviada: bool = False, nao_entregavel: bool = False,
+                    canal: Optional[str] = None, motivo_canal: Optional[str] = None) -> None:
+    """Grava o que aconteceu com a mensagem escolhida no envio: o canal que o
+    envio usou (relido da base na hora), a entrega, ou a primeira vez em que
+    ela não pôde ser entregue (`nao_entregavel_em` guarda a PRIMEIRA)."""
+    sets, params = [], []
+    if canal is not None:
+        sets += ["canal = ?", "motivo_canal = ?"]
+        params += [canal, motivo_canal or ""]
+    if enviada:
+        sets.append("enviada_em = ?")
+        params.append(_agora_texto(agora))
+    if nao_entregavel:
+        sets.append("nao_entregavel_em = COALESCE(nao_entregavel_em, ?)")
+        params.append(_agora_texto(agora))
+    if not sets:
+        return
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(f"UPDATE mensagens_ciclo SET {', '.join(sets)} WHERE id = ?",
+                     (*params, mensagem_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def contar_aguardando_escolha(tenant_id: str) -> int:
+    """Quantos ciclos DESTE tenant esperam a escolha da empresa agora: em
+    `aguardando_escolha` e sem mensagem escolhida (os já escolhidos que esperam
+    janela ou canal não esperam a empresa)."""
+    conn = _conectar()
+    try:
+        return int(conn.execute(
+            """SELECT COUNT(*) FROM ciclos_cobranca c
+                WHERE c.tenant_id = ? AND c.estado = ?
+                  AND NOT EXISTS (SELECT 1 FROM mensagens_ciclo m
+                                   WHERE m.ciclo_id = c.id AND m.escolhida = 1)""",
+            (tenant_id, AGUARDANDO_ESCOLHA)).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def pendencias_de_mensagem(agora: datetime) -> dict:
+    """O que o relógio precisa fazer pelos ciclos em `aguardando_escolha`, em
+    três listas (quem decide é `agent/workflow.processar_pendencias_de_mensagem`,
+    que lê a configuração de cada empresa):
+
+      escolha_pendente    sem escolhida e com sugestões: `(id, tenant,
+                          aguardando_escolha_em)` — o prazo de R8 é da empresa;
+      envio_pendente      com escolhida ainda não enviada (esperando a janela
+                          de contato ou um canal entregável);
+      sugestoes_faltando  sem nenhuma sugestão há mais de
+                          `PRAZO_RESERVA_DE_MENSAGEM`: o processo morreu entre
+                          entrar em `aguardando_escolha` e gravar a rodada.
+    """
+    limite = _iso(agora - PRAZO_RESERVA_DE_MENSAGEM)
+    conn = _conectar()
+    try:
+        escolha = [(l["id"], l["tenant_id"], l["aguardando_escolha_em"]) for l in conn.execute(
+            """SELECT c.id, c.tenant_id, c.aguardando_escolha_em FROM ciclos_cobranca c
+                WHERE c.estado = ?
+                  AND EXISTS (SELECT 1 FROM mensagens_ciclo m WHERE m.ciclo_id = c.id)
+                  AND NOT EXISTS (SELECT 1 FROM mensagens_ciclo m
+                                   WHERE m.ciclo_id = c.id AND m.escolhida = 1)
+             ORDER BY c.id""", (AGUARDANDO_ESCOLHA,))]
+        envio = [l["id"] for l in conn.execute(
+            """SELECT c.id FROM ciclos_cobranca c
+                WHERE c.estado = ?
+                  AND EXISTS (SELECT 1 FROM mensagens_ciclo m WHERE m.ciclo_id = c.id
+                                AND m.escolhida = 1 AND m.enviada_em IS NULL)
+             ORDER BY c.id""", (AGUARDANDO_ESCOLHA,))]
+        faltando = [l["id"] for l in conn.execute(
+            """SELECT c.id FROM ciclos_cobranca c
+                WHERE c.estado = ? AND c.aguardando_escolha_em <= ?
+                  AND NOT EXISTS (SELECT 1 FROM mensagens_ciclo m WHERE m.ciclo_id = c.id)
+             ORDER BY c.id""", (AGUARDANDO_ESCOLHA, limite))]
+    finally:
+        conn.close()
+    return {"escolha_pendente": escolha, "envio_pendente": envio, "sugestoes_faltando": faltando}
+
+
+# ── Expurgo do texto das mensagens (Etapa 2, Bloco 4) ────────────────────
+
+def tenants_com_texto_de_mensagem() -> list:
+    """Os tenants que têm texto de mensagem ainda guardado em ciclo JÁ FECHADO
+    — os únicos que o expurgo precisa olhar. O prazo é de cada empresa
+    (`retencao_mensagens_dias`), e quem o lê é o relógio."""
+    conn = _conectar()
+    try:
+        return [l["tenant_id"] for l in conn.execute(
+            """SELECT DISTINCT c.tenant_id FROM ciclos_cobranca c
+                WHERE c.estado IN (?, ?, ?)
+                  AND EXISTS (SELECT 1 FROM mensagens_ciclo m
+                               WHERE m.ciclo_id = c.id AND m.texto_apagado_em IS NULL)
+             ORDER BY c.tenant_id""", (RECUPERADO, PERDIDO, DESCARTADO))]
+    finally:
+        conn.close()
+
+
+def apagar_texto_expirado(agora: datetime, tenant_id: Optional[str], dias: int) -> int:
+    """RETENÇÃO: apaga o TEXTO das mensagens dos ciclos do tenant cujo desfecho
+    (`recuperado_em`, `perdido_em` ou `descartado_em`) tem mais de `dias` dias.
+
+    A linha fica — abordagem, canal, recomendada, escolhida, datas: é o que a
+    linha do tempo e o dataset precisam. Só `texto` vira NULL, e
+    `texto_apagado_em` guarda quando. Ciclo sem desfecho nunca é tocado, por
+    mais antigo que seja: a mensagem dele ainda pode sair. Idempotente (linha
+    já apagada não é tocada de novo). Devolve quantas linhas foram tocadas.
+    Uma falha aqui LEVANTA: retenção que falha em silêncio é dado guardado além
+    do prazo sem ninguém saber.
+    """
+    if isinstance(dias, bool) or not isinstance(dias, int) or dias < 1:
+        raise ValueError(f"dias precisa ser inteiro >= 1; recebido {dias!r}")
+    limite = _iso(agora - timedelta(days=dias))
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        tocadas = conn.execute(
+            """UPDATE mensagens_ciclo SET texto = NULL, texto_apagado_em = ?
+                WHERE texto_apagado_em IS NULL
+                  AND ciclo_id IN (
+                      SELECT c.id FROM ciclos_cobranca c
+                       WHERE c.tenant_id IS ? AND c.estado IN (?, ?, ?)
+                         AND COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) < ?)""",
+            (_iso(agora), tenant_id, RECUPERADO, PERDIDO, DESCARTADO, limite)).rowcount
+        conn.commit()
+        return int(tocadas)
+    finally:
+        conn.close()
+
+
+# ── Estorno da fee (Etapa 2, Bloco 5) ────────────────────────────────────
+# A CRAI cobra fee do que recupera. Se o dinheiro recuperado VOLTA ao pagador
+# dentro do prazo (o cliente final pede a devolução do Pix), a recuperação não
+# valeu, e a fee é devolvida à empresa. As regras (decididas pelo Crai):
+#
+#   E1  o prazo é da empresa (`prazo_estorno_dias` na configuração, padrão 30);
+#   E2  devolução TOTAL no prazo: a fee inteira volta; o ciclo deixa de contar
+#       como recuperado na tela; o líquido sai das métricas;
+#   E3  devolução PARCIAL no prazo: fee e líquido caem na mesma proporção;
+#   E4  devolução DEPOIS do prazo: a fee fica; o aviso é registrado, sem mudar
+#       valor nenhum;
+#   E5  o mês já fechado não é reescrito: o estorno entra no mês em que
+#       aconteceu, como parcela negativa;
+#   E6  só o aviso do PSP gera estorno — não existe função "declarar estorno"
+#       chamável pela empresa;
+#   E7  o mesmo aviso reenviado conta uma vez; dois parciais somam, e nunca
+#       passam do valor recuperado.
+#
+# O ESTADO do ciclo continua `recuperado`. `valor` e `fee` nunca mudam.
+
+ESTORNO_REGISTRADO = "registrado"
+ESTORNO_REENVIO = "reenvio"
+ESTORNO_FORA_DO_PRAZO = "fora_do_prazo"
+ESTORNO_JA_TOTAL = "ja_estornado_por_inteiro"
+ESTORNO_CICLO_NAO_RECUPERADO = "ciclo_nao_recuperado"
+
+
+def ciclo_para_estorno(tenant_id: Optional[str], id_recorrencia: Optional[str],
+                       id_cobranca: Optional[str] = None,
+                       e2e_do_pagamento: Optional[str] = None) -> Optional[dict]:
+    """Que ciclo um aviso de devolução atinge — SEMPRE dentro do tenant declarado.
+
+    Na ordem: (1) a tentativa PAGA com este `id_cobranca`; (2) o ciclo cuja
+    cobrança original é este `id_cobranca`; (3) a tentativa paga com este e2e
+    (o do pagamento, que a confirmação gravou); (4) o ciclo `recuperado` mais
+    recente do mandato. O passo 4 é um limite declarado: com dois ciclos
+    recuperados do mesmo mandato e um aviso que só traz o id da recorrência, o
+    estorno vai para o mais recente. Sem ciclo no tenant: None — a rota responde
+    o mesmo 404 para "não existe" e para "é de outra empresa" (R12)."""
+    tenant = tenant_id or TENANT_PADRAO
+    conn = _conectar()
+    try:
+        if id_cobranca:
+            linha = conn.execute(
+                """SELECT c.* FROM ciclos_cobranca c
+                     JOIN tentativas_cobranca t ON t.ciclo_id = c.id
+                    WHERE c.tenant_id = ? AND t.id_cobranca = ? AND t.resultado = ?
+                 ORDER BY c.id DESC LIMIT 1""", (tenant, str(id_cobranca), PAGA)).fetchone()
+            if linha is None:
+                linha = conn.execute(
+                    "SELECT * FROM ciclos_cobranca WHERE tenant_id = ? AND id_cobranca_original = ?",
+                    (tenant, str(id_cobranca))).fetchone()
+            if linha is not None:
+                return _linha(linha)
+        if e2e_do_pagamento:
+            linha = conn.execute(
+                """SELECT c.* FROM ciclos_cobranca c
+                     JOIN tentativas_cobranca t ON t.ciclo_id = c.id
+                    WHERE c.tenant_id = ? AND t.e2e_resultado = ? AND t.resultado = ?
+                 ORDER BY c.id DESC LIMIT 1""", (tenant, str(e2e_do_pagamento), PAGA)).fetchone()
+            if linha is not None:
+                return _linha(linha)
+        if id_recorrencia:
+            linha = conn.execute(
+                """SELECT * FROM ciclos_cobranca
+                    WHERE tenant_id = ? AND id_recorrencia = ? AND estado = ?
+                 ORDER BY recuperado_em DESC, id DESC LIMIT 1""",
+                (tenant, str(id_recorrencia), RECUPERADO)).fetchone()
+            if linha is not None:
+                return _linha(linha)
+        return None
+    finally:
+        conn.close()
+
+
+def registrar_estorno(ciclo_id: int, id_devolucao: str, valor_devolvido: float,
+                      prazo_dias: int, agora: Optional[datetime] = None) -> dict:
+    """Registra UM aviso de devolução sobre um ciclo e aplica E2, E3, E4 e E7,
+    numa transação só.
+
+    Devolve `{resultado, ciclo_id, no_prazo, valor_considerado, fee_devolvida,
+    liquido_devolvido, total}`. `resultado`:
+
+      registrado                 entrou na conta (no prazo, com valor a estornar);
+      reenvio                    este `id_devolucao` já estava registrado: nada muda;
+      fora_do_prazo              registrado para a linha do tempo, sem mudar valor;
+      ja_estornado_por_inteiro   no prazo, mas não havia mais o que devolver;
+      ciclo_nao_recuperado       o ciclo não está `recuperado`: nada é gravado.
+
+    O prazo conta de `recuperado_em`, em dias corridos, e vale até o último
+    instante do dia `prazo_dias` (inclusive). O valor considerado nunca passa do
+    que ainda falta devolver; a fee devolvida é proporcional a ele, e o último
+    estorno leva o resto da fee, para a soma fechar no centavo.
+    """
+    if not isinstance(id_devolucao, str) or not id_devolucao.strip():
+        raise ValueError("id_devolucao vazio")
+    valor_devolvido = float(valor_devolvido)
+    if not (valor_devolvido > 0) or valor_devolvido != valor_devolvido or valor_devolvido == float("inf"):
+        raise ValueError(f"valor_devolvido não utilizável: {valor_devolvido!r}")
+    if isinstance(prazo_dias, bool) or not isinstance(prazo_dias, int) or prazo_dias < 1:
+        raise ValueError(f"prazo_dias precisa ser inteiro >= 1; recebido {prazo_dias!r}")
+    momento = agora or datetime.now()
+    marca = _iso(momento)
+    nada = {"ciclo_id": ciclo_id, "no_prazo": False, "valor_considerado": 0.0,
+            "fee_devolvida": 0.0, "liquido_devolvido": 0.0, "total": False}
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ciclo = conn.execute("SELECT * FROM ciclos_cobranca WHERE id = ?", (ciclo_id,)).fetchone()
+        if ciclo is None or ciclo["estado"] != RECUPERADO:
+            conn.rollback()
+            return {**nada, "resultado": ESTORNO_CICLO_NAO_RECUPERADO}
+        valor = float(ciclo["valor"] or 0.0)
+        fee = float(ciclo["fee"] or 0.0)
+        ja_valor = float(ciclo["valor_estornado"] or 0.0)
+        ja_fee = float(ciclo["fee_estornada"] or 0.0)
+        ja_total = valor > 0 and ja_valor >= valor - _FOLGA_DE_CENTAVO
+
+        if conn.execute("SELECT 1 FROM estornos_ciclo WHERE ciclo_id = ? AND id_devolucao = ?",
+                        (ciclo_id, id_devolucao.strip())).fetchone() is not None:
+            conn.rollback()
+            return {**nada, "resultado": ESTORNO_REENVIO, "total": ja_total}
+
+        recuperado_em = _data(ciclo["recuperado_em"]) or _data(ciclo["atualizado_em"])
+        no_prazo = recuperado_em is not None and momento <= recuperado_em + timedelta(days=prazo_dias)
+
+        considerado = fee_devolvida = 0.0
+        if no_prazo:
+            considerado = round(max(0.0, min(valor_devolvido, valor - ja_valor)), 2)
+            if considerado > 0 and valor > 0:
+                completa = ja_valor + considerado >= valor - _FOLGA_DE_CENTAVO
+                fee_devolvida = (round(fee - ja_fee, 2) if completa
+                                 else round(fee * considerado / valor, 2))
+                fee_devolvida = max(0.0, min(fee_devolvida, round(fee - ja_fee, 2)))
+
+        conn.execute(
+            """INSERT INTO estornos_ciclo
+                   (ciclo_id, id_devolucao, valor_devolvido, valor_considerado, fee_devolvida,
+                    no_prazo, recebido_em)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (ciclo_id, id_devolucao.strip(), round(valor_devolvido, 2), considerado,
+             fee_devolvida, 1 if no_prazo else 0, marca))
+        if considerado > 0:
+            conn.execute(
+                """UPDATE ciclos_cobranca
+                      SET valor_estornado = ?, fee_estornada = ?, estornado_em = ?, atualizado_em = ?
+                    WHERE id = ?""",
+                (round(ja_valor + considerado, 2), round(ja_fee + fee_devolvida, 2), marca, marca,
+                 ciclo_id))
+        else:
+            # O aviso aparece na linha do tempo: o ciclo sobe na lista da tela.
+            conn.execute("UPDATE ciclos_cobranca SET atualizado_em = ? WHERE id = ?",
+                         (marca, ciclo_id))
+        conn.commit()
+        total = valor > 0 and ja_valor + considerado >= valor - _FOLGA_DE_CENTAVO
+        resultado = (ESTORNO_FORA_DO_PRAZO if not no_prazo
+                     else ESTORNO_REGISTRADO if considerado > 0 else ESTORNO_JA_TOTAL)
+        return {"resultado": resultado, "ciclo_id": ciclo_id, "no_prazo": no_prazo,
+                "valor_considerado": considerado, "fee_devolvida": fee_devolvida,
+                "liquido_devolvido": round(considerado - fee_devolvida, 2), "total": total}
+    finally:
+        conn.close()
+
+
+def estornos_do_ciclo(ciclo_id: int) -> list[dict]:
+    """Os avisos de devolução de um ciclo, do mais antigo ao mais novo."""
+    conn = _conectar()
+    try:
+        return [dict(l) for l in conn.execute(
+            "SELECT * FROM estornos_ciclo WHERE ciclo_id = ? ORDER BY recebido_em, id", (ciclo_id,))]
+    finally:
+        conn.close()
+
+
+def estornos_no_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list[dict]:
+    """Os estornos NO PRAZO, com valor, recebidos em [inicio, fim) nos ciclos
+    deste tenant. Cada um com `id_recorrencia`, `liquido_devolvido` e `total`
+    (este aviso completou a devolução do ciclo). É a parcela negativa de E5."""
+    conn = _conectar()
+    try:
+        linhas = conn.execute(
+            """SELECT e.id, e.ciclo_id, e.id_devolucao, e.valor_considerado, e.fee_devolvida,
+                      e.recebido_em, c.id_recorrencia, c.valor,
+                      (SELECT COALESCE(SUM(a.valor_considerado), 0) FROM estornos_ciclo a
+                        WHERE a.ciclo_id = e.ciclo_id AND a.no_prazo = 1
+                          AND (a.recebido_em < e.recebido_em
+                               OR (a.recebido_em = e.recebido_em AND a.id <= e.id))) AS acumulado
+                 FROM estornos_ciclo e JOIN ciclos_cobranca c ON c.id = e.ciclo_id
+                WHERE c.tenant_id = ? AND e.no_prazo = 1 AND e.valor_considerado > 0
+                  AND e.recebido_em >= ? AND e.recebido_em < ?
+             ORDER BY e.recebido_em, e.id""", (tenant_id, _iso(inicio), _iso(fim))).fetchall()
+    finally:
+        conn.close()
+    saida = []
+    for l in linhas:
+        d = dict(l)
+        d["liquido_devolvido"] = round(float(d["valor_considerado"]) - float(d["fee_devolvida"]), 2)
+        d["total"] = float(d["valor"] or 0) > 0 and float(d["acumulado"]) >= float(d["valor"]) - _FOLGA_DE_CENTAVO
+        saida.append(d)
+    return saida
+
+
+def extrato_do_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list[dict]:
+    """O extrato de [inicio, fim), na ordem em que as coisas aconteceram: uma
+    linha POSITIVA por recuperação (pela data da recuperação, com o valor e a
+    fee originais) e uma linha NEGATIVA por estorno no prazo (pela data do
+    aviso). É o cálculo que a rota `/extrato` da Etapa 3 vai expor; aqui ele só
+    existe e é testado. A soma de `liquido` é o valor líquido do período.
+
+    INTERNO: as linhas trazem a `fee`. Quem expuser decide o que a empresa vê."""
+    conn = _conectar()
+    try:
+        recuperacoes = conn.execute(
+            """SELECT id, id_recorrencia, valor, fee, recuperado_em FROM ciclos_cobranca
+                WHERE tenant_id = ? AND estado = ? AND recuperado_em >= ? AND recuperado_em < ?""",
+            (tenant_id, RECUPERADO, _iso(inicio), _iso(fim))).fetchall()
+    finally:
+        conn.close()
+    linhas = [{"tipo": "recuperacao", "ciclo_id": r["id"], "id_recorrencia": r["id_recorrencia"],
+               "quando": r["recuperado_em"], "valor_base": round(float(r["valor"] or 0), 2),
+               "fee": round(float(r["fee"] or 0), 2),
+               "liquido": round(float(r["valor"] or 0) - float(r["fee"] or 0), 2)}
+              for r in recuperacoes]
+    linhas += [{"tipo": "estorno", "ciclo_id": e["ciclo_id"], "id_recorrencia": e["id_recorrencia"],
+                "quando": e["recebido_em"], "valor_base": -round(float(e["valor_considerado"]), 2),
+                "fee": -round(float(e["fee_devolvida"]), 2), "liquido": -e["liquido_devolvido"]}
+               for e in estornos_no_periodo(tenant_id, inicio, fim)]
+    linhas.sort(key=lambda l: (l["quando"], l["tipo"] == "estorno", l["ciclo_id"]))
+    return linhas
 
 
 # ── Deduplicação de webhook (1.2) ────────────────────────────────────────
@@ -1611,6 +2356,8 @@ def limpar_tudo() -> None:
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM tentativas_cobranca")
+        conn.execute("DELETE FROM mensagens_ciclo")
+        conn.execute("DELETE FROM estornos_ciclo")
         conn.execute("DELETE FROM ciclos_cobranca")
         conn.execute("DELETE FROM eventos_vistos")
         conn.commit()

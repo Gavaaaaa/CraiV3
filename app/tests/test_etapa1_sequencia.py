@@ -295,6 +295,12 @@ class Congelado(datetime):
 workflow_module.datetime = Congelado
 pix_retry_module.datetime = Congelado
 workflow_module._pix_retry.confianca_minima = 2.0
+# Etapa 2 (D-E2-4): os mesmos padrões neutros do conftest, que este processo
+# novo não herda.
+from crai.dunning import configuracao
+configuracao.PADROES.update(modo_mensagem_involuntario="automatico",
+                            janela_contato_inicio="00:00", janela_contato_fim="24:00",
+                            canal_presumido="whatsapp")
 
 diagnosticos = {"n": 0}
 _pred = workflow_module._classifier.predict

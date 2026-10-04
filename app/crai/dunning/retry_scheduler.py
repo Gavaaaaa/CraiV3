@@ -167,6 +167,11 @@ async def processar_tentativas_devidas(agora: Optional[datetime] = None) -> list
     resultado = varrer_ciclos(agora)
     for ciclo_id in resultado["mensagem_devida"]:
         await concluir_ciclo_devido(ciclo_id, agora)
+    # Etapa 2: os ciclos em `aguardando_escolha` — prazo de escolha (R8),
+    # envio dentro da janela de contato, canal que apareceu, sugestões que
+    # faltam. Quem decide, com a configuração de cada empresa, é o workflow.
+    from ..agent.workflow import processar_pendencias_de_mensagem   # import tardio
+    await processar_pendencias_de_mensagem(resultado, agora)
     return disparos
 
 
@@ -208,6 +213,9 @@ def varrer_ciclos(agora: Optional[datetime] = None) -> dict:
     for ciclo_id in resultado["perdidos"]:
         print(f"[RETRY-SCHED] ciclo {ciclo_id}: {ciclo_cobranca.PRAZO_RECUPERACAO_DIAS} dias "
               f"depois da mensagem sem pagamento — perdido")
+    for ciclo_id in resultado["perdidos_sem_canal"]:
+        print(f"[RETRY-SCHED] ciclo {ciclo_id}: {ciclo_cobranca.PRAZO_SEM_CANAL_DIAS} dias sem "
+              f"canal entregável para a mensagem — perdido (motivo: sem_canal)")
     for ciclo_id in resultado["mensagem_devida"]:
         logger.info("[RETRY-SCHED] ciclo %s: sem tentativa pendente e sem pagamento — "
                     "mensagem devida", ciclo_id)

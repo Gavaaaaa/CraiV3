@@ -224,7 +224,8 @@ class TestMigracaoPostgres:
         assert _colunas_memoria(con) == set(ci.COLUNAS)
         assert linha["customer_id_externo"] == "antigo"
         assert linha["cancelado_em"] is None
-        assert sum(1 for s in registro if "ADD COLUMN IF NOT EXISTS" in s) == 3
+        # Uma por coluna migrada: 3 até a Etapa 1, 15 com as 12 da Etapa 2.
+        assert sum(1 for s in registro if "ADD COLUMN IF NOT EXISTS" in s) == len(COLUNAS_NOVAS) == 15
 
     def test_as_quatro_operacoes_passam_pela_traducao_de_placeholder(self, postgres_falso):
         """Todo SQL chega ao psycopg2 falso com `%s`, nunca `?` — o cursor

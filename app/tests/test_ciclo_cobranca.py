@@ -673,11 +673,15 @@ class TestSemDadoPessoal:
         with sqlite3.connect(_banco()) as conn:
             conn.row_factory = sqlite3.Row
             linhas = []
-            for tabela in ("ciclos_cobranca", "tentativas_cobranca", "eventos_vistos"):
+            # Etapa 2: `mensagens_ciclo` entra na varredura — o texto mora lá,
+            # e o contato não pode morar (o fluxo inteiro é medido em
+            # `test_mensagens_involuntario.py::TestClienteNomeEDadoPessoal`).
+            tabelas = ("ciclos_cobranca", "tentativas_cobranca", "eventos_vistos",
+                       "mensagens_ciclo")
+            for tabela in tabelas:
                 for l in conn.execute(f"SELECT * FROM {tabela}"):
                     linhas.append(json.dumps(dict(l), ensure_ascii=False, default=str))
-            colunas = {l[1].lower() for tabela in ("ciclos_cobranca", "tentativas_cobranca",
-                                                    "eventos_vistos")
+            colunas = {l[1].lower() for tabela in tabelas
                        for l in conn.execute(f"PRAGMA table_info({tabela})")}
         with sqlite3.connect(_banco()) as conn:
             ciclos = conn.execute("SELECT COUNT(*) FROM ciclos_cobranca").fetchone()[0]

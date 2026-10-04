@@ -243,6 +243,61 @@ def relogio_desligado(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def mensagem_do_involuntario_neutra(monkeypatch):
+    """A suíte roda a mensagem do involuntário como ela era até a Etapa 1 (D-E2-4).
+
+    Os padrões de PRODUÇÃO da Etapa 2 (`crai/dunning/configuracao.PADROES`) são
+    modo `escolha`, janela de contato das 8 h às 20 h e, sem contato na base,
+    `sem_canal`. Com eles, todo teste que espera a mensagem depois da 3ª
+    tentativa passaria a ver `aguardando_escolha` — e, pior, a depender da HORA
+    em que a suíte roda: os testes pelo webhook usam o relógio real, e às 21 h
+    a mensagem esperaria a janela. Aqui os padrões ficam neutros: modo
+    automático, janela o dia todo e um canal presumido para cliente sem base
+    (o motivo gravado diz `presumido`). Os testes da Etapa 2 que medem modo,
+    janela e canal gravam a configuração da empresa, ou voltam os padrões de
+    produção, explicitamente. Um teste afirma os padrões de produção.
+    """
+    from crai.dunning import configuracao
+    monkeypatch.setitem(configuracao.PADROES, "modo_mensagem_involuntario",
+                        configuracao.MODO_AUTOMATICO)
+    monkeypatch.setitem(configuracao.PADROES, "janela_contato_inicio", "00:00")
+    monkeypatch.setitem(configuracao.PADROES, "janela_contato_fim", "24:00")
+    monkeypatch.setitem(configuracao.PADROES, "canal_presumido", "whatsapp")
+
+
+@pytest.fixture(autouse=True)
+def modelo_voluntario_ausente(tmp_path, monkeypatch):
+    """Todo teste começa SEM modelo de risco voluntário, como num clone limpo (D-B3-2).
+
+    `risk_scorer` carrega `models/voluntary_risk.joblib` se o arquivo existir, e
+    `app/models/` não é versionada: o que a suíte media dependia de a máquina
+    ter ou não um modelo promovido. Com o v3 em `models/`, 31 testes que afirmam
+    números da régua passavam a ver o modelo decidir (`assert 0.2 == 1.0`) — o
+    código certo, o teste lendo o estado da máquina. Aqui o `risk_scorer` aponta
+    para uma pasta vazia de `tmp_path`, e o cache do carregamento é zerado antes
+    e depois: nenhum teste herda o modelo que outro carregou.
+
+    O teste que PRECISA de modelo o instala por conta própria, com fixture
+    explícita (`test_risk_pluggable.py`, `test_promocao_v3_bloco*.py`): as
+    fixtures do arquivo rodam depois desta e vencem.
+
+    Só o `risk_scorer` é tocado. O `MODELS_DIR` do `crai.ml` continua real, pelo
+    motivo da docstring do módulo: os testes de ML leem os artefatos de
+    propósito.
+    """
+    from crai.churn_voluntary import risk_scorer as rs
+
+    pasta = tmp_path / "models_voluntario_vazio"
+    pasta.mkdir()
+    monkeypatch.setattr(rs, "MODELS_DIR", pasta)
+    monkeypatch.setattr(rs, "MODELO_PATH", pasta / "voluntary_risk.joblib")
+    monkeypatch.setattr(rs, "MODELO_META_PATH", pasta / "voluntary_risk_meta.json")
+    rs._modelo, rs._modelo_consultado = None, False
+    yield
+    rs._modelo, rs._modelo_consultado = None, False
+
+
+@pytest.fixture(autouse=True)
 def banco_de_ciclos_isolado(tmp_path, monkeypatch):
     """Redireciona o log de ciclos de retenção para `tmp_path` em cada teste.
 

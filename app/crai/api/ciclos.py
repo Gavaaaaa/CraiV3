@@ -4,6 +4,8 @@
     GET /ciclos/{id}                      um ciclo e a linha do tempo dele
     GET /metrics/involuntario/mes         o mês: valor líquido, contagens, taxa
     GET /metrics/involuntario/serie       um ponto por dia
+    POST /ciclos/{id}/mensagens/escolher  a empresa escolhe uma das sugestões
+    POST /ciclos/{id}/mensagens/regerar   a empresa pede outras 3 sugestões
 
 POR QUE ISTO EXISTE (F10–F12 do diagnóstico de 29/09/2026). Desde a Etapa 1 o
 ciclo de cobrança guarda quase tudo que uma tela precisa, mas nenhuma rota o
@@ -20,11 +22,31 @@ AS QUATRO REGRAS QUE ESTE MÓDULO GARANTE:
        é o que a empresa recebeu (`valor_cobranca − fee`), preenchido só em
        ciclo recuperado e `null` nos outros estados. A fee em si não sai em
        nenhuma resposta daqui, e as métricas somam o líquido.
+  E1–E7 (Bloco 5, estorno da fee). Se o dinheiro recuperado volta ao pagador
+       dentro do prazo da empresa, a recuperação deixa de valer na proporção
+       do que voltou: devolução TOTAL → o ciclo aparece como "encerrado sem
+       recuperação", com `motivo_encerramento: "estorno_no_prazo"` e
+       `valor_liquido: null`; devolução PARCIAL → continua "recuperado", com o
+       `valor_liquido` reduzido e `estorno_parcial: true`; fora do prazo → nada
+       muda, só o evento na linha do tempo. Nas métricas, o estorno é
+       descontado NO DIA E NO MÊS EM QUE ACONTECEU: o mês já fechado não é
+       reescrito. A fee continua fora de toda resposta.
   R12  toda leitura filtra pelo tenant do token. Token da empresa A com o id
        de um ciclo da empresa B responde 404 com o MESMO corpo de um id que
        não existe — um 403 confirmaria que o ciclo existe.
   F9   toda data sai em ISO 8601 COM fuso (`api/datas.py`); as datas do ciclo
        são gravadas em hora local sem fuso, as da trilha em UTC.
+
+AS TRÊS MENSAGENS (Bloco 3, R7 a R9). As duas rotas POST exigem o papel
+`owner` ou `admin` (`membro` e token sem papel: 403). Nenhuma rota recebe texto
+de mensagem: `escolher` recebe a rodada e o código de uma das 3 abordagens
+geradas; `regerar` não recebe nada. Não existe rota que dispare mensagem sem ser
+a escolha de uma das sugestões, e nada é gerado antes do fim das tentativas
+(R1): as sugestões nascem dos mesmos gatilhos da Etapa 1.
+
+O NOME DO CLIENTE (`cliente_nome`) é lido da base importada pelo
+`id_recorrencia` na hora da resposta — é o cliente da própria empresa. Nunca é
+copiado para o ciclo nem para as mensagens, e vem `null` sem mapeamento.
 
 A LINHA DO TEMPO JUNTA DOIS BANCOS sem mudar o schema de nenhum. O ciclo mora em
 `recovery_cycles.db`; as decisões do Art. 20 em `retention_cycles.db`, sem
@@ -43,13 +65,17 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
 
-from ..accounts import get_tenant_id
+from ..accounts import get_conta, get_tenant_id
+from ..accounts.auth import exigir_papel
+from ..agent import workflow
 from ..agent.pix_codes import CAUSA_LEGIVEL
+from ..churn_voluntary import clientes_importados
 from ..churn_voluntary import retention_log as trilha
+from ..dunning import canal_involuntario, configuracao
 from ..dunning import ciclo_cobranca as cc
-from . import datas
+from . import datas, registro_acesso
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +139,34 @@ def _valor_cobranca(ciclo: dict) -> float:
     return round(float(ciclo["valor"] or 0.0), 2)
 
 
+def _liquido_original(ciclo: dict) -> float:
+    """O líquido da recuperação como ela aconteceu: valor menos a fee da época.
+    Não muda com um estorno posterior — é o que mantém o mês fechado igual (E5)."""
+    return round(_valor_cobranca(ciclo) - float(ciclo.get("fee") or 0.0), 2)
+
+
 def _valor_liquido(ciclo: dict) -> Optional[float]:
     """R11: o que a empresa recebeu — só em ciclo recuperado; `None` nos
     outros estados (não há o que receber, e um número ali seria lido como
-    recebido)."""
-    if ciclo["estado"] != cc.RECUPERADO:
+    recebido). Com estorno PARCIAL no prazo, é o líquido do que ficou (valor e
+    fee caem na mesma proporção, E3); com estorno TOTAL, o ciclo deixa de
+    contar como recuperado (E2) e o líquido é `None`."""
+    if ciclo["estado"] != cc.RECUPERADO or cc.estornado_por_inteiro(ciclo):
         return None
-    return round(_valor_cobranca(ciclo) - float(ciclo.get("fee") or 0.0), 2)
+    ficou = _valor_cobranca(ciclo) - float(ciclo.get("valor_estornado") or 0.0)
+    fee = float(ciclo.get("fee") or 0.0) - float(ciclo.get("fee_estornada") or 0.0)
+    return round(ficou - fee, 2)
+
+
+def _estorno(ciclo: dict) -> Optional[dict]:
+    """O estorno acumulado DENTRO DO PRAZO, ou `None`. Sem a fee: só quanto da
+    cobrança voltou ao pagador, se foi tudo, e quando foi o último. Aviso fora
+    do prazo não entra aqui (não muda valor): aparece só na linha do tempo."""
+    devolvido = round(float(ciclo.get("valor_estornado") or 0.0), 2)
+    if ciclo["estado"] != cc.RECUPERADO or devolvido <= 0:
+        return None
+    return {"valor_devolvido": devolvido, "total": cc.estornado_por_inteiro(ciclo),
+            "ultimo_em": datas.iso_com_fuso(ciclo.get("estornado_em"))}
 
 
 def _desfecho_em(ciclo: dict) -> Optional[str]:
@@ -133,15 +180,27 @@ def _mensagem(ciclo: dict) -> Optional[dict]:
             "enviada_em": datas.iso_com_fuso(ciclo.get("mensagem_confirmada_em"))}
 
 
-def _linha_publica(ciclo: dict) -> dict:
+def _nomes(tenant_id: str, ciclos: list) -> dict:
+    """{id_recorrencia: nome} da base, lido agora, numa consulta só. Base não
+    configurada: nenhum nome (a tela mostra o id)."""
+    try:
+        return clientes_importados.nomes_por_recorrencia(
+            tenant_id, [c["id_recorrencia"] for c in ciclos])
+    except clientes_importados.ConfiguracaoAusente:
+        return {}
+
+
+def _linha_publica(ciclo: dict, nomes: Optional[dict] = None) -> dict:
     """Um ciclo como a empresa o vê. Sem `fee`, sem `tenant_id` (o token já
     diz de quem é), sem identidade de cobrança do PSP."""
     causa = ciclo.get("causa_original")
+    estorno = _estorno(ciclo)
     return {
         "id": ciclo["id"],
         "status": ciclo["status"],
         "estado": ciclo["estado"],
         "id_recorrencia": ciclo["id_recorrencia"],
+        "cliente_nome": (nomes or {}).get(ciclo["id_recorrencia"]),
         "valor_cobranca": _valor_cobranca(ciclo),
         "valor_liquido": _valor_liquido(ciclo),
         "causa": causa,
@@ -151,7 +210,13 @@ def _linha_publica(ciclo: dict) -> dict:
         "atualizado_em": datas.iso_com_fuso(ciclo["atualizado_em"]),
         "desfecho_em": datas.iso_com_fuso(_desfecho_em(ciclo)),
         "motivo_descarte": ciclo.get("motivo_descarte"),
+        "motivo_perdido": ciclo.get("motivo_perdido"),
         "mensagem": _mensagem(ciclo),
+        # Bloco 5: o dinheiro recuperado voltou (todo ou parte) dentro do prazo.
+        "estorno": estorno,
+        "estorno_parcial": bool(estorno) and not estorno["total"],
+        "motivo_encerramento": (cc.MOTIVO_ENCERRADO_POR_ESTORNO
+                                if estorno and estorno["total"] else None),
     }
 
 
@@ -165,7 +230,7 @@ async def listar_ciclos(
     q: Optional[str] = None,
     cursor: Optional[str] = None,
     limite: Optional[int] = None,
-    tenant_id: str = Depends(get_tenant_id),
+    conta: dict = Depends(get_conta),
 ) -> dict:
     """Os ciclos da empresa, do mais recentemente atualizado ao mais antigo.
 
@@ -175,6 +240,7 @@ async def listar_ciclos(
     `?limite=` 1..200 (padrão 50); `?cursor=` o `proximo_cursor` da página
     anterior.
     """
+    tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
     if not 1 <= limite <= LIMITE_MAXIMO:
         raise _422("limite_invalido", f"esperado inteiro entre 1 e {LIMITE_MAXIMO}", "limite")
@@ -194,7 +260,11 @@ async def listar_ciclos(
         cursor=_decodificar_cursor(cursor) if cursor else None, limite=limite + 1)
     tem_mais = len(pagina) > limite
     pagina = pagina[:limite]
-    return {"ciclos": [_linha_publica(c) for c in pagina],
+    nomes = _nomes(tenant_id, pagina)
+    # A lista lê o `cliente_nome` da base: é leitura de dado de titular (Bloco 4).
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CICLOS, conta.get("papel"),
+                              datas.agora_local())
+    return {"ciclos": [_linha_publica(c, nomes) for c in pagina],
             "proximo_cursor": _codificar_cursor(pagina[-1]) if tem_mais and pagina else None,
             "tem_mais": tem_mais}
 
@@ -280,7 +350,37 @@ def _diagnostico(decisoes: list) -> Optional[dict]:
             "contribuicoes": itens}
 
 
-def _linha_do_tempo(ciclo: dict, tentativas: list, decisoes: list) -> list:
+def _mensagem_publica(m: dict) -> dict:
+    """Uma sugestão como a empresa a vê. Texto `null` depois do expurgo de 90
+    dias (fica a abordagem). Nenhum contato: só o canal e o motivo."""
+    return {
+        "rodada": m["rodada"],
+        "abordagem": m["abordagem"],
+        "texto": None if m.get("texto_apagado_em") else m.get("texto"),
+        "canal": m["canal"],
+        "motivo_canal": m["motivo_canal"],
+        "recomendada": bool(m["recomendada"]),
+        "escolhida": bool(m["escolhida"]),
+        "nao_entregavel": bool(m["nao_entregavel_em"]) and not m["enviada_em"],
+        "gerada_em": datas.iso_com_fuso(m["gerada_em"]),
+        "enviada_em": datas.iso_com_fuso(m["enviada_em"]),
+    }
+
+
+def _escolha_ate(ciclo: dict, config: dict) -> Optional[str]:
+    """Até quando a empresa escolhe: `aguardando_escolha_em` + prazo da
+    empresa, só enquanto o ciclo espera a escolha no modo escolha."""
+    inicio = ciclo.get("aguardando_escolha_em")
+    if (ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or not inicio
+            or config["modo_mensagem_involuntario"] != configuracao.MODO_ESCOLHA):
+        return None
+    return datas.iso_com_fuso(datas.para_local(inicio)
+                              + timedelta(hours=config["prazo_escolha_horas"]))
+
+
+def _linha_do_tempo(ciclo: dict, tentativas: list, decisoes: list,
+                    mensagens: Optional[list] = None, estornos: Optional[list] = None) -> list:
+    mensagens = mensagens or []
     eventos = [
         _evento(ciclo["aberto_em"], "abertura", 0, origem=ciclo.get("origem"),
                 causa_legivel=CAUSA_LEGIVEL.get(ciclo.get("causa_original"),
@@ -302,13 +402,37 @@ def _linha_do_tempo(ciclo: dict, tentativas: list, decisoes: list) -> list:
         elif t["resultado"] != cc.PENDENTE:
             eventos.append(_evento(t.get("resultado_em"), "tentativa_resultado", 3, numero=numero,
                                    resultado=t["resultado"]))
+    for rodada in sorted({m["rodada"] for m in mensagens}):
+        da_rodada = [m for m in mensagens if m["rodada"] == rodada]
+        eventos.append(_evento(da_rodada[0]["gerada_em"], "sugestoes_geradas", 4, rodada=rodada,
+                               recomendada=next((m["abordagem"] for m in da_rodada
+                                                 if m["recomendada"]), None),
+                               canal=da_rodada[0]["canal"]))
+    for m in mensagens:
+        if m["escolhida"]:
+            eventos.append(_evento(m["escolhida_em"], "mensagem_escolhida", 4, rodada=m["rodada"],
+                                   abordagem=m["abordagem"], escolhida_por=m["escolhida_por"]))
+        if m["nao_entregavel_em"]:
+            eventos.append(_evento(m["nao_entregavel_em"], "mensagem_nao_entregavel", 4,
+                                   motivo_canal=m["motivo_canal"]))
     eventos.append(_evento(ciclo.get("mensagem_em"), "mensagem_reservada", 4))
     eventos.append(_evento(ciclo.get("mensagem_confirmada_em"), "mensagem_enviada", 5))
     if ciclo["estado"] == cc.RECUPERADO:
+        # O líquido DA RECUPERAÇÃO, como ela aconteceu; o que voltou depois é
+        # outro evento (`estorno`), na data dele.
         eventos.append(_evento(ciclo.get("recuperado_em"), "recuperado", 6,
-                               valor_liquido=_valor_liquido(ciclo)))
+                               valor_liquido=_liquido_original(ciclo)))
+        acumulado, valor = 0.0, _valor_cobranca(ciclo)
+        for e in estornos or []:
+            acumulado += float(e["valor_considerado"] or 0.0)
+            eventos.append(_evento(
+                e["recebido_em"], "estorno", 7,
+                valor_devolvido=round(float(e["valor_devolvido"]), 2),
+                no_prazo=bool(e["no_prazo"]),
+                total=bool(e["no_prazo"]) and valor > 0 and acumulado >= valor - 0.005))
     elif ciclo["estado"] == cc.PERDIDO:
-        eventos.append(_evento(ciclo.get("perdido_em"), "perdido", 6))
+        eventos.append(_evento(ciclo.get("perdido_em"), "perdido", 6,
+                               motivo_perdido=ciclo.get("motivo_perdido")))
     elif ciclo["estado"] == cc.DESCARTADO:
         eventos.append(_evento(ciclo.get("descartado_em"), "descartado", 6,
                                motivo_descarte=ciclo.get("motivo_descarte")))
@@ -323,40 +447,154 @@ def _linha_do_tempo(ciclo: dict, tentativas: list, decisoes: list) -> list:
 @router.get("/ciclos/{ciclo_id}")
 async def ler_ciclo(
     ciclo_id: int = Path(..., ge=1, le=ID_MAXIMO),
-    tenant_id: str = Depends(get_tenant_id),
+    conta: dict = Depends(get_conta),
 ) -> dict:
     """Um ciclo da empresa e a linha do tempo dele: abertura, diagnóstico (com
     as cinco maiores contribuições em linguagem simples), cada tentativa,
     mensagem, desfecho, e as decisões da trilha do Art. 20 do período.
     404 idêntico para ciclo inexistente e de outra empresa (R12)."""
+    tenant_id = conta["tenant_id"]
     ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
     if ciclo is None:
         raise _404()
     agora = datas.agora_local()
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CICLO, conta.get("papel"), agora)
     decisoes, ambigua = _decisoes_do_ciclo(tenant_id, ciclo, agora)
-    publica = _linha_publica(ciclo)
+    publica = _linha_publica(ciclo, _nomes(tenant_id, [ciclo]))
     publica.update(janela_inicio=datas.iso_com_fuso(ciclo["janela_inicio"]),
                    janela_fim=datas.iso_com_fuso(ciclo["janela_fim"]))
+    mensagens = cc.mensagens_do_ciclo(ciclo["id"])
+    escolhida = next((m for m in mensagens if m["escolhida"]), None)
+    config = configuracao.ler(tenant_id)
     return {"ciclo": publica,
             "diagnostico": _diagnostico(decisoes),
+            "mensagens": [_mensagem_publica(m) for m in mensagens],
+            "modo_mensagem": config["modo_mensagem_involuntario"],
+            "escolha_ate": _escolha_ate(ciclo, config),
+            "escolhida_por": escolhida["escolhida_por"] if escolhida else None,
             "linha_do_tempo": _linha_do_tempo(ciclo, cc.tentativas_do_ciclo(ciclo["id"]),
-                                              decisoes),
+                                              decisoes, mensagens,
+                                              cc.estornos_do_ciclo(ciclo["id"])),
             "trilha_ambigua": ambigua}
+
+
+# ── As três mensagens: escolher e regerar ─────────────────────────────────
+
+def _409(motivo: str, detalhe: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"motivo": motivo, "detalhe": detalhe})
+
+
+def _espera(ciclo_id: int, tenant_id: str, agora: datetime) -> Optional[str]:
+    """Por que uma mensagem escolhida ainda não saiu: `fora_da_janela` ou
+    `sem_canal`; None se saiu."""
+    ciclo = cc.ciclo_por_id(ciclo_id)
+    if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA:
+        return None
+    if not configuracao.dentro_da_janela(configuracao.ler(tenant_id), agora):
+        return "fora_da_janela"
+    return "sem_canal"
+
+
+@router.post("/ciclos/{ciclo_id}/mensagens/escolher")
+async def escolher_mensagem(
+    ciclo_id: int = Path(..., ge=1, le=ID_MAXIMO),
+    corpo: dict = Body(...),
+    conta: dict = Depends(get_conta),
+) -> dict:
+    """A empresa escolhe UMA das sugestões geradas: `{"rodada": n,
+    "abordagem": "<lembrete_cordial|facilitacao|urgencia_respeitosa>"}`, de
+    qualquer rodada (D-E2-12). Não existe campo de texto: a mensagem é sempre
+    uma das geradas. Exige `owner` ou `admin` (403 para `membro`). 404 idêntico
+    para ciclo inexistente e de outra empresa; 409 se o ciclo não espera
+    escolha (já escolhida, enviada, fechada). A mensagem sai na hora se a
+    janela de contato e um canal permitirem; senão, o relógio a envia depois."""
+    papel = exigir_papel(conta, "owner", "admin")
+    tenant_id = conta["tenant_id"]
+    ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
+    if ciclo is None:
+        raise _404()
+    if not isinstance(corpo, dict) or set(corpo) - {"rodada", "abordagem"}:
+        extras = sorted(set(corpo) - {"rodada", "abordagem"}) if isinstance(corpo, dict) else []
+        raise _422("campo_desconhecido", "o corpo aceita só `rodada` e `abordagem`: a "
+                   "mensagem é sempre uma das sugestões geradas", extras[0] if extras else "corpo")
+    rodada, abordagem = corpo.get("rodada"), corpo.get("abordagem")
+    if isinstance(rodada, bool) or not isinstance(rodada, int) or rodada < 1:
+        raise _422("rodada_invalida", "esperado inteiro >= 1", "rodada")
+    if abordagem not in cc.ABORDAGENS:
+        raise _422("abordagem_invalida", f"esperado um de {', '.join(cc.ABORDAGENS)}",
+                   "abordagem")
+    if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(ciclo_id):
+        raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
+    existe = any(m["rodada"] == rodada and m["abordagem"] == abordagem
+                 for m in cc.mensagens_do_ciclo(ciclo_id))
+    if not existe:
+        raise _422("sugestao_inexistente", "não há esta sugestão neste ciclo", "rodada")
+    agora = datas.agora_local()
+    if workflow.registrar_escolha(ciclo_id, papel, agora, rodada, abordagem) is None:
+        raise _409("ciclo_nao_aguarda_escolha", "a escolha já foi feita (pela empresa ou pelo prazo)")
+    enviado = await workflow.enviar_mensagem_escolhida(ciclo_id, agora)
+    return {"ciclo_id": ciclo_id, "rodada": rodada, "abordagem": abordagem,
+            "escolhida_por": papel, "enviada": enviado is not None,
+            "espera": None if enviado is not None else _espera(ciclo_id, tenant_id, agora)}
+
+
+@router.post("/ciclos/{ciclo_id}/mensagens/regerar")
+async def regerar_mensagens(
+    ciclo_id: int = Path(..., ge=1, le=ID_MAXIMO),
+    conta: dict = Depends(get_conta),
+) -> dict:
+    """Outras 3 sugestões para o mesmo ciclo (acréscimo à R8), quantas vezes a
+    empresa quiser DENTRO do prazo de escolha, que não é reiniciado. Só no
+    modo escolha, com o ciclo esperando escolha. Cada rodada fica gravada; a
+    recomendada da ÚLTIMA é a que sai por prazo. Vale como decisão na trilha."""
+    papel = exigir_papel(conta, "owner", "admin")
+    tenant_id = conta["tenant_id"]
+    ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
+    if ciclo is None:
+        raise _404()
+    config = configuracao.ler(tenant_id)
+    if config["modo_mensagem_involuntario"] != configuracao.MODO_ESCOLHA:
+        raise _409("modo_automatico", "a empresa está no modo automático: não há escolha a fazer")
+    if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(ciclo_id):
+        raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
+    agora = datas.agora_local()
+    limite = datas.para_local(ciclo["aguardando_escolha_em"]) + timedelta(
+        hours=config["prazo_escolha_horas"])
+    if agora >= limite:
+        raise _409("prazo_de_escolha_vencido", "o prazo de escolha acabou")
+    rodada = await workflow.gerar_rodada(ciclo_id, agora, papel=papel)
+    if rodada is None:
+        raise _409("ciclo_nao_aguarda_escolha", "a escolha foi feita durante a geração")
+    return {"ciclo_id": ciclo_id, "rodada": rodada,
+            "mensagens": [_mensagem_publica(m) for m in cc.mensagens_do_ciclo(ciclo_id)
+                          if m["rodada"] == rodada],
+            "escolha_ate": datas.iso_com_fuso(limite)}
 
 
 # ── Métricas ──────────────────────────────────────────────────────────────
 
-def _resumo(linhas: list) -> dict:
+def _resumo(linhas: list, estornos: Optional[list] = None) -> dict:
     """Valor líquido, recuperados, encerrados e taxa sobre os ciclos COM
     desfecho (D-E2-9). Sem desfecho nenhum, a taxa é `null` — não zero: zero
-    diria que tudo foi perdido."""
+    diria que tudo foi perdido.
+
+    E5 (Bloco 5): `linhas` são os desfechos DO PERÍODO e `estornos` os estornos
+    no prazo recebidos NO PERÍODO. A recuperação entra pelo líquido original, na
+    data dela; o estorno sai na data dele. Um estorno de outubro não mexe em
+    setembro: nem no valor, nem nas contagens, nem na taxa — as três contam o
+    que aconteceu no período. O valor do período pode ficar negativo."""
+    estornos = estornos or []
     recuperados = [l for l in linhas if l["estado"] == cc.RECUPERADO]
     encerrados = len(linhas) - len(recuperados)
-    liquido = round(sum(_valor_liquido(l) for l in recuperados), 2)
+    estornado = round(sum(e["liquido_devolvido"] for e in estornos), 2)
+    liquido = round(sum(_liquido_original(l) for l in recuperados) - estornado, 2)
     return {"valor_liquido_recuperado": liquido,
             "recuperados": len(recuperados),
             "encerrados_sem_recuperacao": encerrados,
-            "taxa_recuperacao": round(len(recuperados) / len(linhas), 4) if linhas else None}
+            "taxa_recuperacao": round(len(recuperados) / len(linhas), 4) if linhas else None,
+            "estornos": {"quantidade": len(estornos),
+                         "ciclos_estornados_por_inteiro": sum(1 for e in estornos if e["total"]),
+                         "valor_liquido_estornado": estornado}}
 
 
 @router.get("/metrics/involuntario/mes")
@@ -381,8 +619,11 @@ async def metricas_do_mes(mes: Optional[str] = None,
     fim = datetime(ano + (numero == 12), numero % 12 + 1, 1)
     return {"mes": f"{ano:04d}-{numero:02d}",
             "inicio": datas.iso_com_fuso(inicio), "fim": datas.iso_com_fuso(fim),
-            **_resumo(cc.ciclos_com_desfecho(tenant_id, inicio, fim)),
-            "ciclos_abertos_no_mes": cc.contagem_por_status(tenant_id, inicio, fim)}
+            **_resumo(cc.ciclos_com_desfecho(tenant_id, inicio, fim),
+                      cc.estornos_no_periodo(tenant_id, inicio, fim)),
+            "ciclos_abertos_no_mes": cc.contagem_por_status(tenant_id, inicio, fim),
+            # Agora, não no mês: quantos ciclos esperam a escolha da empresa.
+            "aguardando_escolha": cc.contar_aguardando_escolha(tenant_id)}
 
 
 @router.get("/metrics/involuntario/serie")
@@ -400,9 +641,15 @@ async def serie_diaria(dias: Optional[int] = None,
     por_dia: dict = {}
     for linha in cc.ciclos_com_desfecho(tenant_id, inicio, fim):
         por_dia.setdefault(str(linha["desfecho_em"])[:10], []).append(linha)
+    estornos_por_dia: dict = {}
+    for estorno in cc.estornos_no_periodo(tenant_id, inicio, fim):
+        estornos_por_dia.setdefault(str(estorno["recebido_em"])[:10], []).append(estorno)
     pontos = []
     for i in range(dias):
         dia = (primeiro + timedelta(days=i)).isoformat()
-        pontos.append({"dia": dia, **_resumo(por_dia.get(dia, []))})
+        resumo = _resumo(por_dia.get(dia, []), estornos_por_dia.get(dia, []))
+        # No ponto do dia vai só o valor estornado; o detalhe fica no resumo do mês.
+        estornado = resumo.pop("estornos")["valor_liquido_estornado"]
+        pontos.append({"dia": dia, **resumo, "valor_liquido_estornado": estornado})
     return {"dias": dias, "inicio": datas.iso_com_fuso(inicio), "fim": datas.iso_com_fuso(fim),
             "pontos": pontos}

@@ -327,7 +327,10 @@ class TestWebhooksIntocados:
         # autenticada, e só dela.
         # `/ciclos` entrou na Etapa 2 (Bloco 2): a aba do involuntário lê os
         # ciclos da empresa do token, e só dela.
-        SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos")
+        # `/configuracao` entrou na Etapa 2 (Bloco 4): a empresa lê e grava a
+        # própria configuração, e só a dela.
+        SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos",
+                        "/configuracao")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")

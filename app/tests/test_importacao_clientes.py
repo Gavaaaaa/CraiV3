@@ -333,8 +333,11 @@ class TestDestino:
     def test_upsert_traduz_placeholders_para_o_psycopg2(self):
         """O SQL é escrito uma vez com `?`; no Postgres vira `%s`. Se alguém
         colocar um `?` literal numa string do SQL, esta contagem denuncia."""
-        assert ci._UPSERT.count("?") == 8
-        assert ci._UPSERT.replace("?", "%s").count("%s") == 8
+        # tenant, id, as colunas da foto e o carimbo (20 desde a Etapa 2).
+        esperado = len(ci._COLUNAS_DO_UPSERT) + 3
+        assert esperado == 20
+        assert ci._UPSERT.count("?") == esperado
+        assert ci._UPSERT.replace("?", "%s").count("%s") == esperado
         assert "?" not in ci.SCHEMA_SQL
 
 

@@ -28,6 +28,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -46,11 +47,12 @@ from ..agent.pix_codes import CAUSA_REVOGADA
 from ..agent.workflow import (
     concluir_ciclo_por_resultado,
     estado_do_ciclo,
+    refazer_por_revogacao,
     success_fee,
     tentativas_ja_disparadas,
     update_roi_dashboard,
 )
-from ..dunning import ciclo_cobranca, recovery_log
+from ..dunning import ciclo_cobranca, configuracao, recovery_log
 from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultado_externo
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
@@ -63,6 +65,7 @@ from ..integrations.payment_gateway import (
     MOTIVO_SEM_IDENTIFICACAO,
     MOTIVO_VALOR_NAO_UTILIZAVEL,
     STATUS_COBRANCA_CONFIRMADA,
+    STATUS_COBRANCA_DEVOLVIDA,
     STATUS_COBRANCA_FALHADA,
     STATUS_AUTORIZACAO_CONCEDIDA,
     STATUS_AUTORIZACAO_REVOGADA,
@@ -77,6 +80,8 @@ from .idempotencia import (
 )
 from . import ciclos as ciclos_api
 from . import clientes as clientes_api
+from . import configuracao as configuracao_api
+from . import dev_token
 from . import relogio
 from . import titular as titular_api
 from ..security.webhook_verification import (
@@ -93,6 +98,61 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="CRAI", version="2.0.0",
               description="Agente autônomo de recuperação de receita — churn involuntário + voluntário",
               lifespan=relogio.ciclo_de_vida)
+
+
+# ── CORS (Etapa 2, Bloco 4) ───────────────────────────────────────────────
+# O dashboard roda em outra origem e chama as rotas do self-service com o token
+# no header `Authorization` — nunca com cookie. A lista de origens é EXPLÍCITA:
+#   CRAI_CORS_ORIGENS   origens separadas por vírgula (`https://painel.exemplo.com`);
+#                       vazia por padrão — sem ela, nenhum navegador de outra
+#                       origem lê resposta alguma, como sempre foi.
+#   ENV=development     acrescenta `http://localhost:5173`, o dashboard em
+#                       desenvolvimento (Vite). `demo` não acrescenta nada.
+# `*` é recusado, com log: a lista é explícita, e um curinga aqui abriria as
+# rotas autenticadas a qualquer página que o usuário logado visitasse.
+ENV_CORS_ORIGENS = "CRAI_CORS_ORIGENS"
+ORIGEM_DO_DASHBOARD_EM_DESENVOLVIMENTO = "http://localhost:5173"
+CORS_METODOS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+CORS_CABECALHOS = ["Authorization", "Content-Type", "Idempotency-Key"]
+_ORIGEM_VALIDA = re.compile(r"^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$")
+
+
+def origens_cors() -> list:
+    """As origens que podem chamar a API pelo navegador, na ordem declarada e
+    sem repetição. Lida a cada chamada; o serviço a consulta uma vez, na subida."""
+    origens: list = []
+    for bruto in (os.getenv(ENV_CORS_ORIGENS) or "").split(","):
+        origem = bruto.strip().rstrip("/")
+        if not origem:
+            continue
+        if not _ORIGEM_VALIDA.match(origem):
+            logger.error("[CORS] origem %r em %s recusada: esperado esquema://host[:porta], "
+                         "sem caminho e sem curinga. A lista de origens é explícita.",
+                         bruto.strip(), ENV_CORS_ORIGENS)
+            continue
+        if origem not in origens:
+            origens.append(origem)
+    if (os.getenv("ENV", "production").strip().lower() == "development"
+            and ORIGEM_DO_DASHBOARD_EM_DESENVOLVIMENTO not in origens):
+        origens.append(ORIGEM_DO_DASHBOARD_EM_DESENVOLVIMENTO)
+    return origens
+
+
+def instalar_cors(aplicacao) -> list:
+    """Instala o `CORSMiddleware` em `aplicacao` se houver origem permitida.
+    Sem origem, não instala nada. Devolve as origens. Sem credenciais: o token
+    vai no header, e cookie de outra origem nunca é aceito."""
+    origens = origens_cors()
+    if origens:
+        aplicacao.add_middleware(
+            CORSMiddleware, allow_origins=origens, allow_methods=CORS_METODOS,
+            allow_headers=CORS_CABECALHOS, expose_headers=["Retry-After"],
+            allow_credentials=False)
+        logger.info("[CORS] origens permitidas: %s", ", ".join(origens))
+    return origens
+
+
+CORS_ORIGENS = instalar_cors(app)
 
 
 def _json_representavel(valor):
@@ -167,6 +227,7 @@ PIX_EVENTO_LABEL = {
     STATUS_AUTORIZACAO_CONCEDIDA: "autorização de recorrência concedida",
     STATUS_AUTORIZACAO_REVOGADA:  "autorização revogada pelo pagador",
     STATUS_COBRANCA_CONFIRMADA:   "cobrança recorrente confirmada",
+    STATUS_COBRANCA_DEVOLVIDA:    "cobrança devolvida ao pagador",
     STATUS_COBRANCA_FALHADA:      "cobrança recorrente falhada",
 }
 
@@ -385,6 +446,12 @@ async def pix_automatico_webhook(request: Request) -> JSONResponse:
         # R5 (Etapa 1, Bloco 3): a revogação aciona o ciclo aberto do mandato
         # — cancela o que ainda não saiu e manda a mensagem na hora.
         return await _tratar_revogacao(evento, tenant_id)
+
+    if status == STATUS_COBRANCA_DEVOLVIDA:
+        # Bloco 5: o dinheiro de uma cobrança recuperada voltou ao pagador.
+        # Dentro do prazo da empresa, a fee é devolvida. Só este aviso, assinado
+        # pelo PSP, gera estorno (E6).
+        return await _tratar_devolucao(evento, tenant_id)
 
     if status != STATUS_COBRANCA_FALHADA:
         rotulo = PIX_EVENTO_LABEL.get(status, status)
@@ -663,6 +730,42 @@ async def simulate_pix_pago(request: Request,
                          "id_recorrencia": payload.id_recorrencia, **resultado})
 
 
+class SimulatePixEstornado(BaseModel):
+    id_recorrencia: str = "RN_demo_001"
+    tenant_id: Optional[str] = None
+    # Sem valor: devolução de tudo o que ainda não foi devolvido.
+    valor: Optional[float] = None
+    # A identidade do aviso. Sem ela, cada chamada é um aviso novo; repita o
+    # mesmo id para ver que um reenvio conta uma vez só.
+    id_devolucao: Optional[str] = None
+
+
+@app.post("/simulate/pix-estornado")
+async def simulate_pix_estornado(request: Request,
+                                 payload: SimulatePixEstornado) -> JSONResponse:
+    """Aviso de devolução sem PSP real — o dinheiro recuperado voltou ao pagador.
+
+    A terceira metade da demonstração: `/simulate/pix-falhado` abre o ciclo,
+    `/simulate/pix-pago` o fecha como recuperado, e este estorna. Passa pela
+    MESMA função do webhook assinado (`_registrar_devolucao`), então exercita o
+    prazo da empresa, a proporção da fee e a regra de não passar do total.
+
+    Como todo `/simulate/*`, só existe com `ENV=development` ou `ENV=demo`: não é
+    uma rota da empresa, não tem login, e em produção responde 403. Fora daqui,
+    só o aviso assinado do PSP gera estorno.
+    """
+    _require_simulation_env()
+    valor = _valor_de_simulacao(payload.valor) if payload.valor is not None else None
+    tenant_id = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {},
+        "SIMULATE")
+    id_devolucao = (payload.id_devolucao or "").strip() or f"D_sim_{uuid4().hex[:16]}"
+    resultado = await _registrar_devolucao(
+        tenant_id, payload.id_recorrencia, None, None, valor, id_devolucao)
+    return JSONResponse({"status": "devolucao_processada",
+                         "id_recorrencia": payload.id_recorrencia, **resultado})
+
+
 # ── Churn Voluntário ─────────────────────────────────────────────────────
 
 @app.post("/webhooks/segment")
@@ -936,6 +1039,12 @@ app.include_router(clientes_api.router)
 app.include_router(titular_api.router)
 # A aba do involuntário no dashboard (Etapa 2, Bloco 2) — `api/ciclos.py`.
 app.include_router(ciclos_api.router)
+# A configuração da empresa (Etapa 2, Bloco 4) — `api/configuracao.py`.
+app.include_router(configuracao_api.router)
+# O token de DESENVOLVIMENTO do dashboard: a rota só é montada com
+# `ENV=development`, e a chave que assina nasce aqui, em memória — ver
+# `api/dev_token.py`. Fora de `development`, `/dev/token` não existe.
+dev_token.montar(app)
 
 
 @app.post("/clientes/importar")
@@ -1393,6 +1502,89 @@ async def _confirmar_cobranca_paga(evento: dict, tenant_id: str = TENANT_PADRAO)
                          "pipeline": False, **resultado})
 
 
+async def _registrar_devolucao(tenant_id: str, id_recorrencia: str, id_cobranca: Optional[str],
+                               e2e_id: Optional[str], valor_devolvido: Optional[float],
+                               id_devolucao: Optional[str]) -> dict:
+    """Aplica UM aviso de devolução ao ciclo que ele atinge (Etapa 2, Bloco 5).
+
+    O caminho único do estorno: o webhook assinado do PSP e a rota de simulação
+    passam por aqui, e mais ninguém (E6 — não existe rota para a empresa declarar
+    estorno: ela deixaria de pagar a fee só dizendo que houve devolução).
+
+    O ciclo é procurado SÓ no tenant declarado. Sem ciclo: 404, com o mesmo corpo
+    para "não existe" e para "é de outra empresa" (R12), e nada é tocado.
+
+    `valor_devolvido=None` (só a simulação manda assim) quer dizer "tudo o que
+    ainda não foi devolvido". O prazo é o da empresa NO MOMENTO do aviso (E1).
+    Nada vai para a trilha do Art. 20 (estorno não é decisão automatizada sobre o
+    titular), o rótulo `recovered` do dataset de treino não muda, e a resposta
+    não traz a fee.
+    """
+    agora = datetime.now()
+    async with _trava_do_cliente(id_recorrencia or e2e_id or "devolucao_sem_identificacao"):
+        ciclo = ciclo_cobranca.ciclo_para_estorno(tenant_id, id_recorrencia or None,
+                                                  id_cobranca or None, e2e_id or None)
+        if ciclo is None:
+            logger.warning("[PIX] Devolução sem ciclo neste tenant (tenant=%s, recorrencia=%s) "
+                           "— 404, nada alterado.", tenant_id, id_recorrencia or "desconhecida")
+            raise HTTPException(status_code=404, detail={
+                "motivo": "ciclo_nao_encontrado",
+                "detalhe": "não há ciclo com esta cobrança nesta empresa"})
+        if valor_devolvido is None:
+            valor_devolvido = round(float(ciclo["valor"] or 0.0)
+                                    - float(ciclo.get("valor_estornado") or 0.0), 2)
+            if valor_devolvido <= 0:
+                # Já devolvido por inteiro: a simulação repete o valor da cobrança,
+                # e a regra (E7) cuida de não passar do total.
+                valor_devolvido = round(float(ciclo["valor"] or 0.0), 2)
+        if not id_devolucao:
+            # Sem id da devolução, a identidade do aviso é o e2e mais o valor:
+            # o reenvio conta uma vez; dois parciais distintos, do MESMO valor e
+            # sem id, contam como um só (limite declarado em LIMITACOES.md).
+            id_devolucao = f"e2e:{e2e_id or 'desconhecido'}:{valor_devolvido:.2f}"
+        prazo = configuracao.ler(ciclo["tenant_id"])["prazo_estorno_dias"]
+        r = ciclo_cobranca.registrar_estorno(ciclo["id"], id_devolucao, valor_devolvido,
+                                             prazo, agora)
+    logger.info("[PIX] Devolução no ciclo %s de %s: %s (no prazo de %d dias: %s; total: %s)",
+                ciclo["id"], ciclo["id_recorrencia"], r["resultado"], prazo,
+                "sim" if r["no_prazo"] else "não", "sim" if r["total"] else "não")
+    return {"estorno": r["resultado"], "ciclo_id": ciclo["id"], "no_prazo": r["no_prazo"],
+            "total": r["total"], "valor_considerado": r["valor_considerado"]}
+
+
+async def _tratar_devolucao(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSONResponse:
+    """O aviso de devolução vindo do PSP: valida o valor e registra o estorno.
+
+    422 quando o valor devolvido não pôde ser lido (o PSP reenvia; estornar fee
+    sobre um valor desconhecido seria inventar dinheiro); 404 sem ciclo no
+    tenant; 503 se o banco não gravou (o reenvio conta uma vez: a identidade do
+    aviso é uma UNIQUE no banco); 200 nos demais casos, inclusive reenvio e
+    aviso fora do prazo — são comportamento correto do PSP, não erro.
+    """
+    valor = evento.get("valor_devolvido")
+    if valor is None:
+        logger.warning("[PIX] Devolução recusada (422): valor devolvido ausente ou ilegível "
+                       "— recorrencia=%s.", evento["id_recorrencia"] or "desconhecida")
+        raise HTTPException(status_code=422, detail={
+            "motivo": "valor_devolvido_nao_utilizavel",
+            "detalhe": "o aviso de devolução não traz um valor devolvido legível e positivo"})
+    try:
+        resultado = await _registrar_devolucao(
+            tenant_id, evento["id_recorrencia"], evento.get("id_cobranca") or None,
+            evento["e2e_id"] or None, valor, evento.get("id_devolucao") or None)
+    except sqlite3.Error as e:
+        logger.error("[PIX] FALHA de persistência ao registrar a devolução (recorrencia=%s): "
+                     "%s — 503", evento["id_recorrencia"] or "desconhecida", e)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "erro_ao_registrar", "evento": evento["status"],
+                     "pipeline": False, "motivo": "falha_de_gravacao",
+                     "detalhe": "a devolução não foi registrada; reenvie"},
+            headers={"Retry-After": "30"})
+    return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
+                         **resultado})
+
+
 async def _tratar_revogacao(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSONResponse:
     """R5: autorização revogada pelo pagador.
 
@@ -1410,20 +1602,38 @@ async def _tratar_revogacao(evento: dict, tenant_id: str = TENANT_PADRAO) -> JSO
                              "ciclo": "sem_identificacao"})
     async with _trava_do_cliente(customer_id):
         ciclo = ciclo_cobranca.ciclo_aberto_do_mandato(
-            tenant_id, customer_id, estados=(ciclo_cobranca.RECOBRANDO,))
+            tenant_id, customer_id,
+            estados=(ciclo_cobranca.RECOBRANDO, ciclo_cobranca.AGUARDANDO_ESCOLHA))
         if ciclo is None:
             logger.info("[PIX] Autorização revogada (recorrencia=%s) — sem ciclo em "
                         "recobrança; registrada.", customer_id)
             return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
                                  "ciclo": "sem_ciclo_aberto"})
         agora = datetime.now()
-        canceladas = ciclo_cobranca.cancelar_pendentes(ciclo["id"], "autorizacao_revogada", agora)
-        print(f"[PIX] Autorização revogada — {canceladas} tentativa(s) do ciclo {ciclo['id']} "
-              f"cancelada(s); mensagem na hora (R5)")
-        estado = await concluir_ciclo_por_resultado(
-            ciclo["id"], agora, motivo="autorizacao_revogada", causa=CAUSA_REVOGADA)
+        canceladas = 0
+        if ciclo["estado"] == ciclo_cobranca.RECOBRANDO:
+            canceladas = ciclo_cobranca.cancelar_pendentes(ciclo["id"], "autorizacao_revogada",
+                                                           agora)
+            print(f"[PIX] Autorização revogada — {canceladas} tentativa(s) do ciclo {ciclo['id']} "
+                  f"cancelada(s); mensagem na hora (R5)")
+            estado = await concluir_ciclo_por_resultado(
+                ciclo["id"], agora, motivo="autorizacao_revogada", causa=CAUSA_REVOGADA)
+        else:
+            # D-E2-7: as sugestões em espera ofereciam o Pix Automático que o
+            # cliente acabou de fechar — uma rodada nova, com a causa revogada;
+            # o prazo de escolha não é reiniciado.
+            print(f"[PIX] Autorização revogada com o ciclo {ciclo['id']} aguardando escolha — "
+                  f"sugestões refeitas com a causa revogada")
+            estado = await refazer_por_revogacao(ciclo["id"], agora)
+        situacao = ciclo_cobranca.ciclo_por_id(ciclo["id"])["estado"]
+    if estado:
+        resposta_ciclo = "mensagem_enviada"
+    elif situacao == ciclo_cobranca.AGUARDANDO_ESCOLHA:
+        resposta_ciclo = ciclo_cobranca.AGUARDANDO_ESCOLHA
+    else:
+        resposta_ciclo = "ja_concluido"
     return JSONResponse({"status": "ok", "evento": evento["status"], "pipeline": False,
-                         "ciclo": "mensagem_enviada" if estado else "ja_concluido",
+                         "ciclo": resposta_ciclo,
                          "ciclo_id": ciclo["id"], "tentativas_canceladas": canceladas,
                          "metodo_pagamento": (estado or {}).get("metodo_pagamento")})
 
@@ -1634,6 +1844,12 @@ async def _run_involuntary_pipeline(
         "dunning_sent": False,
         "channel": None, "metodo_pagamento": None, "message_sent": None,
         "ciclo_id": None, "ciclo_evento": None, "ciclo_tentativa": None,
+        # 7-D (Etapa 2): as decisões da trilha começam VAZIAS a cada evento. Sem
+        # esta chave, o `ainvoke` mesclava a entrada sobre o checkpoint do
+        # mandato, `anotar_decisao` somava às do evento anterior, e uma segunda
+        # cobrança do mesmo mandato regravava na trilha as decisões da primeira
+        # (medido em `docs/interno/experimento_7d_etapa2.py`: 3 → 9 linhas).
+        "decisoes": [],
         # Zerados por evento (ver docstring): a memória entre eventos é o ciclo.
         # `retries_done` é o único contador DECLARADO que passa por aqui.
         "retry_count": int(retries_done or 0), "pix_janela_ate": None,
@@ -1768,6 +1984,15 @@ def _destino_de_desenvolvimento() -> None:
 _destino_de_desenvolvimento()
 
 TENANT_PAINEL = "painel_avaliacao"
+# O painel de avaliação mostra a mensagem do involuntário na resposta, para
+# clientes fictícios que não estão em base nenhuma. Sua configuração é fixa
+# (Etapa 2): modo automático, janela o dia todo e um canal presumido — sem
+# isso, a mensagem ficaria esperando escolha ou marcada `sem_canal`, e o
+# simulador (Etapa 3) mudaria de comportamento antes da hora.
+configuracao.fixar(TENANT_PAINEL, {"modo_mensagem_involuntario": configuracao.MODO_AUTOMATICO,
+                                   "janela_contato_inicio": "00:00",
+                                   "janela_contato_fim": "24:00",
+                                   "canal_presumido": "whatsapp"})
 
 # Mesmo dicionario de crai/scripts/relatorio.py (ver o comentario acima de
 # onde e usado): traduz o nome INTERNO da feature para o rotulo que aparece
@@ -1958,6 +2183,8 @@ async def painel_cobranca_falhada(payload: PainelCobranca):
         "pix_retry_schedule": None, "dunning_sent": False, "channel": None,
         "canais_considerados": None, "metodo_pagamento": None,
         "message_sent": None,
+        # 7-D: nada de decisão de uma chamada anterior do mesmo lote.
+        "decisoes": [],
     }
     final = await crai_agent.ainvoke(inicial, {"configurable": {"thread_id": id_rec}})
 

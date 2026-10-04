@@ -67,6 +67,10 @@ STATUS_AUTORIZACAO_CONCEDIDA = "autorizacao_concedida"
 STATUS_AUTORIZACAO_REVOGADA = "autorizacao_revogada"
 STATUS_COBRANCA_CONFIRMADA = "cobranca_confirmada"
 STATUS_COBRANCA_FALHADA = "cobranca_falhada"
+# Etapa 2, Bloco 5 (estorno da fee): o dinheiro de uma cobrança PAGA voltou ao
+# pagador (devolução do Pix). É o quinto evento, e é ADITIVO: os quatro acima
+# saem do parser exatamente como antes.
+STATUS_COBRANCA_DEVOLVIDA = "cobranca_devolvida"
 STATUS_DESCONHECIDO = "desconhecido"
 
 PIX_STATUSES = frozenset({
@@ -74,6 +78,7 @@ PIX_STATUSES = frozenset({
     STATUS_AUTORIZACAO_REVOGADA,
     STATUS_COBRANCA_CONFIRMADA,
     STATUS_COBRANCA_FALHADA,
+    STATUS_COBRANCA_DEVOLVIDA,
 })
 
 # Nomes de evento do PSP → status normalizado. Aceita as variações mais
@@ -91,6 +96,11 @@ EVENT_STATUS_MAP = {
     "automatic_pix.charge_failed":           STATUS_COBRANCA_FALHADA,
     "automatic_pix.charge_declined":         STATUS_COBRANCA_FALHADA,
     "recurrence.charge_failed":              STATUS_COBRANCA_FALHADA,
+    # TODO(integração): os nomes do evento de devolução só a homologação com a
+    # conta do PSP confirma. Estes seguem o padrão dos outros três grupos.
+    "automatic_pix.charge_refunded":         STATUS_COBRANCA_DEVOLVIDA,
+    "recurrence.charge_refunded":            STATUS_COBRANCA_DEVOLVIDA,
+    "charge.refunded":                       STATUS_COBRANCA_DEVOLVIDA,
 }
 
 # ── Status CRU do PSP → status normalizado ───────────────────────────────
@@ -116,6 +126,10 @@ STATUS_CRU_COBRANCA = {
     "approved": STATUS_COBRANCA_CONFIRMADA,
     "settled": STATUS_COBRANCA_CONFIRMADA,
     "confirmed": STATUS_COBRANCA_CONFIRMADA,
+    # TODO(integração): `DEVOLVIDO` é o status da devolução na API Pix do BACEN;
+    # `refunded` é a forma em inglês. Confirmar o que o PSP manda de fato.
+    "refunded": STATUS_COBRANCA_DEVOLVIDA,
+    "devolvido": STATUS_COBRANCA_DEVOLVIDA,
 }
 
 STATUS_CRU_AUTORIZACAO = {
@@ -454,6 +468,16 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             ), "id_cobranca", degradacoes),
             "degradacoes": degradacoes,
         }
+        if normalizado["status"] == STATUS_COBRANCA_DEVOLVIDA:
+            # Bloco 5, ADITIVO: só o evento de devolução ganha estes dois campos;
+            # os outros quatro continuam com as mesmas chaves de sempre.
+            normalizado["valor_devolvido"] = self._extrair_valor_devolvido(
+                dados, normalizado["valor"])
+            normalizado["id_devolucao"] = _texto_de_identificacao(_primeiro_preenchido(
+                dados, "id_devolucao", "devolucao.id", "devolucao.rtrId", "rtrId",
+                "refund_id", "refund.id",
+                default="",
+            ), "id_devolucao", degradacoes)
 
         logger.info(
             "[PIX] Evento normalizado: status=%s | e2e=%s | recorrencia=%s | "
@@ -464,6 +488,35 @@ class PixAutomaticoAdapter(PaymentGatewayAdapter):
             degradacoes or "nenhuma",
         )
         return normalizado
+
+    @staticmethod
+    def _extrair_valor_devolvido(dados: dict, valor_do_evento: float) -> Optional[float]:
+        """Quanto voltou ao pagador, em reais; None se não deu para ler.
+
+        TODO(integração): os nomes dos campos da devolução dependem da
+        homologação com o PSP. Estes são os do padrão do BACEN (`devolucao.valor`)
+        e as variações em inglês que o resto do parser já aceita. Sem campo
+        próprio da devolução, vale o valor do próprio evento — numa devolução,
+        ele É o valor devolvido. Zero, negativo, ilegível ou de magnitude
+        implausível devolve None, e a borda recusa o aviso (422): estornar fee
+        sobre um valor que não se leu seria inventar dinheiro.
+        """
+        centavos = _primeiro_preenchido(dados, "refunded_amount_cents", "amount_refunded_cents")
+        if centavos is not None:
+            lido = _para_float(centavos, teto=VALOR_MAXIMO_PLAUSIVEL * 100)
+            reais = _valor_utilizavel(round(lido / 100, 2)) if lido is not None else None
+        else:
+            bruto = _primeiro_preenchido(dados, "valor_devolvido", "devolucao.valor",
+                                         "refund.amount", "refunded_amount", "amount_refunded")
+            if bruto is None:
+                reais = valor_do_evento if valor_do_evento and valor_do_evento > 0 else None
+            else:
+                lido = _para_float(bruto)
+                reais = round(lido, 2) if lido is not None else None
+        if reais is None or reais <= 0:
+            logger.warning("[PIX] Devolução sem valor utilizável — o aviso será recusado.")
+            return None
+        return reais
 
     @staticmethod
     def _extrair_codigo_de_falha(raw_payload: dict, dados: dict) -> str:

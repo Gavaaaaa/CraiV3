@@ -1,7 +1,7 @@
 """crai/agent/workflow.py — Nós do pipeline de churn involuntário."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from .state import AgentState
 from ..config import (
@@ -27,7 +27,7 @@ from ..dunning.pix_automatico_retry import (
     inicio_da_janela,
 )
 from ..dunning.dunning_engine import DunningEngine
-from ..dunning import ciclo_cobranca, recovery_log, retry_state
+from ..dunning import canal_involuntario, ciclo_cobranca, configuracao, recovery_log, retry_state
 from ..dunning.retry_scheduler import disparar_tentativa
 from ..integrations.hubspot_crm import HubSpotCRM
 
@@ -748,32 +748,35 @@ async def schedule_retry_pix(state: AgentState) -> AgentState:
 
 
 async def trigger_dunning(state: AgentState) -> AgentState:
-    """Executa a mensagem personalizada via LLM (LangGraph) — nunca aciona humano."""
-    # `p_recovery` do diagnóstico; sem ele, o score/100; sem os dois (ciclo
-    # legado, aberto por um plano sem diagnóstico), o neutro 0.5 — a mensagem
-    # sai com tom "amigável", nunca deixa de sair por falta de número.
-    p_recovery = state.get("p_recovery")
-    if p_recovery is None:
-        score = state.get("recovery_score")
-        p_recovery = (score if score is not None else 50) / 100
+    """A mensagem de dentro do grafo (causa não retentável; janela esgotada) —
+    nunca aciona humano.
+
+    Com ciclo (sempre, no grafo: `open_cycle` o põe no state), a mensagem
+    passa pelo MESMO caminho que a mensagem depois da 3ª tentativa (Etapa 2):
+    `preparar_mensagem` gera as 3 sugestões e segue o modo da empresa. No modo
+    escolha nada sai agora — o ciclo fica em `aguardando_escolha`. As decisões
+    da campanha, quando a mensagem sai, entram no state e são gravadas por
+    `update_roi_dashboard`, no fim do grafo, como sempre foram.
+
+    Sem ciclo (chamada direta de teste) é o caminho de antes: uma mensagem só.
+    """
+    if state.get("ciclo_id"):
+        ciclo = ciclo_cobranca.ciclo_por_id(state["ciclo_id"])
+        enviado = None
+        if ciclo is not None and ciclo["estado"] == ciclo_cobranca.RECOBRANDO:
+            enviado = await preparar_mensagem(
+                state["ciclo_id"], _agora(), motivo="grafo",
+                causa=state.get("failure_cause"), persistir=False)
+        if enviado is None:
+            return {**state, "dunning_sent": False}
+        return {**state, **{k: enviado.get(k) for k in (
+            "dunning_sent", "channel", "metodo_pagamento", "message_sent", "mensagem_meta")},
+            "decisoes": list(state.get("decisoes") or []) + list(enviado.get("decisoes") or [])}
+
+    p_recovery = _p_recovery(state)
     result = await _dunning.run_campaign(state["customer_id"], state["failure_cause"],
                                           p_recovery, state["amount"],
                                           tenant_id=state.get("tenant_id"))
-    # O estado do ciclo reflete o envio. Conteúdo da mensagem: inalterado.
-    # Se o ciclo já está `mensagem_enviada` (o caminho fora do grafo o RESERVA
-    # antes de enviar — ver `concluir_ciclo_por_resultado`), nada a fazer.
-    if state.get("ciclo_id") and result.get("sent"):
-        ciclo = ciclo_cobranca.ciclo_por_id(state["ciclo_id"])
-        if ciclo is not None and ciclo["estado"] == ciclo_cobranca.RECOBRANDO:
-            try:
-                # Dentro do grafo o envio já aconteceu: reserva e confirmação
-                # (B3-a) vão na mesma escrita.
-                momento = _agora()
-                ciclo_cobranca.transicionar(state["ciclo_id"], ciclo_cobranca.MENSAGEM_ENVIADA,
-                                            momento, mensagem_confirmada_em=momento.isoformat())
-            except ciclo_cobranca.TransicaoInvalida as e:
-                logger.warning("[CICLO] %s: mensagem enviada, mas o ciclo não aceitou a "
-                               "transição (%s)", state.get("customer_id"), e)
     return {
         **state,
         # As decisões da campanha (oferta + canal) entram na trilha do ciclo.
@@ -788,6 +791,17 @@ async def trigger_dunning(state: AgentState) -> AgentState:
                           "link": result.get("portal_link") or "",
                           "metodo": result["payment_method"]},
     }
+
+
+def _p_recovery(state) -> float:
+    """`p_recovery` do diagnóstico; sem ele, o score/100; sem os dois (ciclo
+    legado, aberto por um plano sem diagnóstico), o neutro 0.5 — a mensagem
+    sai com tom "amigável", nunca deixa de sair por falta de número."""
+    p_recovery = state.get("p_recovery")
+    if p_recovery is None:
+        score = state.get("recovery_score")
+        p_recovery = (score if score is not None else 50) / 100
+    return p_recovery
 
 
 def estado_do_ciclo(ciclo: dict, tentativas: Optional[list] = None) -> AgentState:
@@ -838,60 +852,257 @@ async def concluir_ciclo_por_resultado(ciclo_id: int, agora: Optional[datetime] 
                                        causa: Optional[str] = None) -> Optional[AgentState]:
     """A mensagem DEPOIS das tentativas (R1) — e na revogação (R5) —, fora do grafo.
 
-    É um ponto de decisão como qualquer outro, e grava na trilha do Art. 20
-    EXATAMENTE as mesmas decisões que `trigger_dunning` grava dentro do grafo
-    (A2): as duas da campanha (oferta = meio de pagamento + tom, e canal),
-    montadas por `DunningEngine.decisoes_da_campanha`, e persistidas por
-    `update_roi_dashboard` — os mesmos dois nós, chamados com um state
-    reconstruído do ciclo (`estado_do_ciclo`). Não há caminho paralelo.
+    Desde a Etapa 2 (R7, R8) é `preparar_mensagem`: o ciclo vai de
+    `recobrando` a `aguardando_escolha` sob a trava de escrita (quem perde a
+    disputa — webhook e agendador ao mesmo tempo — não faz nada), as 3
+    sugestões são geradas, e o modo da empresa decide: no automático a
+    recomendada sai agora (se a janela de contato e um canal permitirem); no
+    modo escolha, espera a escolha ou o prazo. Devolve o state final quando a
+    mensagem SAIU, ou None.
 
-    Concorrência: o ciclo é RESERVADO antes de enviar — `recobrando →
-    mensagem_enviada` sob a trava de escrita. Se outro processo (webhook e
-    agendador ao mesmo tempo) já reservou, `TransicaoInvalida` diz que não há
-    o que fazer e NENHUMA segunda mensagem sai. Devolve o state final, ou None
-    quando não havia o que concluir.
-
-    B3-a — reserva ≠ envio. Depois de o envio retornar, `confirmar_mensagem`
-    grava `mensagem_confirmada_em`. Se o envio LEVANTAR, a reserva é desfeita
-    (`desfazer_reserva_de_mensagem`, WARNING): o ciclo volta a `recobrando` e
-    a próxima passagem do agendador tenta de novo, com a mesma reserva contra
-    duplicata. Se o PROCESSO MORRER entre reservar e enviar, a varredura
-    encontra a reserva sem confirmação há mais de
-    `PRAZO_RESERVA_DE_MENSAGEM` e faz o mesmo. A exceção não propaga: o
-    resultado da tentativa já está gravado, e um 500 ao PSP faria ele
-    reenviar um evento já tratado.
-
-    `causa`, quando informada, sobrepõe a causa gravada no ciclo — é o caso da
-    revogação, em que a mensagem oferece boleto porque não há mais mandato.
+    As decisões da campanha gravadas na trilha são as MESMAS de dentro do
+    grafo (A2): o envio dos dois caminhos é `enviar_mensagem_escolhida`.
     """
-    agora = agora or _agora()
+    return await preparar_mensagem(ciclo_id, agora or _agora(), motivo=motivo, causa=causa)
+
+
+# ── As três mensagens (Etapa 2, R7 a R9) ─────────────────────────────────
+#
+# O caminho de TODA mensagem do involuntário com ciclo:
+#
+#   preparar_mensagem         recobrando → aguardando_escolha (a trava) e a
+#                             rodada 1; no modo automático, escolhe e envia
+#   gerar_rodada              3 sugestões numa chamada ao LLM (reserva:
+#                             templates), canal pela base, gravadas juntas
+#   registrar_escolha         a escolha (papel, prazo ou automático) + a
+#                             decisão na trilha (R9)
+#   enviar_mensagem_escolhida janela de contato, canal relido na base,
+#                             aguardando_escolha → mensagem_enviada (a reserva
+#                             do envio), envio, confirmação
+#
+# R1 não muda: nada disto é alcançável sem os gatilhos que já existiam (o
+# resultado da 3ª tentativa, a revogação, a causa não retentável, a janela
+# esgotada), e nenhuma rota cria sugestão nem dispara sem ser a escolha de uma
+# das 3 geradas.
+
+async def gerar_rodada(ciclo_id: int, agora: datetime, causa: Optional[str] = None,
+                       papel: Optional[str] = None) -> Optional[int]:
+    """Gera e grava uma rodada de 3 sugestões. Devolve o número dela, ou None
+    se o ciclo não aceita rodada (fora de `aguardando_escolha`, ou já tem
+    escolhida — a escolha ou o prazo chegaram durante a geração: vencem eles).
+
+    `causa`: a da rodada. Sem ela, a da última rodada (a regeração mantém a
+    causa revogada, D-E2-7); sem rodada, a do ciclo. `papel`: quem pediu a
+    regeração — vai para a trilha."""
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    if ciclo is None or ciclo["estado"] != ciclo_cobranca.AGUARDANDO_ESCOLHA:
+        return None
+    anteriores = ciclo_cobranca.mensagens_do_ciclo(ciclo_id)
+    causa = causa or (anteriores[-1]["causa"] if anteriores else ciclo.get("causa_original"))
+    config = configuracao.ler(ciclo["tenant_id"])
+    canal = canal_involuntario.escolher_canal(ciclo["tenant_id"], ciclo["id_recorrencia"], config)
+    estado = estado_do_ciclo(ciclo)
+    p = _p_recovery(estado)
+    try:
+        geradas = await _dunning.gerar_sugestoes(
+            ciclo["id_recorrencia"], causa, p, estado["amount"], canal=canal["canal"],
+            primeiro_nome=canal["primeiro_nome"], tempo_de_casa=canal["tempo_de_casa"])
+    except Exception as e:                       # noqa: BLE001 — a varredura regenera
+        logger.error("[CICLO] ciclo %s: as sugestões não foram geradas (%r) — a varredura "
+                     "tenta de novo.", ciclo_id, e)
+        return None
+    rodada = ciclo_cobranca.gravar_rodada(
+        ciclo_id, geradas["sugestoes"], canal["canal"], canal["motivo_canal"], causa,
+        geradas["payment_method"], geradas["tom"], agora)
+    if rodada is None:
+        return None
+    print(f"[CICLO] {ciclo['id_recorrencia']}: ciclo {ciclo_id} — rodada {rodada} de 3 sugestões "
+          f"(recomendada: {geradas['recomendada']}, canal: {canal['canal']})")
+    if rodada > 1:
+        # A regeração vale como decisão na trilha (R8, acréscimo): tipo
+        # `oferta`, como a escolha. Nunca o texto.
+        trilha.registrar_decisoes([trilha.decisao(
+            ciclo["tenant_id"], ciclo["id_recorrencia"], trilha.DOMINIO_INVOLUNTARIO,
+            trilha.TIPO_OFERTA, trilha.MODELO_REGRA,
+            entradas={"failure_cause": causa, "rodada_anterior": rodada - 1},
+            saida={"rodada": rodada, "abordagem_recomendada": geradas["recomendada"],
+                   "pedida_por_papel": papel or "sistema",
+                   "regra": "regeracao_de_sugestoes",
+                   "motivo_da_regra": ("a empresa pediu outras 3 sugestões dentro do prazo "
+                                       "de escolha, que não é reiniciado") if papel else
+                                      "novas sugestões depois de um evento do ciclo"},
+            decidido_em=_utc(agora))])
+    return rodada
+
+
+def _utc(agora: datetime) -> str:
+    """O instante local do ciclo como a trilha o grava: UTC com offset."""
+    return agora.astimezone().astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def registrar_escolha(ciclo_id: int, escolhida_por: str, agora: datetime,
+                      rodada: Optional[int] = None, abordagem: Optional[str] = None
+                      ) -> Optional[dict]:
+    """A escolha de UMA das sugestões, e a decisão na trilha do Art. 20 (R9):
+    tipo `oferta`, com o papel de quem escolheu (nunca o nome) e se foi por
+    prazo. Devolve a mensagem escolhida, ou None se não havia o que escolher."""
+    escolhida = ciclo_cobranca.registrar_escolha(ciclo_id, rodada, abordagem, escolhida_por, agora)
+    if escolhida is None:
+        return None
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    recomendada = next((m["abordagem"] for m in ciclo_cobranca.mensagens_do_ciclo(ciclo_id)
+                        if m["rodada"] == escolhida["rodada"] and m["recomendada"]), None)
+    motivos = {"prazo": "sem escolha da empresa no prazo, a recomendada da última rodada "
+                        "saiu sozinha",
+               "automatico": "modo automático da empresa: a recomendada sai sem escolha"}
+    trilha.registrar_decisoes([trilha.decisao(
+        ciclo["tenant_id"], ciclo["id_recorrencia"], trilha.DOMINIO_INVOLUNTARIO,
+        trilha.TIPO_OFERTA, trilha.MODELO_REGRA,
+        entradas={"failure_cause": escolhida["causa"], "rodada": escolhida["rodada"]},
+        saida={"abordagem": escolhida["abordagem"], "abordagem_recomendada": recomendada,
+               "rodada": escolhida["rodada"], "escolhida_por": escolhida_por,
+               "por_prazo": escolhida_por == "prazo",
+               "regra": "escolha_entre_sugestoes",
+               "motivo_da_regra": motivos.get(escolhida_por,
+                                              f"escolhida pela empresa (papel {escolhida_por}) "
+                                              "entre as 3 sugestões geradas")},
+        decidido_em=_utc(agora))])
+    print(f"[CICLO] ciclo {ciclo_id}: escolhida {escolhida['abordagem']} (rodada "
+          f"{escolhida['rodada']}) por {escolhida_por}")
+    return escolhida
+
+
+async def preparar_mensagem(ciclo_id: int, agora: datetime, motivo: str,
+                            causa: Optional[str] = None,
+                            persistir: bool = True) -> Optional[AgentState]:
+    """`recobrando → aguardando_escolha`, a rodada 1, e o modo da empresa.
+    Devolve o state quando a mensagem SAIU agora; None se ficou esperando
+    (escolha, janela, canal) ou se não havia o que preparar."""
     ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
     if ciclo is None or ciclo["estado"] != ciclo_cobranca.RECOBRANDO:
         return None
     try:
-        ciclo = ciclo_cobranca.transicionar(ciclo_id, ciclo_cobranca.MENSAGEM_ENVIADA, agora)
+        ciclo_cobranca.transicionar(ciclo_id, ciclo_cobranca.AGUARDANDO_ESCOLHA, agora)
     except ciclo_cobranca.TransicaoInvalida:
-        logger.info("[CICLO] ciclo %s: outro processo já concluiu — nenhuma segunda mensagem",
-                    ciclo_id)
+        logger.info("[CICLO] ciclo %s: outro processo já preparou a mensagem", ciclo_id)
         return None
+    print(f"[CICLO] {ciclo['id_recorrencia']}: ciclo {ciclo_id} — {motivo}; 3 sugestões de "
+          f"mensagem ({ciclo_cobranca.tentativas_executadas(ciclo_id)}/{MAX_TENTATIVAS_PIX} "
+          f"tentativa(s) executada(s))")
+    rodada = await gerar_rodada(ciclo_id, agora, causa=causa)
+    if rodada is None:
+        return None
+    return await _seguir_o_modo(ciclo_id, agora, persistir)
 
-    estado = estado_do_ciclo(ciclo)
-    estado["dunning_sent"] = False
-    if causa:
-        estado["failure_cause"] = causa
-    print(f"[CICLO] {estado['customer_id']}: ciclo {ciclo_id} — {motivo}; mensagem ao cliente "
-          f"({estado['retry_count']}/{MAX_TENTATIVAS_PIX} tentativa(s) executada(s))")
+
+async def _seguir_o_modo(ciclo_id: int, agora: datetime, persistir: bool = True):
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    config = configuracao.ler(ciclo["tenant_id"])
+    if config["modo_mensagem_involuntario"] != configuracao.MODO_AUTOMATICO:
+        return None
+    if registrar_escolha(ciclo_id, "automatico", agora) is None:
+        return None
+    return await enviar_mensagem_escolhida(ciclo_id, agora, persistir)
+
+
+async def enviar_mensagem_escolhida(ciclo_id: int, agora: datetime,
+                                    persistir: bool = True) -> Optional[AgentState]:
+    """Envia a mensagem escolhida, se puder AGORA: dentro da janela de contato
+    da empresa e com um canal entregável, relido na base neste instante (o
+    contato nunca é copiado). Sem canal, a mensagem fica marcada como não
+    entregável e o ciclo continua esperando — o relógio reconfere a cada
+    passagem (D-E2-11). Devolve o state final quando saiu."""
+    ciclo = ciclo_cobranca.ciclo_por_id(ciclo_id)
+    if ciclo is None or ciclo["estado"] != ciclo_cobranca.AGUARDANDO_ESCOLHA:
+        return None
+    msg = ciclo_cobranca.mensagem_escolhida(ciclo_id)
+    if msg is None or msg["enviada_em"]:
+        return None
+    config = configuracao.ler(ciclo["tenant_id"])
+    if not configuracao.dentro_da_janela(config, agora):
+        return None
+    canal = canal_involuntario.escolher_canal(ciclo["tenant_id"], ciclo["id_recorrencia"], config)
+    if canal["canal"] == canal_involuntario.SEM_CANAL:
+        if not msg["nao_entregavel_em"]:
+            print(f"[CICLO] ciclo {ciclo_id}: sem canal entregável ({canal['motivo_canal']}) — "
+                  "mensagem não entregável; o relógio reconfere o contato a cada passagem")
+        ciclo_cobranca.marcar_mensagem(msg["id"], agora, nao_entregavel=True,
+                                       canal=canal["canal"], motivo_canal=canal["motivo_canal"])
+        return None
     try:
-        estado = await trigger_dunning(estado)
+        ciclo_cobranca.transicionar(ciclo_id, ciclo_cobranca.MENSAGEM_ENVIADA, agora)
+    except ciclo_cobranca.TransicaoInvalida:
+        logger.info("[CICLO] ciclo %s: outro processo já está enviando — nenhuma segunda "
+                    "mensagem", ciclo_id)
+        return None
+    estado = estado_do_ciclo(ciclo_cobranca.ciclo_por_id(ciclo_id))
+    estado["failure_cause"] = msg["causa"]
+    origem = "gerado" if msg["origem_texto"] == "llm" else "template"
+    try:
+        result = await _dunning.run_campaign(
+            estado["customer_id"], msg["causa"], _p_recovery(estado), estado["amount"],
+            tenant_id=estado["tenant_id"], texto=msg["texto"], abordagem=msg["abordagem"],
+            canal=canal["canal"], motivo_canal=canal["motivo_canal"], origem=origem,
+            codigo_template=msg["codigo_template"])
     except Exception as e:                       # noqa: BLE001 — B3-a: a reserva não pode ficar órfã
         ciclo_cobranca.desfazer_reserva_de_mensagem(ciclo_id, f"envio levantou: {e!r}", agora)
         return None
-    if not estado.get("dunning_sent"):
+    if not result.get("sent"):
         ciclo_cobranca.desfazer_reserva_de_mensagem(ciclo_id, "envio não confirmou (sent=False)",
                                                     agora)
         return None
+    ciclo_cobranca.marcar_mensagem(msg["id"], agora, enviada=True, canal=canal["canal"],
+                                   motivo_canal=canal["motivo_canal"])
     ciclo_cobranca.confirmar_mensagem(ciclo_id, agora)
-    return await update_roi_dashboard(estado)
+    estado.update({
+        "decisoes": list(result.get("decisoes") or []),
+        "dunning_sent": True, "channel": result["channel"],
+        "metodo_pagamento": result["payment_method"], "message_sent": result["message"],
+        "mensagem_meta": {"origem": origem, "codigo": msg["codigo_template"] or "",
+                          "valor": estado["amount"], "link": result.get("portal_link") or "",
+                          "metodo": result["payment_method"], "abordagem": msg["abordagem"]},
+    })
+    if persistir:
+        return await update_roi_dashboard(estado)
+    return estado
+
+
+async def refazer_por_revogacao(ciclo_id: int, agora: datetime) -> Optional[AgentState]:
+    """D-E2-7: a revogação chega com o ciclo em `aguardando_escolha`. As
+    sugestões oferecem o Pix Automático que o cliente acabou de fechar: uma
+    escolha ainda não enviada é desfeita, e uma rodada nova sai com a causa
+    revogada (boleto). O prazo de escolha NÃO é reiniciado. Depois, o modo da
+    empresa, como em qualquer rodada."""
+    ciclo_cobranca.desfazer_escolha_nao_enviada(ciclo_id, agora)
+    rodada = await gerar_rodada(ciclo_id, agora, causa=CAUSA_REVOGADA)
+    if rodada is None:
+        return None
+    return await _seguir_o_modo(ciclo_id, agora)
+
+
+async def processar_pendencias_de_mensagem(resultado: dict, agora: datetime) -> None:
+    """O que o relógio faz pelos ciclos em `aguardando_escolha` (as listas de
+    `ciclo_cobranca.pendencias_de_mensagem`), com a configuração de cada
+    empresa: sugestões que faltam são geradas; escolhas cujo prazo venceu
+    (ou de empresa em modo automático) saem pela recomendada da última
+    rodada; escolhidas não enviadas são enviadas se a janela e o canal
+    deixarem."""
+    for ciclo_id in resultado.get("sugestoes_faltando") or []:
+        if await gerar_rodada(ciclo_id, agora) is not None:
+            await _seguir_o_modo(ciclo_id, agora)
+    for ciclo_id, tenant_id, desde in resultado.get("escolha_pendente") or []:
+        config = configuracao.ler(tenant_id)
+        inicio = ciclo_cobranca._data(desde)
+        if config["modo_mensagem_involuntario"] == configuracao.MODO_AUTOMATICO:
+            por = "automatico"
+        elif inicio is not None and agora >= inicio + timedelta(hours=config["prazo_escolha_horas"]):
+            por = "prazo"
+        else:
+            continue
+        if registrar_escolha(ciclo_id, por, agora) is not None:
+            await enviar_mensagem_escolhida(ciclo_id, agora)
+    for ciclo_id in resultado.get("envio_pendente") or []:
+        await enviar_mensagem_escolhida(ciclo_id, agora)
 
 
 async def descartar_ciclo(state: AgentState) -> AgentState:

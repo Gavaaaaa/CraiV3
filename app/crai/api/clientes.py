@@ -77,6 +77,19 @@ def _404() -> HTTPException:
         "detalhe": "não há cliente com este id nesta empresa"})
 
 
+def _409_recorrencia(detalhe: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={
+        "motivo": "id_recorrencia_em_uso", "detalhe": detalhe, "campo": "id_recorrencia"})
+
+
+def _sem_conflito_de_recorrencia(tenant_id: str, cliente: dict) -> None:
+    """409 se o `id_recorrencia` do cliente já está ligado a OUTRO cliente
+    desta empresa (Etapa 2). Mesmo crivo da importação."""
+    _, conflitos = _com_base(importacao.recusar_conflitos_de_recorrencia, tenant_id, [cliente])
+    if conflitos:
+        raise _409_recorrencia(conflitos[0][1])
+
+
 def _500_base(e: Exception) -> HTTPException:
     logger.error("[CLIENTES-API] %s", e)
     return HTTPException(status_code=500, detail={
@@ -142,6 +155,8 @@ def _com_base(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except clientes_importados.ConfiguracaoAusente as e:
         raise _500_base(e) from e
+    except clientes_importados.ConflitoDeRecorrencia as e:
+        raise _409_recorrencia(str(e)) from e
 
 
 # ── POST /clientes ────────────────────────────────────────────────────────
@@ -157,7 +172,9 @@ async def upsert_cliente(
 
     Corpo: os mesmos campos da planilha (`customer_id_externo`, `mrr`,
     `billing_profile` obrigatórios; `days_since_last`, `features_used_30d`,
-    `email` opcionais) e, opcionalmente, `reativar: true`.
+    `email` e as 12 colunas da Etapa 2 opcionais — ver
+    `importacao.CAMPOS_ETAPA2`) e, opcionalmente, `reativar: true`. Um
+    `id_recorrencia` já ligado a outro cliente da empresa é 409.
 
     NÃO ressuscita quem cancelou: o upsert atualiza MRR, perfil e
     comportamento, mas `cancelado_em` fica. `reativar: true` — e só isso —
@@ -166,12 +183,13 @@ async def upsert_cliente(
     acidente de sincronização.
     """
     corpo = _exigir_objeto(corpo)
-    _recusar_campos_desconhecidos(corpo, importacao.ESPERADAS + (CAMPO_REATIVAR,))
+    _recusar_campos_desconhecidos(corpo, importacao.ACEITAS + (CAMPO_REATIVAR,))
     reativar = corpo.get(CAMPO_REATIVAR, False)
     if not isinstance(reativar, bool):
         raise _422("reativar_invalido", "`reativar` precisa ser true ou false",
                    campo=CAMPO_REATIVAR)
     cliente = _validar_cliente({k: v for k, v in corpo.items() if k != CAMPO_REATIVAR})
+    _sem_conflito_de_recorrencia(tenant_id, cliente)
 
     if _e_reenvio(tenant_id, request, idempotency_key):
         linha = _com_base(clientes_importados.obter, tenant_id, cliente["customer_id_externo"])
@@ -219,7 +237,7 @@ async def sincronizar_lote(
     linhas, ruins_de_forma = [], {}
     for i, item in enumerate(itens):
         if isinstance(item, dict):
-            extras = sorted(set(item) - set(importacao.ESPERADAS))
+            extras = sorted(set(item) - set(importacao.ACEITAS))
             if extras:
                 ruins_de_forma[i] = f"campo(s) não reconhecido(s): {', '.join(extras)}"
                 linhas.append(None)             # rejeitado por `validar_linhas`
@@ -228,6 +246,12 @@ async def sincronizar_lote(
     clientes, ruins = importacao.validar_linhas(linhas)
     rejeitados = [{"indice": i, "motivo": ruins_de_forma.get(i, motivo)}
                   for i, motivo in ruins]
+    indice_do_cliente = {str(item.get("customer_id_externo")).strip(): i
+                         for i, item in enumerate(itens) if isinstance(item, dict)}
+    clientes, conflitos = _com_base(importacao.recusar_conflitos_de_recorrencia,
+                                    tenant_id, clientes)
+    rejeitados += [{"indice": indice_do_cliente.get(cid), "motivo": motivo}
+                   for cid, motivo in conflitos]
 
     if _e_reenvio(tenant_id, request, idempotency_key):
         return {"importados": 0, "rejeitados": [], "linhas_sem_dado_comportamental": 0,
@@ -258,7 +282,7 @@ async def atualizar_cliente(
     """Mudança parcial: só o que veio no corpo muda.
 
     Aceita `mrr`, `billing_profile`, `days_since_last`, `features_used_30d`,
-    `email`. Campo ausente fica como está — mudar o MRR não toca nas colunas
+    `email` e as 12 colunas da Etapa 2. Campo ausente fica como está — mudar o MRR não toca nas colunas
     comportamentais. Campo presente com `null` limpa (só os opcionais). A
     validação é a da planilha, aplicada sobre a linha JÁ MESCLADA com o que
     veio: o resultado do PATCH é sempre um cliente que a planilha aceitaria.
@@ -274,10 +298,12 @@ async def atualizar_cliente(
     atual = _com_base(clientes_importados.obter, tenant_id, customer_id_externo)
     if atual is None:
         raise _404()
-    mesclado = {campo: atual.get(campo) for campo in importacao.ESPERADAS}
+    mesclado = {campo: atual.get(campo) for campo in importacao.ACEITAS}
     mesclado.update(corpo)
     validado = _validar_cliente(mesclado)
     campos = {k: validado[k] for k in corpo}
+    if "id_recorrencia" in campos:
+        _sem_conflito_de_recorrencia(tenant_id, validado)
 
     if _e_reenvio(tenant_id, request, idempotency_key):
         return _resposta(tenant_id, atual, reenvio=True)

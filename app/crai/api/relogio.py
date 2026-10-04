@@ -9,7 +9,8 @@ mensagem pelo agendador, nem `perdido`. E nada avisava que o relógio estava
 parado.
 
 O QUE ELE É. Uma tarefa de fundo, criada no `lifespan` do FastAPI, que chama
-`passagem(agora)` a cada `CRAI_RELOGIO_INTERVALO_S` segundos (padrão 60). A
+`passagem(agora)` a cada `CRAI_RELOGIO_INTERVALO_S` segundos (padrão 60). Uma
+vez por dia a passagem roda também o EXPURGO (`expurgar`, Bloco 4). A
 passagem é a mesma função que o teste e a demo chamam com um `agora` adiantado —
 o relógio só decide QUANDO ela roda. O que roda está em `ciclo_cobranca.varrer`,
 no mesmo lugar para o agendador e para quem o chame à mão.
@@ -47,7 +48,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ..dunning import retry_scheduler
+from ..dunning import ciclo_cobranca, configuracao, retry_scheduler
+from . import registro_acesso
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ _tarefa: Optional[asyncio.Task] = None
 def _estado_inicial() -> dict:
     return {"ligado": False, "motivo_desligado": None, "intervalo_s": None,
             "ultima_passagem_em": None, "ultima_passagem_ok": None,
-            "ultima_falha": None, "passagens": 0}
+            "ultima_falha": None, "passagens": 0, "ultimo_expurgo_em": None}
 
 
 _estado.update(_estado_inicial())
@@ -145,12 +147,53 @@ def workers_detectados(env: Optional[dict] = None, argv: Optional[list] = None) 
     return None
 
 
+def expurgar(agora: datetime) -> dict:
+    """O expurgo: o que sai do banco porque o prazo de guarda acabou.
+
+      - o TEXTO das mensagens do involuntário, `retencao_mensagens_dias` (da
+        configuração de cada empresa; padrão 90) depois do desfecho do ciclo —
+        fica a abordagem (`ciclo_cobranca.apagar_texto_expirado`);
+      - o registro de acesso às rotas de titular com mais de 12 meses
+        (`registro_acesso.expurgar`).
+
+    Devolve quantas linhas tocou, e diz isso no log. Uma falha LEVANTA, e a
+    passagem que a chamou fica marcada como falha no `/health`: retenção que
+    falha em silêncio é dado guardado além do prazo sem ninguém saber.
+
+    A RETENÇÃO DA TRILHA DO ART. 20 (5 anos, D-E2-2) NÃO É CHAMADA DAQUI. A
+    função de retenção da trilha (`retention_log`) recebe o prazo em `prazo_dias`,
+    mas a catraca `test_art20_trilha.py::TestRetencaoEBestEffort` afirma que
+    ninguém a chama, e mudar esse teste é decisão do Crai. Ver
+    `docs/LIMITACOES.md`.
+    """
+    textos = 0
+    tenants = ciclo_cobranca.tenants_com_texto_de_mensagem()
+    for tenant_id in tenants:
+        dias = configuracao.ler(tenant_id)["retencao_mensagens_dias"]
+        textos += ciclo_cobranca.apagar_texto_expirado(agora, tenant_id, dias)
+    acessos = registro_acesso.expurgar(agora)
+    logger.info("[EXPURGO] %s: %d texto(s) de mensagem apagado(s), em %d empresa(s) "
+                "verificada(s); %d registro(s) de acesso apagado(s).",
+                agora.date().isoformat(), textos, len(tenants), acessos)
+    return {"textos_de_mensagem_apagados": textos, "registros_de_acesso_apagados": acessos}
+
+
 async def passagem(agora: datetime) -> dict:
     """O que o relógio faz a cada volta. Devolve o que aconteceu, para o log e
     para o teste. As varreduras e a mensagem devida vêm de dentro de
-    `processar_tentativas_devidas` (→ `varrer_ciclos` → `ciclo_cobranca.varrer`)."""
+    `processar_tentativas_devidas` (→ `varrer_ciclos` → `ciclo_cobranca.varrer`).
+
+    Uma vez por dia (o dia de `agora`), depois das tentativas, roda o expurgo.
+    O dia fica em memória: depois de um reinício ele roda de novo na primeira
+    passagem, e não faz mal — o expurgo é idempotente. Se ele levantar, o dia
+    NÃO é marcado e a próxima passagem tenta de novo."""
     disparos = await retry_scheduler.processar_tentativas_devidas(agora)
-    return {"disparos": disparos}
+    resultado = {"disparos": disparos}
+    hoje = agora.date().isoformat()
+    if _estado.get("ultimo_expurgo_em") != hoje:
+        resultado["expurgo"] = expurgar(agora)
+        _estado["ultimo_expurgo_em"] = hoje
+    return resultado
 
 
 async def _laco(intervalo: float) -> None:
@@ -229,4 +272,4 @@ async def ciclo_de_vida(app):
 def estado_para_health() -> dict:
     return {k: _estado.get(k) for k in ("ligado", "motivo_desligado", "intervalo_s",
                                         "ultima_passagem_em", "ultima_passagem_ok",
-                                        "ultima_falha", "passagens")}
+                                        "ultima_falha", "passagens", "ultimo_expurgo_em")}

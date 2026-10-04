@@ -1200,8 +1200,10 @@ def decisoes_que_obstruem_cancelamento(tenant_id: str) -> list[dict]:
     return violacoes
 
 
-def apagar_trilha_expirada(agora: datetime | None = None, tenant_id: str | None = None) -> int:
-    """RETENÇÃO: apaga as decisões com mais de `RETENCAO_TRILHA_DIAS`.
+def apagar_trilha_expirada(agora: datetime | None = None, tenant_id: str | None = None,
+                           prazo_dias: int | None = None) -> int:
+    """RETENÇÃO: apaga as decisões com mais de `prazo_dias` (sem ele,
+    `RETENCAO_TRILHA_DIAS`).
 
     AINDA NÃO É CHAMADA POR NINGUÉM, de propósito: o prazo é decisão do Crai
     (ver a constante) e precisa ser confirmado antes de existir um agendador.
@@ -1211,9 +1213,18 @@ def apagar_trilha_expirada(agora: datetime | None = None, tenant_id: str | None 
     tenant, só a ele. Devolve quantas linhas saíram. Ao contrário do
     registro, uma falha aqui LEVANTA: retenção que falha em silêncio é
     dado guardado além do prazo sem ninguém saber.
+
+    `prazo_dias` (Etapa 2, D-E2-2): quem chamar passa o prazo — o da empresa é
+    `retencao_trilha_anos` na `configuracao_tenant`, 5 anos por padrão. Prazo
+    que não seja inteiro positivo LEVANTA `ValueError` antes de apagar: um
+    prazo torto lido como zero apagaria a trilha inteira.
     """
+    if prazo_dias is None:
+        prazo_dias = RETENCAO_TRILHA_DIAS
+    elif isinstance(prazo_dias, bool) or not isinstance(prazo_dias, int) or prazo_dias < 1:
+        raise ValueError(f"prazo_dias precisa ser inteiro >= 1; recebido {prazo_dias!r}")
     momento = agora or datetime.now(timezone.utc)
-    limite = (momento - timedelta(days=RETENCAO_TRILHA_DIAS)).isoformat(timespec="seconds")
+    limite = (momento - timedelta(days=prazo_dias)).isoformat(timespec="seconds")
     sql = "DELETE FROM decisoes_automatizadas WHERE decidido_em < ?"
     params: list = [limite]
     if tenant_id is not None:

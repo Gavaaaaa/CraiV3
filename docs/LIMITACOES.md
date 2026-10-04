@@ -422,3 +422,227 @@ o perfil sintético que alimenta o classificador; a simulação do painel; a
 janela de deduplicação da API de clientes (`CLIENTES_API`), que continua em
 memória.
 
+### O risco voluntário v3: o que a promoção declara (30/09/2026)
+
+Declarado na promoção do modelo voluntário v3 (`docs/interno/RELATORIO_PROMOCAO_V3_BLOCO*.md`;
+números em `docs/evidencia_v3/metricas_v3.json`). Vale quando o meta de produção declara
+`contrato: "v3"`. Sem ele, o risco voluntário continua nas regras, como descrito acima.
+
+1. **O modelo foi treinado em dado sintético com rótulo latente desenhado pelo projeto.**
+   O cancelamento da base v3 é decidido por quatro variáveis latentes da população
+   (satisfação, fit, pressão de preço, saúde financeira), com uma fórmula escrita por nós.
+   O modelo aprende pelos rastros que elas deixam no comportamento, também desenhados por
+   nós. A vantagem sobre a régua é medida **contra o próprio gerador**; não é churn
+   observado e não diz nada sobre churn real. O caminho para isso continua sendo o
+   desfecho real (`ciclos_retencao`, `DELETE /clientes/{id}`).
+
+2. **A vantagem depende das colunas comportamentais.** No holdout por cliente da base v3:
+
+   | o que o modelo recebe | modelo | melhor régua | vantagem |
+   |---|---|---|---|
+   | as 15 colunas | 0,6929 | 0,6156 | 0,0773 |
+   | só as 6 que a produção recebe hoje, evento real | 0,6377 | 0,6156 | 0,0221 |
+   | só as 6, evento "Session Started" (o do lote) | 0,6329 | 0,6063 | 0,0266 |
+
+   No GroupKFold 5, só com as 6 colunas, a vantagem é 0,0268 (evento real) e 0,0361
+   (lote), acima do desvio (0,0109 e 0,0086). Por isso o modelo decide desde que haja
+   dias sem login ou uso (`N_MINIMO_COLUNAS_COMPORTAMENTAIS = 0`). As 9 colunas
+   comportamentais (logins, sessão, API, chamados, NPS, pagamentos falhados, assentos,
+   tempo de casa) só chegam à base importada com a mudança de contrato da Etapa 2. Até
+   lá, o ganho real fica na faixa de 0,02-0,03 de AUC, não nos 0,077.
+
+3. **O termo de interação preço x saúde foi escolha de desenho.** Ele foi posto de
+   propósito no rótulo e favorece modelos de árvore sobre uma régua linear. O experimento
+   sem ele (0.1a) mostra que ele explica pouco da vantagem: no holdout, 0,0689 sem o termo
+   contra 0,0773 com ele (11% da vantagem). No GroupKFold, 0,0831 contra desvio exigido de
+   0,0106, e o critério continua satisfeito.
+
+4. **"Grave" pode passar de 10% da base.** Com o v3, grave é o topo 10% pelo score, com
+   sinal absoluto de abandono, **mais** os preocupantes (os 20% seguintes, com sinal)
+   cujo MRR está entre os 20% maiores da base. A porta de valor só promove; nunca marca
+   grave sozinha. O teto é 30%. Numa amostra de 1000 clientes da base v3 com todos tendo
+   sinal, foram 15,8% de graves (58 promovidos pelo valor); com o comportamento real,
+   8,1%. No v3 o MRR anda junto com o risco (a pressão de preço é construída com o
+   percentil de MRR), então a promoção é frequente.
+
+5. **X, Y e o topo de MRR são fixos em código.** Grave 10%, preocupante 20% e topo de MRR
+   20% (`batch_scoring.FAIXA_GRAVE_PCT`, `FAIXA_PREOCUPANTE_PCT`, `FAIXA_VALOR_PCT`).
+   `faixas_de_posicao(tenant_id)` devolve o padrão; a leitura por empresa
+   (`configuracao_tenant`, da Etapa 2) ainda não foi ligada.
+
+6. **A referência de posição do SDK mora na memória do processo.** Um evento do SDK é
+   posicionado contra a base do tenant calculada na última `pontuar_base` (`/insights`)
+   **daquele processo**. Sem ela, contra os quantis do score no treino gravados no meta
+   de produção, e aí ninguém é promovido pelo valor (não há referência de MRR). Zera no
+   reinício, como `regua_calculada_em`, e não é compartilhada entre workers.
+
+7. **Latência da explicação.** A primeira decisão do modelo depois da subida importa o
+   `shap` e monta o `TreeExplainer`: 0,78 s de mediana em 5 processos novos. Uma decisão aquecida leva
+   3,9 ms com a explicação, e 2,1 ms sem ela
+   (`docs/interno/latencia_promocao_v3.txt`). O carregamento do modelo também é preguiçoso (1,22 s, `joblib.load`), então o primeiro pedido de risco depois da subida paga os dois: cerca de 2,0 s. Aquecer os dois na subida do serviço resolve, e não foi implementado.
+
+8. **O artefato não vai para o git.** `app/models/` é ignorado, o repositório é público,
+   e um `.joblib` executa código ao ser carregado. O modelo promovido é regenerado
+   localmente (o `README_treino.md` do voluntário, seção 8.4, traz a sequência e os
+   sha256 esperados) e promovido por `python -m crai.scripts.promover_voluntario_v3
+   --promover`.
+
+9. **A suíte roda sem o modelo voluntário, de propósito.** `app/models/` não é
+   versionada, e 31 testes de 7 arquivos afirmam números da régua (`test_retention_outcome`
+   13, `test_disparo_lote` 5, `test_canal_escolhido` 4, `test_insights_unificados` 4,
+   `test_insights_endpoint` 3, `test_voluntary_tone` 1, `test_clientes_recorrencia` 1):
+   com o v3 promovido na máquina, eles falhavam, porque o modelo decidia no lugar da
+   régua. Desde 03/10/2026 a fixture `modelo_voluntario_ausente`
+   (`app/tests/conftest.py`, `autouse`) aponta o `risk_scorer` para uma pasta vazia em
+   todo teste e zera o cache do carregamento antes e depois. O teste que precisa de
+   modelo o instala por fixture própria (`test_risk_pluggable.py`,
+   `test_promocao_v3_bloco*.py`). Medido: a suíte inteira passa igual sem artefato e com
+   o v3 promovido. O que isso **não** cobre: nenhum teste exercita o v3 a partir de
+   `app/models/` de verdade; a prova de que o artefato promovido carrega é o próprio
+   `--promover` e a conferência do sha256.
+
+### A Etapa 2 do involuntário: o que o encanamento declara (03/10/2026)
+
+Declarado ao fim da Etapa 2 (relógio, rotas de leitura, as três mensagens, configuração,
+expurgo, CORS e token de desenvolvimento: `docs/interno/RELATORIO_ETAPA2_BLOCO*.md`).
+
+1. **O relógio roda num processo só.** O serviço tem uma tarefa de fundo
+   (`app/crai/api/relogio.py`) que, a cada 60 s, dispara as tentativas devidas, varre os
+   ciclos e, uma vez por dia, roda o expurgo. Com mais de um worker ele **recusa ligar**
+   (`WEB_CONCURRENCY` > 1, `--workers N`, gunicorn), com erro no log e
+   `motivo_desligado: "mais_de_um_worker"` no `/health`. É detecção, não garantia: dois
+   `uvicorn` separados apontando para o mesmo banco não são vistos, e aí a mesma instrução
+   pode ir duas vezes ao PSP (o reenvio acontece antes da marca de disparo). A passagem
+   roda no event loop, com escritas síncronas no SQLite: uma passagem pesada segura as
+   requisições pelo tempo dela. Não foi medido.
+
+2. **O envio da mensagem é simulado.** Nenhum canal fala com um provedor de verdade: o
+   WhatsApp e o e-mail do involuntário terminam num log. "Mensagem enviada" na tela quer
+   dizer que o sistema decidiu, escolheu o canal e registrou o envio, não que uma pessoa
+   recebeu. O gateway Pix também continua simulado.
+
+3. **O WhatsApp real exige templates aprovados pela Meta.** Fora da janela de 24 h aberta
+   pelo próprio cliente, a API do WhatsApp Business só entrega mensagens de **template
+   aprovado previamente**, com variáveis. O texto livre que o sistema gera hoje (LLM ou
+   template interno) **não pode sair assim por WhatsApp**. Quando o envio for real, cada
+   abordagem (Lembrete cordial, Facilitação, Urgência com respeito) vira um template com
+   variáveis (primeiro nome, valor, link), submetido à aprovação; o texto livre do LLM
+   continua valendo para o e-mail. Nada disso está implementado.
+
+4. **A janela de contato usa o fuso da instalação.** Nenhuma mensagem sai fora da janela
+   da empresa (padrão 8 h às 20 h), e o prazo de escolha continua contando durante a
+   espera. A hora é a do servidor (`CRAI_FUSO_LOCAL`, ou o fuso da máquina), não a do
+   cliente final: uma empresa com clientes em outro fuso contata fora do horário local
+   deles. Feriado e fim de semana não são considerados.
+
+5. **O token de desenvolvimento.** Com `ENV=development`, `POST /dev/token` emite um token
+   de uma empresa fictícia (`demo_dashboard`) com o papel pedido, **sem senha**: quem
+   alcança a porta do serviço vira dono dessa empresa. Fora de `development` a rota não
+   existe e o token é recusado antes de qualquer consulta de chave (há teste). O risco que
+   sobra é operacional: **subir um serviço exposto com `ENV=development`**. A chave é
+   gerada em memória a cada subida; o token morre no reinício e vale 1 h. `ENV=development`
+   também abre os `/simulate/*` e o CORS para `http://localhost:5173`.
+
+6. **CORS é lista explícita.** `CRAI_CORS_ORIGENS` vem vazia: sem configurar, nenhum
+   navegador de outra origem lê as rotas. Não há credencial por cookie. O CORS **não é
+   autenticação**: ele só diz ao navegador quem pode ler a resposta; quem chama fora de um
+   navegador não passa por ele.
+
+7. **A chave de deduplicação mudou de forma no Bloco 2.** O tenant passou a fazer parte
+   da chave dos eventos do Pix. Um evento recebido **antes** da troca e reenviado pelo PSP
+   **depois** dela, dentro dos 7 dias da janela, não casa com a chave antiga e é
+   processado de novo. O ciclo absorve: a cobrança é a mesma (`UNIQUE`), e o evento vira
+   falha tardia, sem tentativa nova. A tabela real tinha 0 linhas na troca.
+
+8. **A linha do tempo junta dois bancos pelo relógio.** O ciclo mora em
+   `recovery_cycles.db` e a trilha do Art. 20 em `retention_cycles.db`, sem `ciclo_id`. A
+   rota junta as decisões do mesmo mandato cujo instante cai dentro do ciclo, com 5 min de
+   folga. Depende de os dois relógios concordarem; dois ciclos sobrepostos do mesmo
+   mandato saem com `trilha_ambigua: true`.
+
+9. **O expurgo diário apaga o texto das mensagens e o registro de acesso, e ainda não a
+   trilha.** Uma vez por dia o relógio apaga o texto das mensagens dos ciclos fechados há
+   mais de `retencao_mensagens_dias` (90 por padrão; a abordagem fica) e os registros de
+   acesso com mais de 12 meses, e diz no log quantas linhas tocou. **A retenção da trilha
+   do Art. 20 (5 anos) não está ligada:** a função de retenção já recebe o prazo
+   (`prazo_dias`), mas o relógio não a chama, porque a catraca
+   `test_art20_trilha.py::TestRetencaoEBestEffort` afirma que ninguém a chama. Hoje a
+   trilha **não é apagada nunca**. Os prazos de 24 meses dos ciclos e de 6 meses da base
+   depois do contrato estão na configuração e também **não são executados** (Etapa 3). O
+   dia do último expurgo mora na memória do processo: depois de um reinício ele roda de
+   novo, o que não faz mal (é idempotente).
+
+10. **O registro de acesso guarda o papel, não a pessoa.** Cada leitura de
+    `GET /titular/explicacao/{id}`, `GET /ciclos/{id}` e `GET /ciclos` grava empresa, rota,
+    papel e instante, por 12 meses. De propósito não guarda quem foi (e-mail, `sub`) nem
+    qual titular foi lido: responde "a empresa X leu dados de titular nesse dia, com o
+    papel Y", não "quem leu o quê". A gravação é best effort: se falhar, a leitura segue e
+    o erro vai para o log. Não há rota para a empresa consultar o próprio registro.
+
+11. **A configuração por empresa cobre o involuntário.** Modo da mensagem, prazo de
+    escolha, janela de contato e canais são lidos pelo fluxo a cada decisão.
+    `modo_mensagem_voluntario` é gravado e ainda não é lido (Etapa 3), e
+    `posicao_grave_pct` / `posicao_preocupante_pct` são validados e ainda não chegam ao
+    voluntário, que continua com 10/20 em código. O papel vale até o token expirar: um
+    administrador rebaixado continua gravando até o próximo login.
+
+### O estorno da fee: o que ele declara (03/10/2026)
+
+Declarado ao fim do Bloco 5 da Etapa 2 (`docs/interno/RELATORIO_ETAPA2_BLOCO5*.md`). Se o
+dinheiro de uma cobrança recuperada volta ao pagador dentro do prazo da empresa
+(`prazo_estorno_dias`, 30 por padrão), a fee é devolvida na proporção do que voltou.
+
+1. **O formato do aviso de devolução é suposição, até a homologação com o PSP.** O
+   adaptador reconhece o evento por nomes prováveis (`automatic_pix.charge_refunded`,
+   `recurrence.charge_refunded`, `charge.refunded`, status `refunded` ou `devolvido`) e lê o
+   valor e o id da devolução de campos do padrão do BACEN e de variações em inglês
+   (`devolucao.valor`, `rtrId`, `refunded_amount`...). **Nenhum desses nomes foi confirmado
+   com a conta do Pagar.me**; estão marcados `TODO(integração)` no código. Se o PSP mandar a
+   devolução com outro nome de evento, ela é registrada como evento desconhecido, sem
+   estorno e sem erro.
+
+2. **O gateway continua simulado.** Nenhuma devolução real foi recebida. O que foi medido é
+   a regra, com avisos sintéticos assinados e com `POST /simulate/pix-estornado`.
+
+3. **Só o aviso do PSP gera estorno.** Não existe rota para a empresa declarar que houve
+   devolução: ela deixaria de pagar a fee só dizendo isso. Devolução que o PSP não avisou é
+   caso de suporte, fora do sistema. A rota `/simulate/pix-estornado` existe só em
+   `ENV=development` e `demo`, sem login, como os outros `/simulate/*`.
+
+4. **Aviso sem identificador da devolução.** Sem `id_devolucao`, a identidade do aviso
+   vira o e2e do pagamento mais o valor: o reenvio conta uma vez, mas **dois avisos
+   parciais distintos, do mesmo valor e sem id, contam como um só**.
+
+5. **Aviso que só traz o id da recorrência** vai para o ciclo recuperado **mais recente**
+   do mandato. Com dois ciclos recuperados do mesmo cliente e um aviso sem o id da
+   cobrança nem o e2e do pagamento, o estorno pode cair no ciclo errado.
+
+6. **O prazo.** Conta da recuperação (`recuperado_em`), em dias corridos, pelo relógio do
+   servidor, até o último instante do dia `prazo_estorno_dias`. Vale o prazo que a empresa
+   tem **no momento do aviso**: mudar o prazo de 30 para 90 passa a cobrir recuperações
+   antigas ainda dentro dos 90 dias.
+
+7. **O mês fechado não é reescrito, e por isso as contagens de um mês não descontam o
+   estorno de outro.** O valor líquido de um mês é o das recuperações dele menos os
+   estornos que **aconteceram nele**; pode ficar negativo. `recuperados` e a taxa de
+   recuperação de setembro continuam contando uma recuperação estornada em outubro. Já a
+   contagem por status (`ciclos_abertos_no_mes`) mostra o status **atual** dos ciclos
+   abertos no mês, e nela o ciclo estornado por inteiro aparece como encerrado.
+
+8. **A fee original nunca muda.** O ciclo guarda a fee da recuperação e, ao lado, quanto
+   dela foi estornado. O estado do ciclo continua `recuperado` mesmo com devolução total; o
+   que muda é o status que a tela mostra ("encerrado sem recuperação", com o motivo).
+
+9. **O dataset de treino não sabe do estorno.** O rótulo `recovered` de
+   `ciclos_recuperacao` continua 1 e a `success_fee` continua a original. A métrica antiga
+   `/metrics/recovery`, que sai desse dataset, **não desconta estorno**; as rotas
+   `/metrics/involuntario/*` descontam.
+
+10. **O CRM não é avisado** do estorno, e nada vai para a trilha do Art. 20: estorno não é
+    decisão automatizada sobre o titular.
+
+11. **O extrato ainda não tem rota.** `ciclo_cobranca.extrato_do_periodo` calcula as linhas
+    (uma positiva por recuperação, uma negativa por estorno) e é testada; expor é da Etapa 3.
+
+12. **O voluntário não tem estorno.** A fee do cliente "mantido" ainda não é calculada no
+    backend (Etapa 3).

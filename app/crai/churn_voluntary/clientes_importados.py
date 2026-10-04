@@ -27,10 +27,20 @@ linha em vez de duplicar — a planilha é uma foto, e a foto mais nova vale.
 `importado_em` guarda quando a foto foi tirada, que é o que o Sprint 4 compara
 com `registrado_em` do SDK para decidir qual dado é o mais recente.
 
-PII: `email` é opcional e só existe para o "insight por e-mail" futuro. Nada
-de telefone, CPF ou nome. `motivo_cancelamento` é texto livre vindo do backend
-do cliente e PODE conter dado pessoal: não entra em log nem em resposta de
-listagem agregada — só na resposta da própria operação de cancelar.
+PII: `email`, `telefone` e `nome` são opcionais. Desde a Etapa 2 os três são
+os CONTATOS do cliente final para a mensagem do involuntário: lidos daqui na
+hora do envio e nunca copiados para o ciclo, a tentativa ou a tabela de
+mensagens (do nome, só o primeiro entra no texto). Nada de CPF.
+`motivo_cancelamento` é texto livre vindo do backend do cliente e PODE conter
+dado pessoal: não entra em log nem em resposta de listagem agregada — só na
+resposta da própria operação de cancelar.
+
+AS 12 COLUNAS DA ETAPA 2 (todas opcionais; ausente = NULL, nunca 0):
+`id_recorrencia` (liga a cobrança do Pix Automático a este cadastro; única por
+tenant), as 9 de comportamento que o modelo v3 do voluntário conhece
+(`logins_7d`, `logins_30d`, `avg_session_min`, `api_calls_7d`, `tickets_30d`,
+`failed_pay_90d`, `nps_last`, `seats`, `tenure_days`) e os contatos `telefone` e
+`nome`. Este módulo guarda; a validação é de `importacao.validar_linha`.
 
 O CANCELAMENTO (`cancelado_em`). É o único sinal, em todo o sistema, de que
 um cliente de fato saiu. `accepted` no retention_log é aceitação de oferta,
@@ -70,9 +80,33 @@ CREATE TABLE IF NOT EXISTS {TABELA} (
     cancelado_em        TEXT,
     motivo_cancelamento TEXT,
     atualizado_em       TEXT,
+    id_recorrencia      TEXT,
+    logins_7d           BIGINT,
+    logins_30d          BIGINT,
+    avg_session_min     DOUBLE PRECISION,
+    api_calls_7d        BIGINT,
+    tickets_30d         BIGINT,
+    failed_pay_90d      BIGINT,
+    nps_last            DOUBLE PRECISION,
+    seats               BIGINT,
+    tenure_days         BIGINT,
+    telefone            TEXT,
+    nome                TEXT,
     PRIMARY KEY (tenant_id, customer_id_externo)
 );
 """
+
+# `id_recorrencia` é única por tenant. NULL não colide (SQLite e Postgres tratam
+# dois NULL como distintos num índice único): cliente sem mapeamento é o normal.
+INDICE_RECORRENCIA_SQL = f"""
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cliente_recorrencia
+    ON {TABELA} (tenant_id, id_recorrencia)
+"""
+
+# As 12 colunas da Etapa 2, na ordem do contrato (`docs/CONTRATO_CLIENTES_API.md`).
+COMPORTAMENTO_V3 = ("logins_7d", "logins_30d", "avg_session_min", "api_calls_7d",
+                    "tickets_30d", "failed_pay_90d", "nps_last", "seats", "tenure_days")
+COLUNAS_ETAPA2 = ("id_recorrencia", *COMPORTAMENTO_V3, "telefone", "nome")
 
 # Colunas que entraram DEPOIS da tabela existir em produção. `CREATE TABLE IF
 # NOT EXISTS` não acrescenta coluna a tabela que já existe, então quem criou a
@@ -90,22 +124,42 @@ COLUNAS_MIGRACAO = (
     ("cancelado_em", "TEXT"),
     ("motivo_cancelamento", "TEXT"),
     ("atualizado_em", "TEXT"),
+    ("id_recorrencia", "TEXT"),
+    ("logins_7d", "BIGINT"),
+    ("logins_30d", "BIGINT"),
+    ("avg_session_min", "DOUBLE PRECISION"),
+    ("api_calls_7d", "BIGINT"),
+    ("tickets_30d", "BIGINT"),
+    ("failed_pay_90d", "BIGINT"),
+    ("nps_last", "DOUBLE PRECISION"),
+    ("seats", "BIGINT"),
+    ("tenure_days", "BIGINT"),
+    ("telefone", "TEXT"),
+    ("nome", "TEXT"),
 )
 
 MOTIVO_CANCELAMENTO_MAX = 500
 
 COLUNAS = ("tenant_id", "customer_id_externo", "mrr", "billing_profile",
            "days_since_last", "features_used_30d", "email", "importado_em",
-           "cancelado_em", "motivo_cancelamento", "atualizado_em")
+           "cancelado_em", "motivo_cancelamento", "atualizado_em", *COLUNAS_ETAPA2)
 
 # O que `atualizar_parcial` aceita mudar. Fora daqui é ValueError: identidade
 # (tenant, id), carimbos e o cancelamento têm operação própria, de propósito.
 COLUNAS_PARCIAIS = ("mrr", "billing_profile", "days_since_last",
-                    "features_used_30d", "email")
+                    "features_used_30d", "email", *COLUNAS_ETAPA2)
 
 
 class ConfiguracaoAusente(RuntimeError):
     """Nem `SUPABASE_DB_URL` nem `CRAI_CLIENTES_DB` configuradas."""
+
+
+class ConflitoDeRecorrencia(ValueError):
+    """O `id_recorrencia` já está ligado a OUTRO cliente deste tenant."""
+
+    def __init__(self, id_recorrencia: str):
+        self.id_recorrencia = id_recorrencia
+        super().__init__(f"id_recorrencia {id_recorrencia!r} já pertence a outro cliente")
 
 
 def _agora() -> str:
@@ -208,6 +262,7 @@ def _garantir_schema(conn: _Conexao, alvo: str) -> None:
             return
         conn.executar(SCHEMA_SQL)
         _migrar_schema(conn)
+        conn.executar(INDICE_RECORRENCIA_SQL)
         conn.commit()
         _schema_garantido.add(alvo)
 
@@ -243,29 +298,40 @@ def esquecer_schema_garantido() -> None:
 
 # ── Escrita ───────────────────────────────────────────────────────────────
 
+class _conflito_de_recorrencia:
+    """Traduz a violação de `uq_cliente_recorrencia` (a única restrição de
+    unicidade que o upsert não resolve) em `ConflitoDeRecorrencia`. É a
+    segunda linha de defesa: a validação de lote já recusa o conflito antes
+    (`importacao.recusar_conflitos_de_recorrencia`); aqui fica a corrida entre
+    duas importações simultâneas."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, tipo, valor, tb):
+        if tipo is not None and "IntegrityError" in {k.__name__ for k in tipo.__mro__}:
+            raise ConflitoDeRecorrencia("(gravação simultânea)") from valor
+        return False
+
+
 # O `DO UPDATE SET` lista as colunas da foto (planilha/API) e SÓ elas. Ele
 # não pode tocar em `cancelado_em`/`motivo_cancelamento`: se tocasse, subir a
 # planilha de novo apagaria em silêncio o único desfecho observado que o
 # sistema tem. Reativar é explícito (`upsert_um(..., reativar=True)`).
 # Também não toca em `atualizado_em`, que é o carimbo do PATCH.
-_UPSERT = f"""
-INSERT INTO {TABELA} (tenant_id, customer_id_externo, mrr, billing_profile,
-                      days_since_last, features_used_30d, email, importado_em)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (tenant_id, customer_id_externo) DO UPDATE SET
-    mrr               = excluded.mrr,
-    billing_profile   = excluded.billing_profile,
-    days_since_last   = excluded.days_since_last,
-    features_used_30d = excluded.features_used_30d,
-    email             = excluded.email,
-    importado_em      = excluded.importado_em
-"""
+_COLUNAS_DO_UPSERT = ("mrr", "billing_profile", "days_since_last", "features_used_30d",
+                      "email", *COLUNAS_ETAPA2)
+_UPSERT = (
+    f"INSERT INTO {TABELA} (tenant_id, customer_id_externo, "
+    f"{', '.join(_COLUNAS_DO_UPSERT)}, importado_em) "
+    f"VALUES ({', '.join('?' * (len(_COLUNAS_DO_UPSERT) + 3))}) "
+    "ON CONFLICT (tenant_id, customer_id_externo) DO UPDATE SET "
+    + ", ".join(f"{c} = excluded.{c}" for c in (*_COLUNAS_DO_UPSERT, "importado_em")))
 
 
 def _params_upsert(tenant_id: str, c: dict, agora: str) -> tuple:
-    return (tenant_id, c["customer_id_externo"], float(c["mrr"]),
-            c["billing_profile"], c.get("days_since_last"),
-            c.get("features_used_30d"), c.get("email"), agora)
+    valores = [float(c["mrr"])] + [c.get(col) for col in _COLUNAS_DO_UPSERT[1:]]
+    return (tenant_id, c["customer_id_externo"], *valores, agora)
 
 
 def _buscar(conn: _Conexao, tenant_id: str, customer_id_externo: str):
@@ -291,9 +357,10 @@ def gravar(tenant_id: str, clientes: list[dict]) -> int:
     if not clientes:
         return 0
     agora = _agora()
-    with _conectar() as conn:
-        for c in clientes:
-            conn.executar(_UPSERT, _params_upsert(tenant_id, c, agora))
+    with _conflito_de_recorrencia():
+        with _conectar() as conn:
+            for c in clientes:
+                conn.executar(_UPSERT, _params_upsert(tenant_id, c, agora))
     return len(clientes)
 
 
@@ -307,7 +374,7 @@ def upsert_um(tenant_id: str, cliente: dict, reativar: bool = False) -> dict:
     isso. Se o cliente não estava cancelado, `reativar` não muda nada.
     """
     agora = _agora()
-    with _conectar() as conn:
+    with _conflito_de_recorrencia(), _conectar() as conn:
         conn.executar(_UPSERT, _params_upsert(tenant_id, cliente, agora))
         if reativar:
             conn.executar(
@@ -337,7 +404,7 @@ def atualizar_parcial(tenant_id: str, customer_id_externo: str, campos: dict):
         raise ValueError(
             f"atualizar_parcial não aceita {sorted(desconhecidos)}; "
             f"aceita {list(COLUNAS_PARCIAIS)}")
-    with _conectar() as conn:
+    with _conflito_de_recorrencia(), _conectar() as conn:
         if _buscar(conn, tenant_id, customer_id_externo) is None:
             return None
         if campos:
@@ -432,6 +499,45 @@ def obter(tenant_id: str, customer_id_externo: str):
     """
     with _conectar() as conn:
         return _buscar(conn, tenant_id, customer_id_externo)
+
+
+def obter_por_recorrencia(tenant_id: str, id_recorrencia: str):
+    """O cliente DESTE tenant ligado a este `id_recorrencia`, ou `None`.
+
+    É por aqui que o involuntário lê o contato do cliente NA HORA do envio
+    (Etapa 2): o contato nunca é copiado para o ciclo nem para as mensagens."""
+    if not id_recorrencia:
+        return None
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT {', '.join(COLUNAS)} FROM {TABELA} "
+            "WHERE tenant_id = ? AND id_recorrencia = ?", (tenant_id, str(id_recorrencia)))
+        return linhas[0] if linhas else None
+
+
+def nomes_por_recorrencia(tenant_id: str, ids_recorrencia: list) -> dict:
+    """{id_recorrencia: nome} dos clientes DESTE tenant, numa consulta só —
+    para a listagem do dashboard. Sem mapeamento, a chave não aparece."""
+    ids = sorted({str(i) for i in ids_recorrencia if i})
+    if not ids:
+        return {}
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT id_recorrencia, nome FROM {TABELA} WHERE tenant_id = ? "
+            f"AND id_recorrencia IN ({', '.join('?' * len(ids))})", (tenant_id, *ids))
+    return {l["id_recorrencia"]: l["nome"] for l in linhas}
+
+
+def donos_de_recorrencia(tenant_id: str, ids_recorrencia: list) -> dict:
+    """{id_recorrencia: customer_id_externo} já gravados DESTE tenant."""
+    ids = sorted({str(i) for i in ids_recorrencia if i})
+    if not ids:
+        return {}
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT id_recorrencia, customer_id_externo FROM {TABELA} WHERE tenant_id = ? "
+            f"AND id_recorrencia IN ({', '.join('?' * len(ids))})", (tenant_id, *ids))
+    return {l["id_recorrencia"]: l["customer_id_externo"] for l in linhas}
 
 
 def contar(tenant_id: str, incluir_cancelados: bool = False) -> int:

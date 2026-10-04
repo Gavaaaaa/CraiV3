@@ -10,7 +10,8 @@ nesta ordem, e devolve um relatório do que aconteceu com cada linha:
        inteira; opcional ausente só é reportada.
     2. VALIDA LINHA A LINHA: `customer_id_externo`, `mrr` e `billing_profile`
        são obrigatórios; `days_since_last`, `features_used_30d` e `email` são
-       opcionais. Uma linha torta entra em `rejeitados` com o número da linha
+       opcionais; as 12 colunas da Etapa 2 (`CAMPOS_ETAPA2`) também — ver
+       abaixo. Uma linha torta entra em `rejeitados` com o número da linha
        DA PLANILHA (cabeçalho = 1) e o motivo, e NÃO derruba o resto do lote.
     3. GRAVA o que sobreviveu, numa transação, via `clientes_importados.gravar`.
 
@@ -46,6 +47,24 @@ OBRIGATORIAS = ("customer_id_externo", "mrr", "billing_profile")
 OPCIONAIS = ("days_since_last", "features_used_30d", "email")
 ESPERADAS = OBRIGATORIAS + OPCIONAIS
 COMPORTAMENTAIS = ("days_since_last", "features_used_30d")
+
+# AS 12 COLUNAS DA ETAPA 2 — opcionais, aceitas no arquivo, no mapeamento e na
+# API, e NÃO listadas em `colunas_nao_encontradas` quando faltam: a resposta da
+# importação de quem não as manda continua exatamente a de antes. Ausente ou
+# vazio = NULL, nunca 0.
+#   id_recorrencia   o id da autorização do Pix Automático deste cliente; liga a
+#                    cobrança do involuntário ao cadastro. Único por empresa.
+#   comportamento    os nomes são os de `ml/voluntario_v3.FEATURES_DE_RISCO_V3`:
+#                    contagens inteiras >= 0; avg_session_min decimal >= 0;
+#                    nps_last de 0 a 10; tenure_days inteiro >= 0.
+#   telefone, nome   contatos do cliente final (ver `clientes_importados`).
+INTEIROS_ETAPA2 = ("logins_7d", "logins_30d", "api_calls_7d", "tickets_30d",
+                   "failed_pay_90d", "seats", "tenure_days")
+CAMPOS_ETAPA2 = clientes_importados.COLUNAS_ETAPA2
+ACEITAS = ESPERADAS + CAMPOS_ETAPA2
+NOME_MAXIMO = 120
+_TELEFONE_SEPARADORES = re.compile(r"[\s().\-]")
+_TELEFONE = re.compile(r"^\+?\d{10,15}$")
 
 EXTENSOES = {".csv", ".xlsx"}
 TAMANHO_MAXIMO_BYTES = 10 * 1024 * 1024        # 10 MB — ordens acima de uma base PME
@@ -157,11 +176,11 @@ def interpretar_mapeamento(bruto) -> dict:
             raise ArquivoInvalido("mapeamento_invalido",
                                   "`mapeamento`: chaves e valores devem ser texto")
         campo = campo.strip().lower()
-        if campo not in ESPERADAS:
+        if campo not in ACEITAS:
             raise ArquivoInvalido(
                 "mapeamento_invalido",
                 f"`mapeamento`: {campo!r} não é um campo esperado; "
-                f"os campos são {', '.join(ESPERADAS)}")
+                f"os campos são {', '.join(ACEITAS)}")
         resultado[coluna.strip()] = campo
     return resultado
 
@@ -183,7 +202,7 @@ def resolver_colunas(colunas_do_arquivo: list, mapeamento: dict) -> tuple[dict, 
         real = por_nome_exato.get(coluna) or por_nome.get(coluna.lower())
         if real is not None:
             encontradas[campo] = real
-    for campo in ESPERADAS:
+    for campo in ACEITAS:
         if campo in encontradas:
             continue
         real = por_nome.get(campo)
@@ -258,7 +277,50 @@ def validar_linha(valores: dict) -> tuple:
     if email and not _EMAIL_PLAUSIVEL.match(email):
         return None, f"email {email!r} não parece um e-mail"
     cliente["email"] = email or None
+
+    extras, motivo = _validar_etapa2(valores)
+    if motivo:
+        return None, motivo
+    cliente.update(extras)
     return cliente, None
+
+
+def _validar_etapa2(valores: dict) -> tuple:
+    """As 12 colunas da Etapa 2. ({campo: valor | None}, motivo | None)."""
+    saida = {}
+    rec = _texto(valores.get("id_recorrencia"))
+    if rec and not _ID_VALIDO.match(rec):
+        return None, "id_recorrencia com espaços ou mais de 128 caracteres"
+    saida["id_recorrencia"] = rec or None
+    for campo in INTEIROS_ETAPA2:
+        try:
+            numero = _numero(valores.get(campo))
+        except ValueError:
+            return None, f"{campo} {_texto(valores.get(campo))!r} não é um inteiro >= 0"
+        if numero is not None and numero != int(numero):
+            return None, f"{campo} {_texto(valores.get(campo))!r} não é um inteiro >= 0"
+        saida[campo] = int(numero) if numero is not None else None
+    try:
+        saida["avg_session_min"] = _numero(valores.get("avg_session_min"))
+    except ValueError:
+        return None, (f"avg_session_min {_texto(valores.get('avg_session_min'))!r} "
+                      "não é um número >= 0")
+    try:
+        nps = _numero(valores.get("nps_last"))
+    except ValueError:
+        nps = -1.0
+    if nps is not None and not 0 <= nps <= 10:
+        return None, f"nps_last {_texto(valores.get('nps_last'))!r} não está entre 0 e 10"
+    saida["nps_last"] = nps
+    telefone = _TELEFONE_SEPARADORES.sub("", _texto(valores.get("telefone")))
+    if telefone and not _TELEFONE.match(telefone):
+        return None, "telefone não parece um número (10 a 15 dígitos, com + opcional)"
+    saida["telefone"] = telefone or None
+    nome = " ".join(_texto(valores.get("nome")).split())
+    if nome and (len(nome) > NOME_MAXIMO or any(ord(ch) < 32 for ch in nome)):
+        return None, f"nome com mais de {NOME_MAXIMO} caracteres ou caractere de controle"
+    saida["nome"] = nome or None
+    return saida, None
 
 
 def validar_linhas(linhas: list) -> tuple[list[dict], list[tuple[int, str]]]:
@@ -281,8 +343,35 @@ def validar_linhas(linhas: list) -> tuple[list[dict], list[tuple[int, str]]]:
         if motivo:
             rejeitados.append((posicao, motivo))
             continue
+        # Mesmo `id_recorrencia` em dois clientes DIFERENTES do lote: o
+        # primeiro fica, o segundo é rejeitado. (O mesmo cliente repetido é
+        # a regra de sempre: a última linha vence.)
+        rec = cliente.get("id_recorrencia")
+        dono = next((cid for cid, c in validos.items()
+                     if rec and c.get("id_recorrencia") == rec), None)
+        if dono is not None and dono != cliente["customer_id_externo"]:
+            rejeitados.append((posicao, f"id_recorrencia {rec!r} repetido no lote "
+                                        f"(já está no cliente {dono!r})"))
+            continue
         validos[cliente["customer_id_externo"]] = cliente
     return list(validos.values()), rejeitados
+
+
+def recusar_conflitos_de_recorrencia(tenant_id: str, clientes: list[dict]) -> tuple:
+    """(aceitos, [(customer_id_externo, motivo)]): tira do lote quem traz um
+    `id_recorrencia` já ligado a OUTRO cliente gravado desta empresa."""
+    donos = clientes_importados.donos_de_recorrencia(
+        tenant_id, [c.get("id_recorrencia") for c in clientes])
+    aceitos, recusados = [], []
+    for c in clientes:
+        dono = donos.get(c.get("id_recorrencia"))
+        if dono is not None and dono != c["customer_id_externo"]:
+            recusados.append((c["customer_id_externo"],
+                              f"id_recorrencia {c['id_recorrencia']!r} já pertence ao "
+                              f"cliente {dono!r}"))
+        else:
+            aceitos.append(c)
+    return aceitos, recusados
 
 
 def contar_sem_comportamento(clientes: list[dict]) -> int:
@@ -331,6 +420,10 @@ def importar(tenant_id: str, nome_arquivo: str, conteudo: bytes,
     # Linha 1 da planilha é o cabeçalho; a primeira linha de dado é a 2. É esse
     # o número que a pessoa vai procurar no Excel, não o índice do pandas.
     rejeitados = [{"linha": posicao + 2, "motivo": motivo} for posicao, motivo in ruins]
+    posicao_do_cliente = {_texto(v.get("customer_id_externo")): i for i, v in enumerate(linhas)}
+    clientes, conflitos = recusar_conflitos_de_recorrencia(tenant_id, clientes)
+    rejeitados += [{"linha": posicao_do_cliente[cid] + 2, "motivo": motivo}
+                   for cid, motivo in conflitos]
     sem_comportamento = contar_sem_comportamento(clientes)
 
     importados = clientes_importados.gravar(tenant_id, clientes)

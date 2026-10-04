@@ -40,8 +40,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..accounts import get_tenant_id
+from ..accounts import get_conta, get_tenant_id
 from ..churn_voluntary import retention_log as trilha
+from . import datas, registro_acesso
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ async def explicacao_do_titular(
     limite: Optional[int] = None,
     antes_de: Optional[int] = None,
     tenant_id: str = Depends(get_tenant_id),
+    conta: dict = Depends(get_conta),
 ) -> dict:
     """As decisões automatizadas sobre um sujeito DESTE tenant, mais recentes
     primeiro, com paginação — para a controladora responder ao titular.
@@ -130,6 +132,11 @@ async def explicacao_do_titular(
     pagina = pagina[:limite]
 
     logger.info("[ART20] tenant=%s explicacao sujeito=%s decisoes=%d", tenant_id, sujeito_id, len(pagina))
+    # Quem leu dado de titular, e quando (Bloco 4): tenant, rota, papel. Nunca o
+    # sujeito pedido nem quem pediu. O papel vem de `get_conta`; `get_tenant_id`
+    # continua sendo a dependency que a catraca do Art. 20 confere por nome.
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_EXPLICACAO, conta.get("papel"),
+                              datas.agora_local())
     return {
         "sujeito_id": sujeito_id,
         "decisoes": [_publica(d) for d in pagina],

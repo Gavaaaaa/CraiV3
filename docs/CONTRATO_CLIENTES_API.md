@@ -93,7 +93,12 @@ Devolvido por `POST /clientes`, `PATCH` e `DELETE`:
   "importado_em": "2026-09-21T14:30:00+00:00",
   "cancelado_em": null,
   "motivo_cancelamento": null,
-  "atualizado_em": null
+  "atualizado_em": null,
+  "id_recorrencia": "RN_8841a2",
+  "logins_7d": 0, "logins_30d": 3, "avg_session_min": 4.5, "api_calls_7d": null,
+  "tickets_30d": 2, "failed_pay_90d": 1, "nps_last": 6.0, "seats": 3, "tenure_days": 400,
+  "telefone": "+5511988887777",
+  "nome": "Ana Souza"
 }
 ```
 
@@ -109,6 +114,22 @@ Devolvido por `POST /clientes`, `PATCH` e `DELETE`:
 | `cancelado_em` | string | sim | **preenchido = cancelou**. Sai do ranking de risco; fica no histórico |
 | `motivo_cancelamento` | string | sim | o que o backend da empresa informou no DELETE |
 | `atualizado_em` | string | sim | último `PATCH` |
+| `id_recorrencia` | string | sim | o id da autorização do **Pix Automático** deste cliente no PSP. Liga a cobrança que falhou (churn involuntário) a este cadastro. Único por empresa |
+| `logins_7d`, `logins_30d`, `api_calls_7d`, `tickets_30d`, `failed_pay_90d`, `seats`, `tenure_days` | inteiro | sim | comportamento do cliente (os nomes são os do modelo v3 do voluntário) |
+| `avg_session_min` | number | sim | duração média da sessão, em minutos |
+| `nps_last` | number | sim | última nota de satisfação, 0 a 10 |
+| `telefone` | string | sim | contato do cliente final para a mensagem do involuntário (WhatsApp); devolvido só com dígitos e `+` |
+| `nome` | string | sim | nome do cliente final; a tela o mostra, e **só o primeiro nome** entra no texto da mensagem |
+
+**As 12 colunas da Etapa 2** (de `id_recorrencia` a `nome`) são todas
+opcionais: ausente ou vazio é `null`, **nunca 0**. Quem não as manda recebe a
+mesma resposta de antes (elas não aparecem em `colunas_nao_encontradas`).
+
+**Telefone, e-mail e nome ficam só aqui.** A mensagem do involuntário lê o
+contato desta base **na hora do envio**, pelo `id_recorrencia`, e nunca o copia
+para o ciclo, as tentativas ou a tabela de mensagens. Sem contato elegível, a
+mensagem é gerada e fica marcada como não entregável — o canal mostrado é
+`sem_canal`, nunca um canal que o cliente não tem.
 
 ### 0.6 Validação: a mesma da planilha
 
@@ -123,6 +144,12 @@ Um cliente que chega pela API passa **exatamente** pelo crivo de
 | `days_since_last` | não | número ≥ 0 ou `null` |
 | `features_used_30d` | não | número ≥ 0 ou `null` |
 | `email` | não | se preenchido, precisa parecer e-mail |
+| `id_recorrencia` | não | texto sem espaços, 1 a 128 caracteres; **único por empresa**: já ligado a outro cliente é **409 `id_recorrencia_em_uso`** (no `/lote` e na planilha, rejeição da linha); repetido em dois clientes do mesmo lote, a segunda linha é rejeitada |
+| `logins_7d`, `logins_30d`, `api_calls_7d`, `tickets_30d`, `failed_pay_90d`, `seats`, `tenure_days` | não | inteiro ≥ 0 (`"3"` e `"3,0"` valem; `"3,5"` não) ou `null` |
+| `avg_session_min` | não | número ≥ 0 ou `null` |
+| `nps_last` | não | número de 0 a 10 ou `null` |
+| `telefone` | não | 10 a 15 dígitos, `+` opcional; espaços, pontos, hífens e parênteses são ignorados |
+| `nome` | não | até 120 caracteres, sem caractere de controle; espaços repetidos são reduzidos |
 
 Campo fora dessa lista é **422 `campo_desconhecido`** (no `/lote`, é
 rejeição do item). A mensagem de `cliente_invalido` é a mesma frase que a
@@ -132,7 +159,7 @@ planilha devolve em `rejeitados[].motivo`.
 
 ## 1. `POST /clientes` — upsert de um cliente
 
-**Requisição** (`application/json`): os seis campos de 0.6 e, opcionalmente,
+**Requisição** (`application/json`): os campos de 0.6 e, opcionalmente,
 `reativar`.
 
 ```json
@@ -250,7 +277,8 @@ ausente fica como está. Mudar o MRR não toca em `days_since_last` nem em
 `features_used_30d`.
 
 **Requisição:** qualquer subconjunto não vazio de `mrr`, `billing_profile`,
-`days_since_last`, `features_used_30d`, `email`.
+`days_since_last`, `features_used_30d`, `email` e as 12 colunas da Etapa 2
+(um `id_recorrencia` já ligado a outro cliente é 409).
 
 ```json
 {"mrr": 2500.0, "billing_profile": "PJ"}

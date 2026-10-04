@@ -47,6 +47,63 @@ Onde: Postgres do Supabase (`SUPABASE_DB_URL`) em produção; SQLite
 | `clientes_importados.features_used_30d` | sim (comportamento) | não | legítimo interesse | idem | Supabase |
 | `clientes_importados.email` | **sim (direto)** | não | contrato | idem | Supabase; **não é enviado a ninguém hoje** (reservado ao "insight por e-mail" futuro) |
 | `clientes_importados.importado_em` | não | não | — | idem | Supabase |
+| `clientes_importados.id_recorrencia` (Etapa 2) | sim (pseudônimo: o id da autorização do Pix Automático) | não | contrato (a empresa informa, como controladora, para ligar a cobrança ao cadastro — atualização da OP-01, sem campo novo sobre a pessoa além do vínculo) | idem | Supabase |
+| `clientes_importados.logins_7d`, `logins_30d`, `avg_session_min`, `api_calls_7d`, `tickets_30d`, `failed_pay_90d`, `nps_last`, `seats`, `tenure_days` (Etapa 2) | sim (comportamento e satisfação) | não | legítimo interesse | idem | Supabase; `tenure_days` vai à Anthropic **só em faixa** ("de 1 a 3 anos") e só se a empresa o mandou |
+| `clientes_importados.telefone` (Etapa 2) | **sim (direto)** | não | contrato (contato de cobrança — OP-01) | idem | Supabase; **não é copiado** para ciclo, tentativa ou mensagem: lido na hora do envio para escolher o canal; o envio é simulado nesta etapa (nenhum BSP recebe) |
+| `clientes_importados.nome` (Etapa 2) | **sim (direto)** | não | contrato (OP-01) | idem | Supabase; a tela da empresa mostra o nome (lido na hora, `cliente_nome`); **só o primeiro nome** vai à Anthropic e entra no texto da mensagem |
+
+## 1b. O ciclo de cobrança do involuntário e as mensagens (Etapas 1 e 2)
+
+Onde: `app/data/recovery_cycles.db` (SQLite local, fora do git; env
+`CRAI_RECOVERY_DB`). Origem: `/webhooks/pix-automatico` e o relógio do serviço.
+A Etapa 1 criou `ciclos_cobranca`, `tentativas_cobranca` e `eventos_vistos` sem
+dado pessoal além de pseudônimos (há teste que abre o banco cru e procura); a
+Etapa 2 acrescenta `mensagens_ciclo` e `configuracao_tenant`.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo proposto | vai para |
+|---|---|---|---|---|---|
+| `ciclos_cobranca.id_recorrencia`, `id_cobranca_original`, `e2e_falha_original` | sim (pseudônimos da transação) | não | contrato | 24 meses, depois anonimizar (configurado; execução na Etapa 3) | — |
+| `ciclos_cobranca.valor`, `fee`, estado e datas | sim (financeiro) | não | contrato | idem | — (a fee nunca sai nas rotas) |
+| `tentativas_cobranca.*` | sim (financeiro, pseudônimo) | não | contrato | idem | Pagar.me (`amount`, simulado) |
+| `mensagens_ciclo.texto` (Etapa 2) | **sim (texto dirigido à pessoa; no máximo o primeiro nome)** | não | contrato (OP-01: cobrança) | **90 dias depois do desfecho do ciclo**, depois o texto é apagado e fica só a abordagem (expurgo diário, Etapa 2 Bloco 4) | BSP do canal quando o envio for real (hoje simulado); **nunca** entra no dataset de treino nem na trilha do Art. 20 |
+| `mensagens_ciclo.abordagem`, `rodada`, `recomendada`, `escolhida`, `escolhida_por` (papel: owner/admin/prazo/automático, nunca nome), `por_prazo`, datas | fraco (decisão sobre a mensagem) | não | contrato | mesma do ciclo | trilha do Art. 20 (abordagem e papel, nunca o texto) |
+| `mensagens_ciclo.canal`, `motivo_canal` (Etapa 2) | fraco (qual canal, nunca o contato) | não | contrato | mesma do ciclo | — |
+| `configuracao_tenant.*` | não (configuração da empresa) | não | contrato | vida do contrato | — |
+
+**Canal por cliente (Etapa 2).** O canal da mensagem sai dos contatos da base
+(`telefone` → WhatsApp, `email` → e-mail, na ordem que a empresa configurou),
+lidos na hora do envio. Nenhum contato é copiado para as tabelas acima. Sem
+contato elegível, o canal é `sem_canal` e a mensagem não é entregue.
+
+**Janela de contato.** Nenhuma mensagem sai fora da janela configurada pela
+empresa (padrão 8 h às 20 h).
+
+**Registro de acesso (Etapa 2, Bloco 4).** Tabela `acessos_titular`, no mesmo arquivo
+(`recovery_cycles.db`). Uma linha por leitura das rotas que devolvem dado de titular:
+`GET /titular/explicacao/{sujeito_id}`, `GET /ciclos/{ciclo_id}` e `GET /ciclos` (a lista
+lê o `cliente_nome` da base). É o que permite responder quem acessou dados de titular num
+período (art. 37).
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `acessos_titular.tenant_id` | não (a empresa) | não | obrigação legal (art. 37) e legítimo interesse (segurança) | **12 meses**, apagado pelo expurgo diário do relógio | — |
+| `acessos_titular.rota` | não: é o **modelo** da rota (`GET /ciclos/{ciclo_id}`), nunca o id pedido nem o identificador do titular | não | idem | idem | — |
+| `acessos_titular.papel` | fraco (owner, admin, membro ou vazio; **nunca** o e-mail nem o `sub` de quem leu) | não | idem | idem | — |
+| `acessos_titular.quando` | não | não | idem | idem | — |
+
+O registro não guarda quem é a pessoa logada nem qual titular foi lido, de propósito: ele
+não pode virar um banco de dado pessoal. Há teste que abre a tabela crua e procura
+identificador, e-mail e nome.
+
+**Expurgo (Etapa 2, Bloco 4).** Uma vez por dia o relógio do serviço apaga o `texto` de
+`mensagens_ciclo` dos ciclos com desfecho há mais de `retencao_mensagens_dias` (90 por
+padrão; configurável por empresa) e os `acessos_titular` com mais de 12 meses. A quantidade
+de linhas tocadas vai para o log (`[EXPURGO]`). A retenção da trilha do Art. 20 e a dos
+ciclos ainda não são executadas (pendência 1, na seção 12).
+
+**Token de desenvolvimento (Etapa 2, Bloco 4).** Com `ENV=development`, `POST /dev/token`
+emite um token de uma empresa fictícia (`demo_dashboard`). Ele não carrega dado de pessoa
+(sem e-mail, `sub` genérico) e não é gravado. Fora de `development` não existe.
 
 ## 2. `ciclos_retencao` — log do churn voluntário (dataset de treino)
 
@@ -159,14 +216,15 @@ o BSP; a chave Pix só existe cifrada no cofre; o e-mail só existe em
 | HubSpot | **simulado** sem `HUBSPOT_TOKEN` | contato: `customer_id`/`user_id` como `stripe_customer_id`; deal: `amount`, `failure_cause`, `recovery_score`, `risk_score`, `trigger_event`, `offer_type`, `channel`, `tenant_id`, estágio | `integrations/hubspot_crm.py` |
 | Segment | só **entrada** (webhook); a CRAI não envia nada ao Segment | — | `api/app.py::segment_webhook` |
 | BSP do WhatsApp | **simulado** (log com telefone mascarado) | `phone` (E.164) + texto da mensagem | `integrations/whatsapp_sender.py` |
-| Anthropic (Claude API) | **real** se `ANTHROPIC_API_KEY` estiver no ambiente; fallback sem rede | voluntário: `event`, `channel`, rótulo da oferta, criticidade — **sem identificador**. Involuntário: `failure_cause`, `amount`, tom, meio de pagamento e o link `pay.crai.ai/<metodo>/<customer_id[:8]>` — **8 caracteres do identificador** | `churn_voluntary/voluntary_agent.py`, `dunning/dunning_engine.py` |
+| Anthropic (Claude API) | **real** se `ANTHROPIC_API_KEY` estiver no ambiente; fallback sem rede | voluntário: `event`, `channel`, rótulo da oferta, criticidade — **sem identificador**. Involuntário, desde a Etapa 2 (as 3 sugestões, `montar_prompt`): causa em português, valor, tom, meio de pagamento, canal e, **só se a base tiver**, o primeiro nome e a faixa de tempo de casa real — **sem identificador nenhum** (o link vai como marcador `{link}` e é posto depois; há teste que reprova e-mail, telefone, CPF, chave Pix, id da recorrência, e2e ou sobrenome no prompt). O caminho antigo de uma mensagem só (chamada direta, sem ciclo) ainda leva o link com 8 caracteres do identificador | `churn_voluntary/voluntary_agent.py`, `dunning/dunning_engine.py` |
 | Supabase | conta ainda não criada | `clientes_importados` inteira; auth (`sub`, `email`, `tenant_id`) | `churn_voluntary/clientes_importados.py`, `accounts/` |
 | SMTP (provedor da CRAI) | simulado sem SMTP | `customer_id_externo`, risco, criticidade, `explicacao` dos clientes em risco → e-mail da conta autenticada | `integrations/email_sender.py` |
 
 ## 12. Pendências que este mapeamento expõe
 
-1. **Não há política de retenção nem expurgo** em nenhuma tabela ou arquivo. Os prazos acima são propostas.
+1. **O expurgo cobre só duas coisas.** Desde a Etapa 2 (Bloco 4) o relógio apaga, uma vez por dia, o texto das mensagens do involuntário (90 dias depois do desfecho) e o registro de acesso (12 meses). **Nada mais é expurgado:** a trilha do Art. 20 (5 anos; a função recebe o prazo, mas ainda não é chamada), os ciclos (24 meses), a base depois do contrato (6 meses) e as demais tabelas e arquivos continuam sem execução. Os prazos dessas linhas são propostas ou configuração ainda não executada.
 2. **`props` brutos do Segment entram inteiros no estado** (`_run_voluntary_pipeline`): o que a empresa mandar no SDK fica em memória. Recomenda-se filtrar para a lista de campos usados antes de entrar no grafo.
 3. **A explicação SHAP não carrega identificador** (seção 7): auditável em agregado, não por pessoa.
-4. **`customer_id[:8]` vai para a Anthropic** dentro do link do portal; é um fragmento de pseudônimo, mas é envio a terceiro fora do país — cabe DPA/cláusula de transferência internacional (art. 33).
+4. **`customer_id[:8]` vai para a Anthropic** dentro do link do portal; é um fragmento de pseudônimo, mas é envio a terceiro fora do país — cabe DPA/cláusula de transferência internacional (art. 33). Desde a Etapa 2 o prompt das 3 sugestões do involuntário não leva mais o link; o primeiro nome e a faixa de tempo de casa passam a ir quando a base os tem — continua cabendo DPA.
 5. Os CSV de `painel/exemplos/` são sintéticos (`gerar_bases_demo.py`, e-mails `@exemplo.com.br`); a `base_exemplo_clientes.csv` vem do mvp-crai com nomes de empresas fictícias — **NÃO VERIFICADO** se algum registro é real.
+6. **O registro de operações de tratamento (art. 37) não está em `docs/lgpd/`.** A OP-01 (recuperação) é citada no plano das etapas e num `relatorio-conformidade-lgpd.md` que não está no repositório; as atualizações da Etapa 2 (texto das mensagens, `id_recorrencia`, canal por cliente, `telefone` e `nome`) estão registradas neste mapeamento até o registro existir aqui.
