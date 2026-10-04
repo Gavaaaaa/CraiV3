@@ -1,0 +1,234 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * Tokens iguais aos do site da CRAI (crai-site/src/index.css), para o dashboard
+ * mudar de casa sem mudar de cara. Os tokens de gráfico e de status são novos:
+ * passos das mesmas cores, escolhidos para a superfície escura e validados.
+ */
+@theme {
+  --color-ink: #1a120a;
+  --color-slate: #2b2926;
+  --color-graphite: #565c61;
+  --color-silver: #a6aaad;
+  --color-muted: #8a9095; /* texto de apoio: passa no contraste (4,5:1) onde o graphite não passa */
+  --color-paper: #e8eaeb;
+  --color-orange: #ef9311;
+  --color-amber: #ffb86c;
+  --color-line: rgba(166, 170, 173, 0.14);
+
+  /* Superfícies do painel */
+  --color-bar: #2a221a;
+  --color-card: #221a12;
+
+  /* Séries de gráfico (validadas na superfície escura): involuntário e voluntário */
+  --color-serie-inv: #d97400;
+  --color-serie-vol: #1f9e8a;
+
+  /* Status: sempre com ícone ou texto, nunca só a cor */
+  --color-ok: #3fb26f;
+  --color-warn: #d99a1e;
+  --color-danger: #c2453a;
+  --color-danger-deep: #a11a2b;
+
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    background: var(--color-ink);
+  }
+  body {
+    font-family: 'Inter Variable', system-ui, sans-serif;
+    font-feature-settings: 'cv11' 1, 'ss01' 1;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::selection {
+    background: rgba(239, 147, 17, 0.32);
+    color: var(--color-paper);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 3px;
+  }
+}
+
+@layer components {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .t-h1 {
+    font-size: 28px;
+    font-weight: 620;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+  }
+  .t-h2 {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .t-h3 {
+    font-size: 16px;
+    font-weight: 560;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+  .t-label {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+  }
+  .t-apoio {
+    font-size: 13.5px;
+    font-weight: 450;
+    line-height: 1.5;
+  }
+  /* Cifra de destaque: uma por tela, proporcional (não tabular). */
+  .t-hero {
+    font-size: 44px;
+    font-weight: 680;
+    line-height: 1;
+    letter-spacing: -0.035em;
+  }
+  .t-number {
+    font-size: 30px;
+    font-weight: 660;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+
+  /* Superfície de vidro quente, como no site */
+  .card-glass {
+    border: 1px solid var(--color-line);
+    background: linear-gradient(160deg, rgba(52, 46, 40, 0.72), rgba(34, 27, 20, 0.78));
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 24px 60px -30px rgba(0, 0, 0, 0.7);
+  }
+  /* O único cartão colorido da tela: o valor mantido */
+  .card-orange {
+    border: 1px solid rgba(255, 184, 108, 0.35);
+    background: linear-gradient(150deg, #f39c1f 0%, #e07f0a 55%, #c96a00 100%);
+    color: var(--color-ink);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 30px 70px -30px rgba(239, 147, 17, 0.55);
+  }
+  .spotlight {
+    position: relative;
+    isolation: isolate;
+  }
+  .spotlight::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    padding: 1px;
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 184, 108, 0.55), transparent 60%);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 260ms ease;
+  }
+  .spotlight:hover::before {
+    opacity: 1;
+  }
+  .anim-entrada {
+    animation: entrada 0.7s var(--ease-expo) both;
+  }
+  .btn-shine {
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .btn-shine::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+    transform: translateX(-120%);
+    transition: transform 700ms var(--ease-expo);
+  }
+  .btn-shine:hover::after {
+    transform: translateX(120%);
+  }
+  .pulse-orange {
+    animation: pulse-dot-orange 1.8s ease-out infinite;
+  }
+  /* Grade sutil atrás do conteúdo, como papel milimetrado escuro */
+  .fundo-painel {
+    background-image:
+      radial-gradient(1200px 600px at 80% -10%, rgba(239, 147, 17, 0.07), transparent 60%),
+      radial-gradient(800px 500px at -10% 110%, rgba(255, 184, 108, 0.05), transparent 60%);
+  }
+  /* Caixa de seleção com a seta desenhada, igual em todo navegador */
+  .seletor {
+    appearance: none;
+    padding-right: 36px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6aaad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px;
+  }
+  .seletor option {
+    background: var(--color-slate);
+    color: var(--color-paper);
+  }
+  .scroll-fino::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+  .scroll-fino::-webkit-scrollbar-thumb {
+    background: rgba(166, 170, 173, 0.2);
+    border-radius: 8px;
+  }
+}
+
+@keyframes entrada {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pulse-dot-orange {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 147, 17, 0.6);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 10px rgba(239, 147, 17, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-entrada,
+  .pulse-orange {
+    animation: none;
+  }
+  .btn-shine::after {
+    transition: none;
+  }
+}
