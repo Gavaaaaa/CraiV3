@@ -1,0 +1,201 @@
+{
+  "versao_do_manifesto": 1,
+  "gerado_em": "2026-10-03T17:48:28",
+  "pacote": {
+    "nome": "crai-modelos.zip",
+    "bytes": 3694274,
+    "sha256": "6c13b4256f1372d722333005140c726ff9c06bf5db21600e89e78719fdebdbfd",
+    "instalar_em": "app/models/"
+  },
+  "modelos": {
+    "classificador_de_falha": {
+      "meta": "failure_classifier_meta.json",
+      "algoritmo": "XGBClassifier (0,7) + RandomForestClassifier (0,3)",
+      "treinado_em": "2026-09-27T19:57:57",
+      "fonte": "sintetico_calibrado",
+      "n_amostras": 120000
+    },
+    "detector_de_anomalia": {
+      "meta": "autoencoder_meta.json",
+      "algoritmo": "autoencoder denso 12-32-16-4-16-32-12 (PyTorch)",
+      "treinado_em": "2026-09-27T19:59:55",
+      "fonte": "sintetico_calibrado",
+      "n_amostras": 120000,
+      "seed": 42
+    },
+    "inferencia_de_liquidez": {
+      "meta": "payday_meta.json",
+      "algoritmo": "LSTM seq2vec (PyTorch) 0,6 + Prophet por perfil 0,4",
+      "treinado_em": "2026-09-27T20:09:54",
+      "fonte": "sintetico_calibrado",
+      "n_amostras": 10000,
+      "seed": 42
+    },
+    "risco_voluntario_v3": {
+      "meta": "voluntary_risk_meta.json",
+      "algoritmo": "HistGradientBoostingClassifier",
+      "treinado_em": "2026-09-29T21:34:09",
+      "fonte": "base v3 sintética (rótulo latente desenhado pelo projeto; não é churn observado)",
+      "seed": 42,
+      "contrato": "v3",
+      "promovido_em": "2026-10-03T15:59:05",
+      "base_sha256": "d33be11ee7fd93f6b3c278bc2ebd4d025b1f037a9015b1be523a28661ff7c397",
+      "base_hash_canonico": "2ef77ec8b25f7ee079b0aa1d1b181d9b0217a3ea045041a5927eaf436593a7aa",
+      "joblib_de_origem_sha256": "b4ee00fd823f1e11b15b585c1d0525ffaffe31bb4f9cd1333c7f026cc11cfe7d"
+    }
+  },
+  "arquivos": [
+    {
+      "nome": "xgb_failure_classifier.joblib",
+      "modelo": "classificador_de_falha",
+      "papel": "carregado",
+      "lido_por": "FailureClassifier.load",
+      "bytes": 931221,
+      "sha256": "c5aaf294caaaf9ed5a4368878286fb577c564104318d3eeb33a5664cc255df8e"
+    },
+    {
+      "nome": "rf_failure_classifier.joblib",
+      "modelo": "classificador_de_falha",
+      "papel": "carregado",
+      "lido_por": "FailureClassifier.load",
+      "bytes": 5695033,
+      "sha256": "06933ae456c1c6b0ad8d59d3330030f7d71bf4e4e92e86957c371cc05ca5fda3"
+    },
+    {
+      "nome": "label_encoders.joblib",
+      "modelo": "classificador_de_falha",
+      "papel": "carregado",
+      "lido_por": "FailureClassifier.load",
+      "bytes": 969,
+      "sha256": "71d836b38534423fde6cbf45c4379c8bbbfe668d1e5aa203a1538c6a68cd002c"
+    },
+    {
+      "nome": "feature_names.joblib",
+      "modelo": "classificador_de_falha",
+      "papel": "carregado",
+      "lido_por": "FailureClassifier.load",
+      "bytes": 205,
+      "sha256": "aaefc10aeb1073793248807bab9585aa4239117f6f1826cbfcd924b268b6d328"
+    },
+    {
+      "nome": "failure_classifier_meta.json",
+      "modelo": "classificador_de_falha",
+      "papel": "carregado",
+      "lido_por": "FailureClassifier.load",
+      "bytes": 4779,
+      "sha256": "4b07f9fc89ed0711242794cc4348f9d1b861f35ff971b9de2804844698c0873e"
+    },
+    {
+      "nome": "train_metrics.json",
+      "modelo": "classificador_de_falha",
+      "papel": "evidencia",
+      "lido_por": "métricas do treino",
+      "bytes": 7507,
+      "sha256": "e6d0b20063de9e53a6e090e6c6771086b651d854585f0354fffed47cb037f36e"
+    },
+    {
+      "nome": "curva_limiar_classificador.json",
+      "modelo": "classificador_de_falha",
+      "papel": "evidencia",
+      "lido_por": "curva do limiar",
+      "bytes": 9730,
+      "sha256": "399ea795c4c775c32d0766452542e30379786fc53782b036933fa7383bc6354a"
+    },
+    {
+      "nome": "autoencoder.pt",
+      "modelo": "detector_de_anomalia",
+      "papel": "carregado",
+      "lido_por": "AnomalyDetector.load",
+      "bytes": 12999,
+      "sha256": "7d7066cbc813bf8eaa738d469c3021772c71e8f21d389074e390a55528858319"
+    },
+    {
+      "nome": "autoencoder_scaler.pkl",
+      "modelo": "detector_de_anomalia",
+      "papel": "carregado",
+      "lido_por": "AnomalyDetector.load",
+      "bytes": 903,
+      "sha256": "785a4120fb65daedbdc2450a966d0dfccd23c1fbad356c3accadb655d3be8730"
+    },
+    {
+      "nome": "autoencoder_meta.json",
+      "modelo": "detector_de_anomalia",
+      "papel": "carregado",
+      "lido_por": "AnomalyDetector.load",
+      "bytes": 5568,
+      "sha256": "3410940ce10d2e0edcf704d3630e81d4f0b87876adf54866daeb4a71ca786536"
+    },
+    {
+      "nome": "curva_limiar_anomalia.json",
+      "modelo": "detector_de_anomalia",
+      "papel": "evidencia",
+      "lido_por": "curva do limiar",
+      "bytes": 4585,
+      "sha256": "a00ad0edd5e27ea6702efca77b90996e9bfbc86146158b9fb8b0a389eb4ddd32"
+    },
+    {
+      "nome": "payday_lstm.pt",
+      "modelo": "inferencia_de_liquidez",
+      "papel": "carregado",
+      "lido_por": "PaydayInference.load",
+      "bytes": 220679,
+      "sha256": "311934f8c64f04b900ab1975a71664b3815a8c52afbf4e4a0b5785bdad1bff4e"
+    },
+    {
+      "nome": "payday_meta.json",
+      "modelo": "inferencia_de_liquidez",
+      "papel": "carregado",
+      "lido_por": "PaydayInference.load",
+      "bytes": 2490,
+      "sha256": "9f6d4746170b002edf824076e5c7ee382246a1f6bd098075d16ee42d024fe434"
+    },
+    {
+      "nome": "payday_prophet_CLT.json",
+      "modelo": "inferencia_de_liquidez",
+      "papel": "carregado",
+      "lido_por": "PaydayInference.load",
+      "bytes": 34125,
+      "sha256": "2ac0c4e129e95eeafbfb48cc2fce5cc6e5885d512d95a78ad4fa1fd85ad95742"
+    },
+    {
+      "nome": "payday_prophet_PJ.json",
+      "modelo": "inferencia_de_liquidez",
+      "papel": "carregado",
+      "lido_por": "PaydayInference.load",
+      "bytes": 34032,
+      "sha256": "fbd78085d628b56b563617ab7fb15cd3fc17430e530d490e203f861cf979ece2"
+    },
+    {
+      "nome": "payday_prophet_freelancer.json",
+      "modelo": "inferencia_de_liquidez",
+      "papel": "carregado",
+      "lido_por": "PaydayInference.load",
+      "bytes": 34146,
+      "sha256": "9890f5f21cf2ec89df1a77e3de8e180b2e8ddf10b8755222281bb3aa0a9b2d72"
+    },
+    {
+      "nome": "voluntary_risk.joblib",
+      "modelo": "risco_voluntario_v3",
+      "papel": "carregado",
+      "lido_por": "risk_scorer.carregar_modelo",
+      "bytes": 1099200,
+      "sha256": "b4ee00fd823f1e11b15b585c1d0525ffaffe31bb4f9cd1333c7f026cc11cfe7d"
+    },
+    {
+      "nome": "voluntary_risk_meta.json",
+      "modelo": "risco_voluntario_v3",
+      "papel": "carregado",
+      "lido_por": "risk_scorer.carregar_modelo",
+      "bytes": 3904,
+      "sha256": "ed5929b2c5c75ff04a25f83e5cc4e8fdf40594a3bf045c4700774c0f1f8b485f"
+    }
+  ],
+  "fora_do_pacote": [
+    "bandit_state.json e *.bak (estado operacional, não modelo)",
+    "voluntary_risk_candidato.* (candidato v2, não promovido)",
+    "v2/, v3/, v3_exp_*/ (histórico e experimentos)",
+    "calibracao.json (já versionado no repositório)",
+    "vault/ e data/"
+  ],
+  "aviso": "Arquivos .joblib e .pkl executam código ao serem carregados. Baixe só do endereço do README e confira o sha256 antes de instalar."
+}

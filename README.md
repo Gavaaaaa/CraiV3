@@ -49,7 +49,9 @@ Testes, sempre a partir de `app/`:
 pytest tests/ -q
 ```
 
-Treinar os modelos é opcional; sem artefatos, o sistema responde por heurística:
+Os modelos não vêm no repositório. Para tê-los sem treinar, veja
+[Modelos prontos (download)](#modelos-prontos-download), logo abaixo. Treinar é opcional;
+sem artefatos, o sistema responde por heurística:
 
 ```bash
 python -m crai.scripts.preparar_amostra_real
@@ -58,6 +60,45 @@ python -m crai.scripts.train_all --fonte sintetico_calibrado
 
 Antes do primeiro commit, ative o hook que bloqueia segredos:
 `git config core.hooksPath scripts`.
+
+## Modelos prontos (download)
+
+A pasta `app/models/` não é versionada. Num clone limpo o sistema sobe sem modelo nenhum:
+**sem os modelos, ele responde por heurística** (regras fixas no lugar do diagnóstico, da
+previsão de liquidez e do risco). O pacote abaixo traz os modelos de produção já treinados.
+
+- **Download:** <https://github.com/Gavaaaaa/CraiV3/releases/download/modelos-2026-10/crai-modelos.zip>
+- **sha256 esperado do zip:** `6c13b4256f1372d722333005140c726ff9c06bf5db21600e89e78719fdebdbfd`
+
+Em PowerShell, a partir da raiz do repositório:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/Gavaaaaa/CraiV3/releases/download/modelos-2026-10/crai-modelos.zip" -OutFile crai-modelos.zip
+(Get-FileHash crai-modelos.zip -Algorithm SHA256).Hash.ToLower()
+```
+
+O valor impresso tem que ser **igual** ao sha256 acima. Só então extraia e confira:
+
+```powershell
+Expand-Archive -Path crai-modelos.zip -DestinationPath app\models -Force
+cd app
+python -m crai.scripts.verificar_modelos
+```
+
+`verificar_modelos` compara cada arquivo de `app\models` com o manifesto versionado em
+[`docs/modelos/MANIFESTO_MODELOS.json`](docs/modelos/MANIFESTO_MODELOS.json) e diz o que
+falta ou está diferente. Tem que terminar com "Tudo certo: os 18 arquivos batem com o
+manifesto". Com `--zip ..\crai-modelos.zip` ele confere também o arquivo baixado.
+
+**Baixe só deste endereço e sempre confira o sha256 antes de extrair.** Os arquivos
+`.joblib` e `.pkl` executam código ao serem carregados: um pacote adulterado roda o que
+quiser na sua máquina.
+
+O pacote tem o classificador de falha, o detector de anomalia, a inferência de liquidez e o
+risco voluntário v3 promovido, com os `meta.json`, as curvas de limiar e as métricas de
+treino. Não tem o estado do bandit de ofertas (o serviço cria o dele), nem os candidatos e
+experimentos. Todos foram treinados em dado sintético; o manifesto diz de qual treino veio
+cada um.
 
 ## O painel
 
@@ -112,6 +153,83 @@ Com o servidor no ar, elas também ficam em
 
 O painel é bilíngue (português e inglês). Todo texto visível passa pelo dicionário em
 `painel/idioma.js`; nenhuma frase é escrita direto na marcação.
+
+## Dashboard novo (em desenvolvimento)
+
+> **Provisório.** Esta seção descreve o dashboard que está sendo integrado, em `dashboard/`.
+> Ele ainda não substitui o painel acima, e só parte dele fala com o backend. O login é de
+> desenvolvimento: uma empresa fictícia, sem senha, que só existe com `ENV=development`.
+
+Pré-requisitos: Python 3.11 (o backend) e Node 24 com npm 11 (testado com Node 24.16).
+
+**1. O backend, em modo de desenvolvimento.** Os bancos da demonstração ficam numa pasta
+própria, para os ciclos fictícios não se misturarem com os dados de `app/data/`:
+
+```powershell
+cd app
+$dados = (Resolve-Path ..).Path + "\docs\interno\dados_dashboard_demo"
+New-Item -ItemType Directory -Force $dados | Out-Null
+$env:ENV = "development"
+$env:PYTHONIOENCODING = "utf-8"
+$env:CRAI_RECOVERY_DB = "$dados\recovery_cycles.db"
+$env:CRAI_RETENTION_DB = "$dados\retention_cycles.db"
+$env:CRAI_RETRY_STATE = "$dados\pix_retry_state.json"
+$env:CRAI_CLIENTES_DB = "$dados\clientes.db"
+python -m uvicorn crai.api.app:app --port 8000
+```
+
+**2. A semente (ciclos fictícios).** Em outra janela, com o backend no ar. Cria uma cobrança
+Pix que falhou, da empresa fictícia `demo_dashboard`:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/simulate/pix-falhado `
+  -ContentType "application/json" `
+  -Body '{"id_recorrencia": "RN_demo_001", "valor": 1290.0, "codigo_falha": "AM04", "tenant_id": "demo_dashboard"}'
+```
+
+Troque `AM04` (saldo insuficiente: o sistema agenda novas tentativas) por `MD01`
+(autorização revogada: vai direto às 3 mensagens) para ver um ciclo aguardando escolha, e
+use `/simulate/pix-pago` com o mesmo `id_recorrencia` para ver um ciclo recuperado. Quem
+desenvolve o projeto tem um script que cria um ciclo em cada situação de uma vez
+(`docs/interno/semear_dashboard_demo.py`); a pasta `docs/interno/` não é versionada.
+
+**3. O dashboard.** Em outra janela:
+
+```powershell
+cd dashboard
+Set-Content -Path .env.local -Value "VITE_CRAI_API_URL=http://127.0.0.1:8000" -Encoding ascii
+npm install
+npm run dev
+```
+
+Abra <http://localhost:5173/involuntario>. A porta é a 5173, e o endereço tem que ser
+`localhost` (não `127.0.0.1`): é a única origem que o backend libera em desenvolvimento.
+
+O endereço do backend vem de `VITE_CRAI_API_URL`, em `dashboard/.env.local` (o git ignora o
+arquivo; não existe `.env.example`). **Sem essa variável o dashboard não chama o backend** e
+mostra só dados de demonstração.
+
+**O login de desenvolvimento.** Ao abrir, o dashboard pede `POST /dev/token` e recebe um
+token da empresa fictícia com o papel de dono. O token fica só na memória da página. No
+topo, o seletor "Papel" troca para administrador ou membro, para ver o que cada papel pode
+fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
+
+**O que já é real e o que ainda é demonstração:**
+
+| Página | Situação |
+|---|---|
+| Involuntário (cartões, lista, painel do ciclo, escolher e pedir outras mensagens) | Real |
+| Configuração, seção Mensagens (modo, prazo, janela de contato, canais) | Real |
+| Visão geral, linha do relógio em "Saúde do sistema" | Real |
+| Visão geral (o resto), Voluntário, Assistente, Simulação do gateway | Demonstração |
+| Configuração: Empresa, Equipe, Integração, Notificações | Demonstração |
+
+Com o backend ligado, todo bloco que ainda usa dado fictício mostra a etiqueta
+"Demonstração". O envio das mensagens é simulado em qualquer caso: nenhum WhatsApp ou e-mail
+sai de verdade.
+
+Testes do dashboard, a partir de `dashboard/`: `npm run build`, `npm test` e, com o backend
+no ar, `npm run test:vivo`.
 
 ## Os dois pipelines
 
@@ -240,15 +358,36 @@ verdade. Ausência de dado não é ausência de risco.
 | Classificador de falha | XGBoost + Random Forest, com SHAP | causa raiz, chance de recuperação e a explicação fator a fator |
 | Detector de anomalia | Autoencoder (PyTorch) | este cliente fugiu do padrão dele mesmo |
 | Inferência de liquidez | LSTM + Prophet por perfil | em que dia tentar de novo |
-| Risco voluntário | Gradient Boosting | **candidato, não promovido** |
+| Risco voluntário | HistGradientBoosting (v3), com TreeSHAP | **promovido**: o risco de cancelamento de cada cliente, e os fatores que mais pesaram |
 
-O modelo de risco voluntário foi treinado e **não** foi ativado, por decisão medida: como
-não existe rótulo real de cancelamento, ele foi treinado contra o rótulo que as próprias
-regras produzem, e aprende a imitar a régua em vez de superá-la. Promovê-lo trocaria uma
-conta explicável por uma caixa-preta equivalente. A promoção é explícita
-(`--ativar-voluntario`) e só faz sentido quando houver desfecho real acumulado.
+O modelo de risco voluntário em produção é o **v3**, promovido em 03/10/2026. O candidato
+anterior (v2) não foi promovido porque aprendia a imitar a régua: era treinado contra o
+rótulo que as próprias regras produzem. O v3 foi treinado numa base em que o cancelamento
+não vem da régua, e por isso pôde ser medido contra ela. O que foi medido:
 
-Os artefatos ficam em `app/models/` e **não são versionados**. Sem eles o sistema usa
+- no holdout por cliente da base v3 e na validação cruzada por grupos, ele ordena o risco
+  melhor que as duas réguas (a fixa e a por percentil);
+- a vantagem **depende das colunas de comportamento** (acessos, sessões, chamados, NPS,
+  pagamentos falhados): só com as colunas que a régua também lê, ela continua existindo,
+  mas é bem menor;
+- o modelo decide quando há dias sem acesso ou uso; sem os dois, a régua continua
+  decidindo, e a trilha registra quem decidiu;
+- o risco vira ação pela **posição na base da própria empresa** (os de maior risco, e só
+  com sinal real de abandono), não por um corte fixo de probabilidade.
+
+**A ressalva que vale mais que o resto:** a base v3 é sintética, e o cancelamento dela foi
+desenhado pelo próprio projeto. A vantagem é medida contra esse gerador; **não é churn
+observado e não diz nada sobre churn real**. Os números estão em
+`docs/evidencia_v3/metricas_v3.json`, e a leitura deles em
+[`docs/LIMITACOES.md`](docs/LIMITACOES.md), na seção do risco voluntário v3.
+
+A promoção é um comando explícito e reversível, rodado de dentro de `app/`:
+`python -m crai.scripts.promover_voluntario_v3 --promover` (e `--reverter` para voltar à
+régua). `app/crai/churn_voluntary/README_treino.md` explica como regenerar o artefato do
+zero.
+
+Os artefatos ficam em `app/models/` e **não são versionados**: baixe o pacote pronto em
+[Modelos prontos (download)](#modelos-prontos-download). Sem eles o sistema usa
 fallbacks — e a ausência aparece na tela, não em silêncio.
 
 ## As rotas
