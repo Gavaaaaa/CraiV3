@@ -36,6 +36,117 @@ erros 401 e 500 de autenticação são exatamente os do `CONTRATO_PAINEL.md`
 seção 0 (`sem_authorization`, `authorization_malformado`, `token_expirado`,
 `sem_tenant`, ... e `supabase_nao_configurado`, `jwks_indisponivel`).
 
+Desde 04/10/2026 as quatro rotas aceitam também a **chave de API** da empresa
+(0.1b). O token de login continua valendo como antes: a chave é um segundo
+caminho, não uma troca.
+
+### 0.1b Autenticação por chave de API
+
+Para o **sistema da empresa** chamar as quatro rotas sozinho, sem ninguém
+logado. A chave vai no mesmo header:
+
+```
+Authorization: Bearer crai_live_EXEMPLO_NAO_E_UMA_CHAVE_DE_VERDADE_000
+```
+
+**Como a empresa consegue a chave.** No dashboard, na aba API, um dono ou
+administrador de uma empresa do plano premium gera a chave com um clique (o
+dashboard dá a ela um nome padrão, "Chave de API" mais a data).
+A chave inteira aparece **uma única vez**, na hora em que é gerada: a CRAI
+guarda só o hash, o começo e os 4 últimos caracteres. Perdeu a chave, gere
+outra e revogue a antiga.
+
+**O que a chave faz e o que não faz.**
+
+- Autentica **só** estas quatro rotas: `POST /clientes`, `POST /clientes/lote`,
+  `PATCH /clientes/{id}` e `DELETE /clientes/{id}`. Em qualquer outra rota
+  (dashboard, configuração, ciclos, titular, `/insights`, `/clientes/importar`
+  e as próprias rotas de chave) ela não vale: 401.
+- O `tenant_id` vem **da chave**, nunca do corpo nem de header. Tudo o que 0.2
+  diz sobre isolamento vale igual: cliente de outra empresa é 404, o mesmo do
+  inexistente.
+- Validação, idempotência (0.3) e respostas são exatamente as do token de
+  login. Só a origem do tenant muda.
+- A revogação é imediata: a requisição seguinte com a chave revogada já
+  recebe 401.
+- Cada empresa tem no máximo 5 chaves ativas.
+- Cada chave tem um limite de requisições por minuto (120 por padrão; o
+  operador da instalação muda em `CRAI_API_LIMITE_POR_MINUTO`). Um lote conta
+  como uma requisição: para carga grande, use `POST /clientes/lote`.
+
+**Exemplo em `curl`** (a chave fica numa variável de ambiente, nunca no
+código nem no histórico do terminal):
+
+```bash
+curl -X POST "https://api.exemplo-crai.com.br/clientes" \
+  -H "Authorization: Bearer $CRAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: cadastro-c-001-2026-10-04" \
+  -d '{"customer_id_externo": "c-001", "mrr": 1500.0, "billing_profile": "PJ"}'
+```
+
+**Exemplo em Python** (só a biblioteca padrão):
+
+```python
+import json
+import os
+import urllib.request
+
+API = "https://api.exemplo-crai.com.br"
+CHAVE = os.environ["CRAI_API_KEY"]          # crai_live_EXEMPLO...: nunca no código
+
+def chamar(metodo, caminho, corpo=None):
+    dados = json.dumps(corpo).encode("utf-8") if corpo is not None else None
+    req = urllib.request.Request(API + caminho, data=dados, method=metodo, headers={
+        "Authorization": f"Bearer {CHAVE}",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resposta:
+        return json.loads(resposta.read().decode("utf-8"))
+
+# Cadastrar ou atualizar um cliente
+chamar("POST", "/clientes", {"customer_id_externo": "c-001", "mrr": 1500.0,
+                             "billing_profile": "PJ"})
+# O cliente mudou de valor
+chamar("PATCH", "/clientes/c-001", {"mrr": 1800.0})
+# O cliente cancelou
+chamar("DELETE", "/clientes/c-001", {"motivo": "mudou de fornecedor"})
+```
+
+**Erros de autenticação pela chave** (o corpo é sempre
+`{"detail": {"motivo", "detalhe"}}`):
+
+| HTTP | `motivo` | Quando |
+|---|---|---|
+| 401 | `chave_invalida` | a chave não existe, está malformada ou foi revogada. **A resposta é a mesma nos três casos**, byte a byte: nada revela se a chave existe |
+| 401 | `chave_nao_vale_nesta_rota` | a chave foi enviada a uma rota fora das quatro. A resposta não depende de a chave ser válida |
+| 429 | `limite_de_uso` | a chave passou do limite por minuto. O header `Retry-After` traz em quantos segundos tentar de novo; a requisição recusada não foi aplicada |
+
+Um `Authorization: Bearer` que não começa por `crai_live_` é tratado como
+token de login, e recebe os erros de 0.1.
+
+**Erros ao gerar e revogar a chave** (rotas do dashboard, com o token de
+login; não são chamadas pelo sistema da empresa):
+
+| Rota | HTTP | `motivo` | Quando |
+|---|---|---|---|
+| `POST /integracao/chaves` | 403 | `plano_sem_api` | a empresa não é do plano premium. **Só gerar** é do premium: listar e revogar valem em qualquer plano, para a empresa que saiu do premium conseguir ver e desligar as chaves que tem |
+| `POST` e `DELETE /integracao/chaves...` | 403 | `papel_insuficiente` | quem pede não é dono nem administrador (membro só vê a lista) |
+| `POST /integracao/chaves` | 409 | `limite_de_chaves` | a empresa já tem 5 chaves ativas; revogue uma para gerar outra |
+| `POST /integracao/chaves` | 422 | `nome_invalido`, `campo_desconhecido` | o corpo é `{"nome": "..."}`, com 1 a 60 caracteres |
+| `DELETE /integracao/chaves/{id}` | 404 | `chave_nao_encontrada` | não há chave com este id nesta empresa (inclusive se existe em outra) |
+
+As três rotas do dashboard:
+
+| Rota | Resposta |
+|---|---|
+| `GET /integracao/chaves` | 200 `{"chaves": [...], "ativas", "limite_ativas", "pode_revogar", "plano_permite_gerar", "pode_gerar"}`. `pode_revogar`: o papel revoga (dono ou administrador); `plano_permite_gerar`: a empresa é premium; `pode_gerar`: as duas coisas. Cada chave: `id`, `nome`, `prefixo` (`crai_live_` + 4 caracteres), `final` (4 caracteres), `criada_em`, `criada_por_papel`, `ultimo_uso_em`, `revogada_em`, `situacao` (`ativa` ou `revogada`) e `usos_hoje`. Sem o hash e sem a chave |
+| `POST /integracao/chaves` | 201 `{"chave": {...}, "chave_inteira": "crai_live_...", "aviso"}`, com `Cache-Control: no-store`. É a única resposta que traz a chave inteira |
+| `DELETE /integracao/chaves/{id}` | 200 `{"chave": {...}, "ja_estava_revogada"}`. Revogar duas vezes devolve 200 com a data original |
+
+O que a chave ainda não faz (um tipo só, sem escopos, sem chave de teste,
+limite por processo) está em `docs/LIMITACOES.md`.
+
 ### 0.2 Isolamento por tenant
 
 Toda leitura e escrita é filtrada pelo tenant do token. Um cliente que existe

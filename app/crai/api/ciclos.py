@@ -347,7 +347,32 @@ def _diagnostico(decisoes: list) -> Optional[dict]:
     return {"decidido_em": datas.iso_com_fuso(risco["decidido_em"]),
             "explicacao": risco["explicacao"],
             "com_modelo": bool(risco.get("contribuicoes")),
-            "contribuicoes": itens}
+            "contribuicoes": itens,
+            "desconto_por_anomalia": _desconto_por_anomalia(risco, decisoes)}
+
+
+def _desconto_por_anomalia(risco: dict, decisoes: list) -> Optional[dict]:
+    """O desconto que a decisão do ciclo aplicou sobre a pontuação do
+    diagnóstico, ou None. A tela mostra UM número, o que o sistema usou, e usa
+    isto para dizer que ele já tem o desconto.
+
+    Lido da decisão de retentativa da trilha. Nos ciclos gravados depois da
+    Rodada 2 a `saida` traz o percentual e a pontuação de antes; nos anteriores
+    não, e o desconto é reconhecido pela entrada `is_anomalous`, com a pontuação
+    de antes vinda da decisão de risco."""
+    decisao = next((d for d in decisoes if d["tipo_decisao"] == trilha.TIPO_RETENTATIVA), None)
+    if decisao is None:
+        return None
+    entradas, saida = decisao.get("entradas") or {}, decisao.get("saida") or {}
+    pct = saida.get(trilha.CHAVE_DESCONTO_PCT)
+    antes = saida.get(trilha.CHAVE_PONTUACAO_ANTES)
+    if pct is None:
+        if not entradas.get("is_anomalous"):
+            return None
+        pct = workflow.DESCONTO_POR_ANOMALIA_PCT
+        antes = (risco.get("saida") or {}).get("recovery_score")
+    return {"percentual": pct, "pontuacao_antes": antes,
+            "pontuacao_usada": entradas.get("recovery_score")}
 
 
 def _mensagem_publica(m: dict) -> dict:

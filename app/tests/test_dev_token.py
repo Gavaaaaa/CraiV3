@@ -143,7 +143,8 @@ class TestOQueARotaEmite:
 
     def test_o_token_nao_carrega_dado_de_pessoa(self, desenvolvimento):
         claims = supabase_auth.validar_token(dev_token.emitir("admin")["token"])
-        assert set(claims) == {"iss", "sub", "aud", "role", "tenant_id", "papel", "iat", "exp"}
+        assert set(claims) == {"iss", "sub", "aud", "role", "tenant_id", "papel", "plano",
+                               "iat", "exp"}
         assert claims["sub"] == "dev-admin" and "@" not in str(claims)
         assert claims["exp"] - claims["iat"] == dev_token.VALIDADE_SEGUNDOS
 

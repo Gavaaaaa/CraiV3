@@ -854,6 +854,38 @@ def _data_legivel(iso) -> str:
         return str(iso)
 
 
+# O desconto por anomalia do involuntário (Rodada 2). Quando o detector marca a
+# cobrança como fora do padrão, o `decide_recovery` decide com a pontuação e o
+# retorno JÁ reduzidos, e grava na `saida` o percentual e os valores de antes.
+# Estas três chaves não viram itens soltos da frase: viram a sentença que diz
+# de quanto para quanto (`_frase_do_desconto`).
+CHAVE_DESCONTO_PCT = "desconto_por_anomalia_pct"
+CHAVE_PONTUACAO_ANTES = "recovery_score_antes_do_desconto"
+CHAVE_RETORNO_ANTES = "eprofit_antes_do_desconto"
+CHAVES_DO_DESCONTO = (CHAVE_DESCONTO_PCT, CHAVE_PONTUACAO_ANTES, CHAVE_RETORNO_ANTES)
+
+
+def _frase_do_desconto(entradas: dict, saida: dict) -> str:
+    """ " A pontuação de recuperação foi reduzida em 30% por comportamento fora
+    do padrão: de 28/100 para 19/100. O retorno esperado também foi reduzido: de
+    R$ 225,84 para R$ 158,08." — ou vazio, se a decisão não teve desconto. O
+    "para" é o valor que a decisão usou (`entradas`)."""
+    pct = saida.get(CHAVE_DESCONTO_PCT)
+    if pct is None:
+        return ""
+    frase = (f" A pontuação de recuperação foi reduzida em {_inteiro(pct)}% por "
+             "comportamento fora do padrão")
+    antes, depois = saida.get(CHAVE_PONTUACAO_ANTES), entradas.get("recovery_score")
+    if antes is not None and depois is not None:
+        frase += f": de {_inteiro(antes)}/100 para {_inteiro(depois)}/100"
+    frase += "."
+    antes, depois = saida.get(CHAVE_RETORNO_ANTES), entradas.get("eprofit")
+    if antes is not None and depois is not None:
+        frase += (f" O retorno esperado também foi reduzido: de R$ {_reais(antes)} "
+                  f"para R$ {_reais(depois)}.")
+    return frase
+
+
 def _rotular(chave, valor, rotulos: dict) -> str:
     f = rotulos.get(chave)
     if f is not None:
@@ -879,8 +911,8 @@ def frase_da_decisao(decidido_em: str, dominio: str, tipo_decisao: str, modelo: 
     por feature (o bandit). Nunca inventa contribuição.
     """
     partes_saida = [_rotular(k, v, ROTULOS_DE_SAIDA) for k, v in saida.items()
-                    if k not in ("regra", "motivo_da_regra") and v is not None
-                    and not isinstance(v, (dict, list))]
+                    if k not in ("regra", "motivo_da_regra") and k not in CHAVES_DO_DESCONTO
+                    and v is not None and not isinstance(v, (dict, list))]
     frase = (f"Em {_data_legivel(decidido_em)}, no fluxo de "
              f"{ROTULOS_DE_DOMINIO.get(dominio, dominio)}, o sistema "
              f"{ROTULOS_DE_TIPO.get(tipo_decisao, tipo_decisao)}: "
@@ -901,6 +933,8 @@ def frase_da_decisao(decidido_em: str, dominio: str, tipo_decisao: str, modelo: 
         itens = [_rotular(k, v, ROTULOS_DE_FEATURE) for k, v in entradas.items()
                  if not isinstance(v, (dict, list))]
         frase += f" Foram considerados: {', '.join(itens)}."
+
+    frase += _frase_do_desconto(entradas, saida)
 
     if modelo == MODELO_REGRA:
         regra = saida.get("regra") or "regra fixa"

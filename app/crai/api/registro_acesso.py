@@ -25,6 +25,12 @@ segue: a controladora não pode ficar sem responder ao titular porque o registro
 de acesso não gravou. O expurgo, ao contrário, LEVANTA: retenção que falha em
 silêncio é dado guardado além do prazo sem ninguém saber.
 
+A GESTÃO DAS CHAVES DE API (Rodada 2) entra no MESMO registro, com as mesmas
+quatro colunas: listar, criar e revogar chave (`api/integracao.py`). Não é
+leitura de dado de titular; está aqui porque é a operação que abre a base de
+clientes da empresa a um sistema de fora, e a controladora precisa conseguir
+dizer quando isso foi feito e por qual papel. O nome da tabela não mudou.
+
 Este módulo NÃO importa de `app.py`.
 """
 
@@ -41,6 +47,9 @@ RETENCAO_MESES = 12
 ROTA_EXPLICACAO = "GET /titular/explicacao/{sujeito_id}"
 ROTA_CICLO = "GET /ciclos/{ciclo_id}"
 ROTA_CICLOS = "GET /ciclos"
+ROTA_CHAVES_LISTAR = "GET /integracao/chaves"
+ROTA_CHAVES_CRIAR = "POST /integracao/chaves"
+ROTA_CHAVES_REVOGAR = "DELETE /integracao/chaves/{chave_id}"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS acessos_titular (

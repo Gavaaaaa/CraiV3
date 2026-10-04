@@ -73,32 +73,42 @@ RAIZ = Path(__file__).resolve().parents[2]
 # contagens e os arquivos em si não mudaram, só o prefixo do diretório.
 #
 #   archive/.../modulo_04_offer_bandit/src/visualizar.py   protótipo arquivado
-#   app/crai/agent/workflow.py                   "Decisão: mensagem_pagamento (... -> boleto)"
-#   app/crai/churn_voluntary/voluntary_agent.py   os emoji de aceite e recusa (2 caracteres)
-#   app/crai/dunning/dunning_engine.py            "[DUNNING] CANAL -> cliente"
-#   app/crai/dunning/pix_automatico_retry.py      "(dd/mm hh:mm -> dd/mm hh:mm)"
-#   app/crai/ml/anomaly_detector.py               "autoencoder (n -> gargalo)" (2 ocorrências)
 #   app/test_pipeline.py                          cabeçalhos e separadores da saída
 #                                                 da demo (15 ocorrências; a linha
 #                                                 103 é onde o processo morre)
+#
+# RODADA 2 (04/10/2026): O PACOTE `app/crai/` FICOU LIMPO. As sete ocorrências
+# que ele tinha foram trocadas por ASCII e saíram desta lista — a tolerância
+# desceu de 23 para 16, e só pode continuar descendo:
+#   app/crai/agent/workflow.py                    a seta do raciocínio (1)
+#   app/crai/churn_voluntary/voluntary_agent.py   os emoji de aceite e recusa (2)
+#   app/crai/dunning/dunning_engine.py            "[DUNNING] CANAL -> cliente" (1)
+#   app/crai/dunning/pix_automatico_retry.py      "(dd/mm hh:mm -> dd/mm hh:mm)" (1)
+#   app/crai/ml/anomaly_detector.py               "autoencoder (n -> gargalo)" (2)
+# Não eram só feias: com a saída do serviço redirecionada para arquivo no
+# Windows, a do `workflow` devolvia 500 no webhook e a do `dunning_engine`
+# fazia a mensagem do involuntário não sair. Esses cinco arquivos entraram em
+# `MODULOS_QUE_DEVEM_ESTAR_LIMPOS`, e `test_o_pacote_inteiro_esta_limpo` exige
+# zero em qualquer arquivo de `app/crai/`, inclusive nos que ainda não existem.
 PENDENCIAS_PRE_EXISTENTES = {
     "archive/protótipos-pré-unificação/modulo_04_offer_bandit/src/visualizar.py": 1,
-    "app/crai/agent/workflow.py": 1,
-    "app/crai/churn_voluntary/voluntary_agent.py": 2,
-    "app/crai/dunning/dunning_engine.py": 1,
-    "app/crai/dunning/pix_automatico_retry.py": 1,
-    "app/crai/ml/anomaly_detector.py": 2,
     "app/test_pipeline.py": 15,
 }
 
 TOTAL_DECLARADO = sum(PENDENCIAS_PRE_EXISTENTES.values())
 
-# Módulos que este sprint limpou. Aqui a exigência é zero, sem tolerância:
-# `ml/failure_classifier.py` é o que derrubava o gate do Sprint 4.
+# Módulos limpos, com exigência de zero, sem tolerância. Os três primeiros são
+# do Sprint 4 (`ml/failure_classifier.py` é o que derrubava o gate dele); os
+# cinco seguintes, da Rodada 2.
 MODULOS_QUE_DEVEM_ESTAR_LIMPOS = (
     "app/crai/ml/failure_classifier.py",
     "app/crai/integrations/payment_gateway.py",
     "app/crai/scripts/preparar_amostra_real.py",
+    "app/crai/agent/workflow.py",
+    "app/crai/churn_voluntary/voluntary_agent.py",
+    "app/crai/dunning/dunning_engine.py",
+    "app/crai/dunning/pix_automatico_retry.py",
+    "app/crai/ml/anomaly_detector.py",
 )
 
 # Diretórios que não são código do projeto e não devem entrar na contagem.
@@ -203,6 +213,17 @@ class TestN12Catraca:
             "módulo fora do inventário declarado passou a imprimir caractere "
             "que o console cp1252 não codifica: "
             + "; ".join(f"{m} -> {_descrever(a)}" for m, a in inesperados.items())
+        )
+
+    def test_o_pacote_inteiro_esta_limpo(self):
+        """Rodada 2: `app/crai/` não tem mais tolerância nenhuma. Zero em todo
+        arquivo do pacote — o que vale também para arquivo novo."""
+        assert TOTAL_DECLARADO == 16
+        assert not any(m.startswith("app/crai/") for m in PENDENCIAS_PRE_EXISTENTES)
+        no_pacote = {m: a for m, a in _inventario().items() if m.startswith("app/crai/")}
+        assert not no_pacote, (
+            "saída incompatível com cp1252 dentro de app/crai/: "
+            + "; ".join(f"{m} -> {_descrever(a)}" for m, a in no_pacote.items())
         )
 
     def test_a_divida_herdada_nao_cresceu(self):

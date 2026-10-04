@@ -707,7 +707,7 @@ async def track_outcome(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     if accepted:
         _channel_history[chave_de_canal(tenant, state["user_id"])] = state["channel"]
 
-    print(f"[CHURN-VOL] Resultado: {'✅ ACEITOU' if accepted else '❌ recusou'}")
+    print(f"[CHURN-VOL] Resultado: {'[OK] ACEITOU' if accepted else '[X] recusou'}")
     return {**state, "accepted": accepted, "retained": accepted}
 
 

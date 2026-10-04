@@ -95,6 +95,13 @@ O registro não guarda quem é a pessoa logada nem qual titular foi lido, de pro
 não pode virar um banco de dado pessoal. Há teste que abre a tabela crua e procura
 identificador, e-mail e nome.
 
+Desde a Rodada 2 a mesma tabela registra também a **gestão das chaves de API**
+(`GET /integracao/chaves`, `POST /integracao/chaves` e
+`DELETE /integracao/chaves/{chave_id}`), com as mesmas quatro colunas e o mesmo prazo: é a
+operação que abre a base de clientes da empresa a um sistema de fora. Só a operação
+atendida é registrada; a `rota` é o modelo, nunca o id da chave. O **uso** da chave nas
+rotas de clientes não entra aqui (ver a seção 1c).
+
 **Expurgo (Etapa 2, Bloco 4).** Uma vez por dia o relógio do serviço apaga o `texto` de
 `mensagens_ciclo` dos ciclos com desfecho há mais de `retencao_mensagens_dias` (90 por
 padrão; configurável por empresa) e os `acessos_titular` com mais de 12 meses. A quantidade
@@ -102,8 +109,40 @@ de linhas tocadas vai para o log (`[EXPURGO]`). A retenção da trilha do Art. 2
 ciclos ainda não são executadas (pendência 1, na seção 12).
 
 **Token de desenvolvimento (Etapa 2, Bloco 4).** Com `ENV=development`, `POST /dev/token`
-emite um token de uma empresa fictícia (`demo_dashboard`). Ele não carrega dado de pessoa
+emite um token de uma empresa fictícia (`demo_dashboard`, ou `demo_testes` para os testes ao
+vivo do dashboard). Ele não carrega dado de pessoa
 (sem e-mail, `sub` genérico) e não é gravado. Fora de `development` não existe.
+
+## 1c. As chaves de API da empresa (Rodada 2)
+
+Tabelas `chaves_api` e `chaves_api_uso`, no arquivo do ciclo de cobrança
+(`recovery_cycles.db`, env `CRAI_RECOVERY_DB`). A empresa gera a chave no dashboard e a
+coloca no sistema dela, que passa a chamar as quatro rotas da API de clientes sem ninguém
+logado (`docs/CONTRATO_CLIENTES_API.md`, seção 0.1b). Código: `accounts/chaves_api.py` e
+`api/integracao.py`.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `chaves_api.id` | não (identificador aleatório da chave, `chv_...`) | não | execução de contrato | vida da conta (sem expurgo: pendência 7) | — |
+| `chaves_api.tenant_id` | não (a empresa) | não | idem | idem | — |
+| `chaves_api.nome` | **pode ser**: é texto livre de até 60 caracteres, escolhido por quem gera a chave (o esperado é o nome de um sistema, mas nada impede o nome de uma pessoa) | não | idem | idem | — |
+| `chaves_api.prefixo`, `chaves_api.final` | não: `crai_live_` mais 4 caracteres, e os 4 últimos. Servem para a empresa reconhecer a chave na lista | não | idem | idem | — |
+| `chaves_api.hash` | não: SHA-256 da chave. **A chave em si não é gravada em lugar nenhum**; ela só existe na resposta da criação | não | idem | idem | — |
+| `chaves_api.criada_em`, `ultimo_uso_em`, `revogada_em` | não | não | idem | idem | — |
+| `chaves_api.criada_por_papel` | fraco (owner ou admin; **nunca** o nome, o e-mail nem o `sub` de quem criou) | não | idem | idem | — |
+| `chaves_api_uso.chave_id`, `dia`, `total` | não: quantas requisições a chave autenticou em cada dia | não | legítimo interesse (segurança: perceber uso anormal) | idem | — |
+
+O que o uso da chave **não** grava: o corpo da requisição, o caminho chamado, o
+identificador do cliente, o IP e o cabeçalho. Há teste que abre as duas tabelas cruas depois
+de um uso e procura o conteúdo do corpo. A chave nunca vai para o log: o módulo loga o `id`
+da chave e a empresa (há teste que captura o log e a saída padrão e procura a chave).
+
+Quem tem a chave altera a base de clientes da empresa (seção 1) pelas quatro rotas, e
+recebe na resposta o cliente gravado, inclusive os campos de contato (`email`, `telefone`,
+`nome`). A guarda da chave é da empresa; a revogação vale na requisição seguinte.
+
+O contador de limite por minuto (id da chave e instantes dos usos no último minuto) vive
+só na memória do processo.
 
 ## 2. `ciclos_retencao` — log do churn voluntário (dataset de treino)
 
@@ -191,6 +230,7 @@ preciso casar por `timestamp`.
 | claim `sub` (uuid do usuário da empresa) | sim | não | contrato | não gravado | — |
 | claim `email` (usuário da empresa) | **sim (direto)** | não | contrato | não gravado; usado só como destinatário em `/insights/enviar` | SMTP configurado pela CRAI |
 | claim `tenant_id` | não | não | — | vai para todo log e tabela como partição | Supabase, HubSpot |
+| claim `plano` (`essencial` ou `premium`; Rodada 2) | não (é da empresa) | não | contrato | não gravado; decide se as rotas de chave de API respondem. **O login real só terá a claim na Etapa 5**; sem ela vale `essencial` | — |
 | Tabelas `empresas` (`id`, `nome`, `criada_em`) e `usuarios_empresas` (`user_id`, `empresa_id`) | `user_id`: sim | não | contrato | vida da conta | Supabase (moram lá; DDL só esboçado em `accounts/README.md`, **NÃO VERIFICADO** se existe) |
 
 ## 10. O que entra nos pipelines de ML (checagem da invariante)
@@ -228,3 +268,4 @@ o BSP; a chave Pix só existe cifrada no cofre; o e-mail só existe em
 4. **`customer_id[:8]` vai para a Anthropic** dentro do link do portal; é um fragmento de pseudônimo, mas é envio a terceiro fora do país — cabe DPA/cláusula de transferência internacional (art. 33). Desde a Etapa 2 o prompt das 3 sugestões do involuntário não leva mais o link; o primeiro nome e a faixa de tempo de casa passam a ir quando a base os tem — continua cabendo DPA.
 5. Os CSV de `painel/exemplos/` são sintéticos (`gerar_bases_demo.py`, e-mails `@exemplo.com.br`); a `base_exemplo_clientes.csv` vem do mvp-crai com nomes de empresas fictícias — **NÃO VERIFICADO** se algum registro é real.
 6. **O registro de operações de tratamento (art. 37) não está em `docs/lgpd/`.** A OP-01 (recuperação) é citada no plano das etapas e num `relatorio-conformidade-lgpd.md` que não está no repositório; as atualizações da Etapa 2 (texto das mensagens, `id_recorrencia`, canal por cliente, `telefone` e `nome`) estão registradas neste mapeamento até o registro existir aqui.
+7. **As chaves de API não têm expurgo** (seção 1c). A chave revogada continua na tabela (sem o segredo: só o hash, o nome e as datas) e o contador diário de uso (`chaves_api_uso`) cresce uma linha por chave por dia de uso, sem prazo. Nenhuma das duas guarda dado de titular; o `nome` da chave é texto livre da empresa. Prazo a definir.

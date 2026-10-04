@@ -13,6 +13,7 @@ Brasil desde jun/2025) recupera na hora, sem o cliente reabrir o app.
 
 import json
 import logging
+import sys
 from typing import Optional, TypedDict
 
 from anthropic import AsyncAnthropic
@@ -206,6 +207,16 @@ class DunningState(TypedDict):
     motivo_canal: str
 
 
+def _cabe_na_saida(texto: str) -> str:
+    """O texto como a saída padrão consegue escrevê-lo: o que a codificação dela
+    não tem (emoji numa saída cp1252, por exemplo) vira '?'. Nunca levanta."""
+    codificacao = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return texto.encode(codificacao, errors="replace").decode(codificacao, errors="replace")
+    except LookupError:                           # codificação desconhecida
+        return texto.encode("ascii", errors="replace").decode("ascii")
+
+
 class DunningEngine:
     def __init__(self):
         self.graph = self._build_graph()
@@ -286,7 +297,12 @@ Retorne APENAS a mensagem."""
         return {**state, "message": com_aviso(message), "origem": "gerado", "codigo_template": ""}
 
     async def _send_message(self, state):
-        print(f"[DUNNING] {state['channel'].upper()} → {state['customer_id']}: {state['message'][:90]}")
+        # "->" em ASCII, e o trecho da mensagem passado por `_cabe_na_saida`: com a
+        # saída redirecionada para arquivo no Windows (cp1252), a seta desenhada
+        # levantava UnicodeEncodeError AQUI, e a mensagem não saía (N-12). O texto
+        # da mensagem vem do LLM e pode trazer emoji: o log nunca derruba o envio.
+        print(f"[DUNNING] {state['channel'].upper()} -> {state['customer_id']}: "
+              f"{_cabe_na_saida(state['message'][:90])}")
         return {**state, "sent": True}
 
     def decisoes_da_campanha(self, tenant_id, customer_id, result: dict) -> list[dict]:

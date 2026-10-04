@@ -234,7 +234,7 @@ class AnomalyDetector:
         X_train_s = self.scaler.transform(X_train).astype(np.float32)
         X_val_s = self.scaler.transform(X_val).astype(np.float32)
 
-        print(f"[ANOMALY] Treinando autoencoder ({len(self.features)}→{bottleneck}→"
+        print(f"[ANOMALY] Treinando autoencoder ({len(self.features)}->{bottleneck}->"
               f"{len(self.features)}) em {len(X_train)} clientes saudáveis...")
 
         self.model = BehaviorAutoencoder(

@@ -453,13 +453,21 @@ def _custo_previsto_do_ciclo(state: AgentState) -> float:
     return round(custo, 4)
 
 
+# O desconto por anomalia. Quando o detector marca a cobrança como fora do
+# padrão do cliente, a pontuação e a probabilidade do diagnóstico são
+# multiplicadas por `FATOR_COM_ANOMALIA`, e o retorno esperado é recalculado. O
+# percentual é o que a explicação do Art. 20 e a tela dizem ("reduzida em 30%").
+FATOR_COM_ANOMALIA = 0.7
+DESCONTO_POR_ANOMALIA_PCT = 30
+
+
 async def check_anomaly(state: AgentState) -> AgentState:
     result = await _detector.check(state["customer_id"], state["payment_event"])
 
     # Anomalia ajusta o score de recuperação para baixo
     if result["is_anomaly"]:
-        adjusted_score = max(0, int(state["recovery_score"] * 0.7))
-        adjusted_p = state.get("p_recovery", 0.5) * 0.7
+        adjusted_score = max(0, int(state["recovery_score"] * FATOR_COM_ANOMALIA))
+        adjusted_p = state.get("p_recovery", 0.5) * FATOR_COM_ANOMALIA
     else:
         adjusted_score = state["recovery_score"]
         adjusted_p = state.get("p_recovery", 0.5)
@@ -484,6 +492,10 @@ async def check_anomaly(state: AgentState) -> AgentState:
         "p_recovery": round(adjusted_p, 4),
         "eprofit": new_eprofit,
         "recommend_action": bool(new_eprofit > 0),
+        # O que o diagnóstico tinha dito, guardado só quando houve desconto: é
+        # o "de quanto" da explicação (`decide_recovery` grava na trilha).
+        "recovery_score_sem_desconto": state["recovery_score"] if result["is_anomaly"] else None,
+        "eprofit_sem_desconto": state.get("eprofit") if result["is_anomaly"] else None,
     }
 
 
@@ -603,7 +615,10 @@ async def decide_recovery(state: AgentState) -> AgentState:
         raciocinio.append(
             f"Pensamento: {motivo}. Contatar com mensagem personalizada; "
             f"urgência {urgencia} pelo score/anomalia.")
-        raciocinio.append("Decisão: mensagem de pagamento (Pix Automático → boleto).")
+        # "->" em ASCII, e não a seta desenhada (U+2192): este texto vai para o
+        # `print` logo abaixo, e com a saída redirecionada para arquivo no Windows
+        # (cp1252) a seta derrubava a requisição com UnicodeEncodeError (N-12).
+        raciocinio.append("Decisão: mensagem de pagamento (Pix Automático -> boleto).")
         estrategia = "mensagem_pagamento"
 
     print(f"[AGENT] Estratégia (Módulo 5): {estrategia}")
@@ -622,6 +637,18 @@ async def decide_recovery(state: AgentState) -> AgentState:
             decidido_em=momento.isoformat())
 
     # Trilha do Art. 20: é regra (ReAct sobre causa + janela), sem modelo.
+    saida = {"estrategia": estrategia, "regra": "decide_recovery",
+             "motivo_da_regra": raciocinio[1].removeprefix("Pensamento: ")}
+    # Houve desconto por anomalia: a pontuação e o retorno que entram aqui já são
+    # os reduzidos. A saída guarda o percentual e os valores de ANTES, para a
+    # explicação dizer de quanto para quanto (as chaves a mais não mudam o
+    # schema da trilha: `saida` é um JSON).
+    antes = state.get("recovery_score_sem_desconto")
+    if anomala and antes is not None:
+        saida[trilha.CHAVE_DESCONTO_PCT] = DESCONTO_POR_ANOMALIA_PCT
+        saida[trilha.CHAVE_PONTUACAO_ANTES] = trilha._num(antes)
+        if state.get("eprofit_sem_desconto") is not None:
+            saida[trilha.CHAVE_RETORNO_ANTES] = trilha._num(state["eprofit_sem_desconto"])
     dec = trilha.decisao(
         state.get("tenant_id"), state.get("customer_id"), trilha.DOMINIO_INVOLUNTARIO,
         trilha.TIPO_RETENTATIVA, trilha.MODELO_REGRA,
@@ -629,8 +656,7 @@ async def decide_recovery(state: AgentState) -> AgentState:
                   "eprofit": trilha._num(eprofit), "is_anomalous": bool(anomala),
                   "payment_method": metodo, "tentativas_usadas": usadas,
                   "limite_tentativas": limite},
-        saida={"estrategia": estrategia, "regra": "decide_recovery",
-               "motivo_da_regra": raciocinio[1].removeprefix("Pensamento: ")})
+        saida=saida)
     return trilha.anotar_decisao(
         {**state, "estrategia": estrategia, "raciocinio": raciocinio,
          "retry_count": usadas, "pix_janela_ate": prazo_vigente}, dec)

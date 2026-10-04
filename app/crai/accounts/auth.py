@@ -26,16 +26,30 @@ pode virar "sem papel" em silêncio. `exigir_papel` é chamada DENTRO da rota
 autenticadas pelo nome da dependency (`get_conta`/`get_tenant_id`). O papel
 vale até o token expirar; um membro rebaixado continua com o papel antigo até
 o próximo login (o backend não consulta `membros_empresa`).
+
+O PLANO (Rodada 2). A claim `plano` (`essencial` ou `premium`) vem em
+`get_conta`. Ausente ou fora do vocabulário vale `essencial`: sem a claim, a
+empresa fica com o plano que dá menos. `exigir_plano_premium` responde 403
+`plano_sem_api`; hoje só GERAR chave de API o exige (listar e revogar valem em
+qualquer plano). O login real só terá a claim na Etapa 5.
+
+A CHAVE DE API (Rodada 2). `get_tenant_id` aceita, além do token de login, a
+chave `crai_live_...` da empresa (`chaves_api.py`), e SÓ nas rotas de
+`chaves_api.ROTAS_COM_CHAVE` — as quatro da API de clientes. Em qualquer outra
+rota, um `Authorization` com cara de chave recebe 401 sem que a chave seja
+consultada: a resposta é a mesma para chave válida, revogada ou inventada, e
+nenhuma outra rota serve de teste para saber se uma chave existe. A chave
+nunca chega ao validador de JWT nem ao log.
 """
 
 import logging
 import re
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from ..churn_voluntary.offer_bandit import TENANT_PADRAO
-from . import supabase_auth
+from . import chaves_api, supabase_auth
 from .supabase_auth import ConfiguracaoAusente, TokenInvalido
 
 logger = logging.getLogger(__name__)
@@ -46,6 +60,9 @@ logger = logging.getLogger(__name__)
 _TENANT_VALIDO = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 PAPEIS = ("owner", "admin", "membro")
+PLANO_ESSENCIAL = "essencial"
+PLANO_PREMIUM = "premium"
+PLANOS = (PLANO_ESSENCIAL, PLANO_PREMIUM)
 
 
 def _401(motivo: str, mensagem: str) -> HTTPException:
@@ -76,6 +93,13 @@ async def get_conta(authorization: Optional[str] = Header(default=None)) -> dict
     atalho para quem só precisa do tenant.
     """
     token = _token_do_header(authorization)
+    if chaves_api.parece_chave(token):
+        # Antes de qualquer validação, e sem consultar a chave (K8): a resposta
+        # não diz se ela existe.
+        raise _401("chave_nao_vale_nesta_rota",
+                   "a chave de API só autentica as rotas da API de clientes "
+                   "(POST /clientes, POST /clientes/lote, PATCH /clientes/{id} e "
+                   "DELETE /clientes/{id}); esta rota exige o token de login")
     try:
         claims = supabase_auth.validar_token(token)
         tenant = supabase_auth.tenant_das_claims(claims)
@@ -105,12 +129,14 @@ async def get_conta(authorization: Optional[str] = Header(default=None)) -> dict
     if papel is not None and (not isinstance(papel, str) or papel not in PAPEIS):
         raise _401("papel_invalido",
                    f"claim `papel` fora do vocabulário: esperado um de {', '.join(PAPEIS)}")
+    plano = claims.get("plano")
     email = claims.get("email")
     return {
         "tenant_id": tenant,
         "email": email.strip() if isinstance(email, str) and email.strip() else None,
         "sub": claims.get("sub"),
         "papel": papel,
+        "plano": plano if isinstance(plano, str) and plano in PLANOS else PLANO_ESSENCIAL,
     }
 
 
@@ -125,5 +151,45 @@ def exigir_papel(conta: dict, *aceitos: str) -> str:
     return papel
 
 
-async def get_tenant_id(authorization: Optional[str] = Header(default=None)) -> str:
+def exigir_plano_premium(conta: dict) -> None:
+    """403 `plano_sem_api` se a empresa da conta não é do plano premium (K3:
+    gerar chave de API)."""
+    if conta.get("plano") != PLANO_PREMIUM:
+        raise HTTPException(status_code=403, detail={
+            "motivo": "plano_sem_api",
+            "detalhe": "gerar chave de API faz parte do plano Premium"})
+
+
+def _rota_aceita_chave(request: Optional[Request]) -> bool:
+    """A rota desta requisição está em `chaves_api.ROTAS_COM_CHAVE`? Sem rota
+    resolvida, não: na dúvida a chave não vale."""
+    if request is None:
+        return False
+    caminho = getattr(request.scope.get("route"), "path", None)
+    return (request.method.upper(), caminho) in chaves_api.ROTAS_COM_CHAVE
+
+
+def _tenant_da_chave(chave: str) -> str:
+    try:
+        return chaves_api.autenticar(chave)
+    except chaves_api.ChaveInvalida:
+        # K6: um corpo só para inexistente, malformada e revogada.
+        raise _401("chave_invalida", "chave de API inválida ou revogada") from None
+    except chaves_api.LimiteDeUso as e:
+        raise HTTPException(
+            status_code=429,
+            detail={"motivo": "limite_de_uso",
+                    "detalhe": f"limite de {chaves_api.limite_por_minuto()} requisições por "
+                               f"minuto desta chave atingido; tente de novo em {e.espera} s"},
+            headers={"Retry-After": str(e.espera)}) from None
+
+
+async def get_tenant_id(request: Request = None,
+                        authorization: Optional[str] = Header(default=None)) -> str:
+    """O tenant de quem chama: do token de login, em toda rota; ou da chave de
+    API da empresa, só nas rotas de `chaves_api.ROTAS_COM_CHAVE`."""
+    if _rota_aceita_chave(request):
+        token = _token_do_header(authorization)
+        if chaves_api.parece_chave(token):
+            return _tenant_da_chave(token)
     return (await get_conta(authorization))["tenant_id"]

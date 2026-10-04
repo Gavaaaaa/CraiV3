@@ -82,6 +82,7 @@ from . import ciclos as ciclos_api
 from . import clientes as clientes_api
 from . import configuracao as configuracao_api
 from . import dev_token
+from . import integracao as integracao_api
 from . import relogio
 from . import titular as titular_api
 from ..security.webhook_verification import (
@@ -1027,7 +1028,8 @@ async def health():
 
 # ── Self-service (empresa autenticada via Supabase) ───────────────────────
 # Estas rotas são o caminho (2) do onboarding: a empresa anexa a base que já
-# tem. Autenticação é o JWT do Supabase (`accounts.get_tenant_id`), NÃO a
+# tem. Autenticação é o JWT do Supabase (`accounts.get_tenant_id`; nas quatro
+# rotas de `api/clientes.py`, também a chave de API da empresa), NÃO a
 # assinatura HMAC dos webhooks — são contratos diferentes para chamadores
 # diferentes (um frontend logado vs. um PSP/Segment assinando payload).
 
@@ -1041,6 +1043,9 @@ app.include_router(titular_api.router)
 app.include_router(ciclos_api.router)
 # A configuração da empresa (Etapa 2, Bloco 4) — `api/configuracao.py`.
 app.include_router(configuracao_api.router)
+# As chaves de API da empresa (Rodada 2) — `api/integracao.py`. A chave em si
+# autentica só as quatro rotas de `api/clientes.py` (`accounts/chaves_api.py`).
+app.include_router(integracao_api.router)
 # O token de DESENVOLVIMENTO do dashboard: a rota só é montada com
 # `ENV=development`, e a chave que assina nasce aqui, em memória — ver
 # `api/dev_token.py`. Fora de `development`, `/dev/token` não existe.

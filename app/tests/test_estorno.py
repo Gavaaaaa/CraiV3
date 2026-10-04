@@ -494,7 +494,8 @@ class TestIsolamentoEOrigem:
         assert autenticadas_que_escrevem == {
             "/clientes", "/clientes/lote", "/clientes/{customer_id_externo}", "/clientes/importar",
             "/insights/enviar", "/ciclos/{ciclo_id}/mensagens/escolher",
-            "/ciclos/{ciclo_id}/mensagens/regerar", "/configuracao"}
+            "/ciclos/{ciclo_id}/mensagens/regerar", "/configuracao",
+            "/integracao/chaves", "/integracao/chaves/{chave_id}"}
 
         ciclo = _recuperar(cliente, relogio, "RN_a_mao")
         dono = cliente.projeto.bearer(A, papel="owner")

@@ -329,8 +329,10 @@ class TestWebhooksIntocados:
         # ciclos da empresa do token, e só dela.
         # `/configuracao` entrou na Etapa 2 (Bloco 4): a empresa lê e grava a
         # própria configuração, e só a dela.
+        # `/integracao` entrou na Rodada 2: a empresa lista, gera e revoga as
+        # próprias chaves de API, com o token de login.
         SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos",
-                        "/configuracao")
+                        "/configuracao", "/integracao")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")

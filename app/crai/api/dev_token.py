@@ -1,6 +1,8 @@
 """crai/api/dev_token.py — o token de DESENVOLVIMENTO do dashboard (Etapa 2, Bloco 4).
 
-    POST /dev/token   {"papel": "owner" | "admin" | "membro"}   (padrão: owner)
+    POST /dev/token   {"papel": "owner" | "admin" | "membro",          (padrão: owner)
+                       "plano": "premium" | "essencial",              (padrão: premium)
+                       "empresa": "demo_dashboard" | "demo_testes"}   (padrão: demo_dashboard)
 
 POR QUE EXISTE. O dashboard novo (Etapa 4) fala com as rotas autenticadas do
 self-service, e o login de verdade mora no Supabase do site — fora deste
@@ -20,8 +22,17 @@ AS TRÊS TRAVAS, cada uma suficiente sozinha:
      `development`, qualquer token cujo `kid` comece por `crai-dev-` — antes de
      consultar chave alguma. Mesmo que a chave vazasse, produção não a aceita.
 
-O QUE O TOKEN CARREGA: `tenant_id = demo_dashboard`, `papel`, `aud`, `iss`,
-`sub` genérico, `exp` (1 h). Nenhum e-mail, nenhum nome: não há pessoa aqui.
+O QUE O TOKEN CARREGA: `tenant_id = demo_dashboard`, `papel`, `plano`, `aud`,
+`iss`, `sub` genérico, `exp` (1 h). Nenhum e-mail, nenhum nome: não há pessoa
+aqui. O `plano` (Rodada 2) é `premium` por padrão, para a aba da API funcionar;
+`essencial` serve para testar o bloqueio. O login real só terá essa claim na
+Etapa 5; até lá, token sem `plano` é tratado como `essencial` (`accounts/auth`).
+
+AS DUAS EMPRESAS FICTÍCIAS (Rodada 2, ajustes). `demo_dashboard` é a da
+demonstração: é a que a pessoa vê ao abrir o dashboard. `demo_testes` existe só
+para os testes ao vivo do dashboard, que geram chaves, escolhem mensagens e
+gravam configuração: com uma empresa própria, eles não sujam a demonstração. A
+lista é fechada: não dá para pedir token de outra empresa.
 
 Este módulo NÃO importa de `app.py` nem de `accounts` (é `supabase_auth` que o
 consulta, por import tardio).
@@ -42,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 ENV_DESENVOLVIMENTO = "development"
 TENANT_DEMO = "demo_dashboard"
+TENANT_TESTES = "demo_testes"
+EMPRESAS = (TENANT_DEMO, TENANT_TESTES)
 PREFIXO_KID = "crai-dev-"
 EMISSOR = "crai-dev"
 ALGORITMO = "ES256"
@@ -49,6 +62,8 @@ AUDIENCIA = "authenticated"          # a mesma dos tokens do Supabase
 VALIDADE_SEGUNDOS = 3600
 PAPEIS = ("owner", "admin", "membro")
 PAPEL_PADRAO = "owner"
+PLANOS = ("premium", "essencial")
+PLANO_PADRAO = "premium"
 
 router = APIRouter(tags=["desenvolvimento"])
 
@@ -100,27 +115,34 @@ def chave_publica(kid: str):
     return par[0].public_key()
 
 
-def emitir(papel: str = PAPEL_PADRAO) -> dict:
-    """Um token da empresa fictícia com o papel dado. Fora de `development`
-    levanta `RuntimeError`: não existe token de desenvolvimento em produção."""
+def emitir(papel: str = PAPEL_PADRAO, plano: str = PLANO_PADRAO,
+           empresa: str = TENANT_DEMO) -> dict:
+    """Um token de uma das empresas fictícias (a da demonstração, por padrão),
+    com o papel e o plano dados. Fora de `development` levanta `RuntimeError`:
+    não existe token de desenvolvimento em produção."""
+    if empresa not in EMPRESAS:
+        raise ValueError(f"empresa desconhecida: {empresa!r}")
     if papel not in PAPEIS:
         raise ValueError(f"papel desconhecido: {papel!r}")
+    if plano not in PLANOS:
+        raise ValueError(f"plano desconhecido: {plano!r}")
     if not preparar():
         raise RuntimeError("token de desenvolvimento só existe com ENV=development")
     with _trava:
         privada, kid = _par
     agora = int(time.time())
     claims = {"iss": EMISSOR, "sub": f"dev-{papel}", "aud": AUDIENCIA, "role": "authenticated",
-              "tenant_id": TENANT_DEMO, "papel": papel,
+              "tenant_id": empresa, "papel": papel, "plano": plano,
               "iat": agora, "exp": agora + VALIDADE_SEGUNDOS}
     token = jwt.encode(claims, privada, algorithm=ALGORITMO, headers={"kid": kid})
-    return {"token": token, "tipo": "Bearer", "tenant_id": TENANT_DEMO, "papel": papel,
-            "expira_em_segundos": VALIDADE_SEGUNDOS}
+    return {"token": token, "tipo": "Bearer", "tenant_id": empresa, "papel": papel,
+            "plano": plano, "expira_em_segundos": VALIDADE_SEGUNDOS}
 
 
 @router.post("/dev/token")
 async def token_de_desenvolvimento(corpo: Optional[dict] = Body(default=None)) -> dict:
-    """Token da empresa fictícia `demo_dashboard`, com o papel pedido. Só
+    """Token de uma empresa fictícia (`demo_dashboard`, ou `demo_testes` para os
+    testes ao vivo), com o papel e o plano pedidos. Só
     responde com `ENV=development`; fora disso, 404 — mesmo que a rota tenha
     sido montada (defesa em profundidade: a env pode mudar depois da subida)."""
     if not ambiente_de_desenvolvimento():
@@ -129,17 +151,27 @@ async def token_de_desenvolvimento(corpo: Optional[dict] = Body(default=None)) -
         raise HTTPException(status_code=422, detail={
             "motivo": "corpo_invalido", "detalhe": "esperado um objeto, ou nada", "campo": "corpo"})
     corpo = corpo or {}
-    extras = sorted(set(corpo) - {"papel"})
+    extras = sorted(set(corpo) - {"papel", "plano", "empresa"})
     if extras:
         raise HTTPException(status_code=422, detail={
-            "motivo": "campo_desconhecido", "detalhe": "o corpo aceita só `papel`",
+            "motivo": "campo_desconhecido", "detalhe": "o corpo aceita só `papel`, `plano` e `empresa`",
             "campo": extras[0]})
     papel = corpo.get("papel", PAPEL_PADRAO)
     if papel not in PAPEIS:
         raise HTTPException(status_code=422, detail={
             "motivo": "papel_invalido", "detalhe": f"esperado um de {', '.join(PAPEIS)}",
             "campo": "papel"})
-    return emitir(papel)
+    plano = corpo.get("plano", PLANO_PADRAO)
+    if plano not in PLANOS:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "plano_invalido", "detalhe": f"esperado um de {', '.join(PLANOS)}",
+            "campo": "plano"})
+    empresa = corpo.get("empresa", TENANT_DEMO)
+    if not isinstance(empresa, str) or empresa not in EMPRESAS:
+        raise HTTPException(status_code=422, detail={
+            "motivo": "empresa_invalida", "detalhe": f"esperado um de {', '.join(EMPRESAS)}",
+            "campo": "empresa"})
+    return emitir(papel, plano, empresa)
 
 
 def montar(aplicacao) -> bool:

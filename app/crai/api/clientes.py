@@ -11,7 +11,9 @@ mudam lá, sem subir arquivo.
     DELETE /clientes/{id}      CANCELOU — soft delete; a linha fica (ver a rota)
 
 O QUE É REUSADO, e não reescrito:
-  autenticação   `accounts.get_tenant_id` — o tenant vem do JWT, nunca do corpo
+  autenticação   `accounts.get_tenant_id` — o tenant vem do JWT ou, desde a
+                 Rodada 2, da chave de API da empresa (`accounts/chaves_api.py`,
+                 que só vale nestas quatro rotas); nunca do corpo
   idempotência   `api/idempotencia.CLIENTES_API` — header `Idempotency-Key`
   validação      `importacao.validar_linha` / `validar_linhas` — o MESMO crivo
                  da planilha. Dois vocabulários para a mesma entidade divergem

@@ -541,7 +541,10 @@ expurgo, CORS e token de desenvolvimento: `docs/interno/RELATORIO_ETAPA2_BLOCO*.
    existe e o token é recusado antes de qualquer consulta de chave (há teste). O risco que
    sobra é operacional: **subir um serviço exposto com `ENV=development`**. A chave é
    gerada em memória a cada subida; o token morre no reinício e vale 1 h. `ENV=development`
-   também abre os `/simulate/*` e o CORS para `http://localhost:5173`.
+   também abre os `/simulate/*` e o CORS para `http://localhost:5173`. Desde 04/10/2026 a
+   rota aceita uma segunda empresa fictícia, `demo_testes`, usada só pelos testes ao vivo do
+   dashboard (para não sujar a demonstração); a lista é fechada nessas duas, e não dá para
+   pedir token de outra empresa.
 
 6. **CORS é lista explícita.** `CRAI_CORS_ORIGENS` vem vazia: sem configurar, nenhum
    navegador de outra origem lê as rotas. Não há credencial por cookie. O CORS **não é
@@ -646,3 +649,68 @@ dinheiro de uma cobrança recuperada volta ao pagador dentro do prazo da empresa
 
 12. **O voluntário não tem estorno.** A fee do cliente "mantido" ainda não é calculada no
     backend (Etapa 3).
+
+### A chave de API: o que ela declara (04/10/2026)
+
+Declarado ao fim da Fase 1 da Rodada 2 (`docs/interno/RELATORIO_RODADA_2.md`). A empresa
+gera uma chave `crai_live_...` no dashboard, e o sistema dela passa a chamar as quatro rotas
+da API de clientes sem ninguém logado (`docs/CONTRATO_CLIENTES_API.md`, seção 0.1b).
+
+1. **Um tipo de chave só.** Toda chave é de produção. **Não existe chave de teste** nem
+   ambiente de teste: quem quer experimentar a integração usa uma empresa de teste.
+
+2. **Sem escopos.** A chave autentica as quatro rotas (`POST /clientes`,
+   `POST /clientes/lote`, `PATCH /clientes/{id}`, `DELETE /clientes/{id}`) por inteiro. Não
+   dá para gerar uma chave que só cadastre e não cancele. Quem tem a chave altera e cancela
+   qualquer cliente da empresa.
+
+3. **A chave não lê.** Não há rota de leitura da base por chave: `GET /insights` e as
+   outras leituras continuam exigindo o token de login. A resposta das quatro rotas devolve
+   o cliente gravado, com os campos de contato.
+
+4. **O limite de uso é por processo.** `CRAI_API_LIMITE_POR_MINUTO` (padrão 120) conta em
+   janela deslizante de 60 segundos, **na memória de cada worker**: reiniciar o serviço zera
+   a contagem, e com N workers o teto efetivo é até N vezes o configurado. É por chave, e
+   não por empresa: cinco chaves, cinco contagens. Um lote de 50.000 clientes conta como uma
+   requisição. Valor ausente, ilegível ou menor que 1 na variável vale o padrão, sem aviso.
+
+5. **Chave inválida não tem limite.** O 429 é da chave que autentica. Tentativas com chave
+   inventada recebem 401 quantas vezes vierem; não há bloqueio por origem nem por
+   quantidade de erros. Com 256 bits aleatórios, acertar uma chave por tentativa não é um
+   risco prático; o custo é o de responder aos 401.
+
+6. **O plano vem da claim `plano` do token, e o login real ainda não a tem.** O token do
+   Supabase só passa a trazer `plano` na **Etapa 5**, junto com a `tenant_id` emitida pelo
+   login real. Até lá, token sem a claim é tratado como `essencial`, e **em produção nenhuma
+   empresa consegue gerar chave**: `POST /integracao/chaves` responde 403
+   `plano_sem_api`. Hoje a chave só é gerada com o token de desenvolvimento
+   (`POST /dev/token`, que emite `premium` por padrão), isto é, só com `ENV=development`.
+
+7. **O plano é conferido só ao gerar, e não a cada uso da chave.** A chave não carrega
+   plano. Uma empresa que saia do premium **continua com as chaves que já tinha
+   funcionando**, até revogá-las: listar e revogar valem em qualquer plano (revogar, só dono
+   e administrador), justamente para ela conseguir ver e desligar o que tem. O que não
+   existe é o desligamento automático das chaves na troca de plano.
+
+8. **O papel de quem criou vale no momento da criação.** A chave criada por um
+   administrador continua valendo depois que ele deixa a empresa ou é rebaixado. O banco
+   guarda o papel, não a pessoa: não dá para listar as chaves de uma pessoa.
+
+9. **Sem validade e sem rotação automática.** A chave vale até ser revogada. Não há data de
+   expiração nem aviso de chave antiga ou sem uso. O máximo é de cinco chaves ativas por
+   empresa, o que dá folga para a troca (gerar a nova, trocar no sistema, revogar a antiga).
+
+10. **Sem expurgo.** A chave revogada fica na lista para sempre (só hash, nome e datas), e o
+    contador diário de uso não tem prazo de retenção.
+
+11. **O contador de uso é melhor esforço.** Se a gravação de `ultimo_uso_em` falhar (banco
+    ocupado), a requisição é atendida e o erro vai para o log. A revogação não depende
+    dessa escrita: ela é lida do banco a cada requisição, sem cache.
+
+12. **As tabelas moram no SQLite local** do ciclo de cobrança, com a limitação já declarada
+    acima para esse arquivo: instâncias em máquinas diferentes não compartilham as chaves.
+
+13. **A chave só é reconhecida pelo prefixo.** Um `Authorization: Bearer` que não começa
+    por `crai_live_` é tratado como token de login e recebe os erros de token. Numa rota
+    fora das quatro, qualquer texto com o prefixo recebe 401 `chave_nao_vale_nesta_rota` sem
+    que a chave seja consultada.

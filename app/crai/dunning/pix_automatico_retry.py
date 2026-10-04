@@ -352,7 +352,7 @@ class PixAutomaticoRetryPolicy:
             if anterior is not None and (t.quando - anterior) < timedelta(days=1):
                 raise PixRetryPolicyViolation(
                     f"Tentativas {t.numero - 1} e {t.numero} a menos de 1 dia "
-                    f"de intervalo ({anterior.strftime('%d/%m %H:%M')} → "
+                    f"de intervalo ({anterior.strftime('%d/%m %H:%M')} -> "
                     f"{t.quando.strftime('%d/%m %H:%M')})."
                 )
             anterior = t.quando

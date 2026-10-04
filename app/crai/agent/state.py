@@ -84,6 +84,11 @@ class AgentState(TypedDict):
     is_anomalous:         Optional[bool]
     reconstruction_error: Optional[float]
     anomaly_explanation:  Optional[list]           # Top features por erro de reconstrução
+    # O que o diagnóstico tinha dito ANTES do desconto por anomalia (None sem
+    # desconto). Vai para a trilha do Art. 20, para a explicação dizer de
+    # quanto para quanto a pontuação e o retorno esperado foram reduzidos.
+    recovery_score_sem_desconto: Optional[int]
+    eprofit_sem_desconto:        Optional[float]
 
     # Liquidez (LSTM + Prophet)
     optimal_retry_at: Optional[datetime]

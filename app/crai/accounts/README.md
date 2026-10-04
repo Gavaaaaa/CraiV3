@@ -1,8 +1,11 @@
 # `crai/accounts` — quem é a empresa que está chamando a API
 
-A CRAI **não** cadastra empresa, não guarda senha e não emite API key. Tudo
-isso mora no **Supabase** (Auth + Postgres): o frontend faz login direto no
-Supabase, recebe um JWT, e manda esse JWT em toda chamada à CRAI:
+A CRAI **não** cadastra empresa e não guarda senha. Isso mora no **Supabase**
+(Auth + Postgres): o frontend faz login direto no Supabase, recebe um JWT, e
+manda esse JWT em toda chamada à CRAI. Desde a Rodada 2 a CRAI emite a **chave
+de API** da empresa, um segundo caminho que vale só nas quatro rotas da API de
+clientes (`chaves_api.py`; contrato em `docs/CONTRATO_CLIENTES_API.md`, seção
+0.1b). O que segue é o caminho do token de login:
 
 ```
 Authorization: Bearer <access_token do Supabase>
