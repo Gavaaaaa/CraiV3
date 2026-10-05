@@ -230,7 +230,10 @@ class TestSendOffer:
 
         assert len(chamadas) == 1
         assert chamadas[0]["to"] == TELEFONE
-        assert chamadas[0]["message"] == "mensagem de teste"
+        # Rodada 3, Fase 6: toda mensagem que sai por WhatsApp leva a linha de saída.
+        assert chamadas[0]["message"] == (
+            "mensagem de teste\nPara não receber mais mensagens, responda SAIR.")
+        assert r["message"] == chamadas[0]["message"]
         assert r["offer_sent"] is True
 
     @pytest.mark.asyncio

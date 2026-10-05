@@ -50,6 +50,16 @@ ROTA_CICLOS = "GET /ciclos"
 ROTA_CHAVES_LISTAR = "GET /integracao/chaves"
 ROTA_CHAVES_CRIAR = "POST /integracao/chaves"
 ROTA_CHAVES_REVOGAR = "DELETE /integracao/chaves/{chave_id}"
+# Rodada 3: a lista do voluntário lê o nome do cliente final na base.
+ROTA_CLIENTES_RECENTES = "GET /clientes/recentes"
+# Rodada 3, Fase 2: a atividade recente traz o nome do cliente; o extrato traz a fee.
+ROTA_ATIVIDADE = "GET /atividade"
+ROTA_EXTRATO = "GET /extrato"
+# Rodada 3, Fase 6: os direitos do titular (art. 18) e o descadastro.
+ROTA_EXPORTAR = "POST /titular/exportar"
+ROTA_ANONIMIZAR = "POST /titular/anonimizar"
+ROTA_NAO_CONTATAR = "POST /clientes/{customer_id_externo}/nao-contatar"
+ROTA_VOLTAR_A_CONTATAR = "DELETE /clientes/{customer_id_externo}/nao-contatar"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS acessos_titular (

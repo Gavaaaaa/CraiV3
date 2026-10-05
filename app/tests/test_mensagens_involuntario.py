@@ -543,6 +543,21 @@ class TestJanelaDeContato:
         _agendador(manha)
         assert len(envios) == 1 and cc.ciclo_por_id(ciclo["id"])["estado"] == cc.MENSAGEM_ENVIADA
 
+    def test_escolhida_fora_da_janela_nao_tem_mais_prazo_de_escolha(self, cliente, relogio, envios,
+                                                                   producao):
+        # Rodada 3, Fase 7: o teste ao vivo do dashboard, rodado depois das 20h,
+        # mostrou o detalhe devolvendo `escolha_ate` de um ciclo já escolhido.
+        rec = "RN_janela_prazo"
+        _base(A, rec, email=EMAIL)
+        ciclo, ultima = _falhas(cliente, relogio, rec)
+        assert _get(cliente, f"/ciclos/{ciclo['id']}").json()["escolha_ate"] is not None
+        relogio(ultima.replace(hour=22, minute=0))
+        r = _escolher(cliente, ciclo["id"], 1, "facilitacao")
+        assert r.json()["enviada"] is False and r.json()["espera"] == "fora_da_janela"
+        detalhe = _get(cliente, f"/ciclos/{ciclo['id']}").json()
+        assert detalhe["ciclo"]["estado"] == cc.AGUARDANDO_ESCOLHA and envios == []
+        assert detalhe["escolhida_por"] == "admin" and detalhe["escolha_ate"] is None
+
     def test_o_prazo_de_8_horas_continua_contando_fora_da_janela(self, cliente, relogio, envios,
                                                                 producao):
         configuracao.gravar(A, {"janela_contato_inicio": "08:00", "janela_contato_fim": "11:00",

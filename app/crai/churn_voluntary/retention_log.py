@@ -66,7 +66,8 @@ mesmo tenant (`hash_anterior`; a primeira aponta para `HASH_GENESE`) e o seu
 próprio (`hash_linha`). Alterar uma linha no meio quebra a cadeia da seguinte
 em diante, e `verificar_cadeia` aponta onde. Não existe função de UPDATE nem
 de DELETE sobre esta tabela — a única exceção é `apagar_trilha_expirada`, a
-retenção, que ainda não é chamada por ninguém (ver `RETENCAO_TRILHA_DIAS`).
+retenção. Desde a Rodada 3 ela é chamada por um lugar só: o expurgo diário do
+relógio (`api/relogio.py::expurgar_trilha`), com o prazo de 5 anos.
 
 SEM BIFURCAÇÃO. Dois gravadores simultâneos do mesmo tenant (dois workers,
 ou o lote junto com o grafo) leriam o mesmo "último hash" e gravariam duas
@@ -115,6 +116,8 @@ import sqlite3
 from enum import Enum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from .. import ambiente
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -196,7 +199,10 @@ def caminho_do_banco() -> Path:
     `bandit_state.json` de perfis de fuzz.
     """
     override = os.getenv("CRAI_RETENTION_DB")
-    return Path(override) if override else DB_PATH
+    # Dentro da simulação do gateway (Rodada 3) o arquivo é o de simulação da
+    # empresa (`crai/ambiente.py`): o ciclo e a decisão de um cliente fictício
+    # nunca entram no dataset nem na trilha de verdade. Fora dela, nada muda.
+    return ambiente.caminho(Path(override) if override else DB_PATH)
 
 
 # Quanto o SQLite espera por uma trava de escrita antes de desistir com
@@ -273,6 +279,14 @@ def _conectar(busy_timeout_ms: int | None = None) -> sqlite3.Connection:
 
 
 def _agora() -> str:
+    # Dentro da simulação do gateway o arquivo é o da simulação, e o instante
+    # é o do relógio simulado da empresa. Fora dela, o relógio de sempre.
+    simulado = ambiente.relogio_simulado()
+    if simulado is not None:
+        # O relógio simulado é hora local sem fuso, no fuso DA INSTALAÇÃO (e não
+        # no da máquina). Import tardio: `api.datas` não importa nada do pacote.
+        from ..api import datas
+        return datas.com_fuso(simulado).astimezone(timezone.utc).isoformat(timespec="seconds")
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -542,6 +556,83 @@ def ultimo_ciclo_por_cliente(tenant_id: str) -> list[dict]:
     except Exception as e:                       # noqa: BLE001
         print(f"[RETENTION-LOG] Falha ao ler último ciclo por cliente: {e}")
         return []
+
+
+def ciclos_do_cliente(tenant_id: str, user_id: str) -> list[dict]:
+    """Os ciclos de retenção DESTE cliente DESTE tenant, do mais antigo ao mais
+    novo. É a parte do voluntário da exportação de um titular (Rodada 3, Fase
+    6). Só leitura, só `ciclos_retencao`. NUNCA levanta."""
+    try:
+        with _conectar() as conn:
+            return [dict(l) for l in conn.execute(
+                "SELECT * FROM ciclos_retencao WHERE tenant_id = ? AND user_id = ? ORDER BY id",
+                (tenant_id or TENANT_PADRAO, user_id)).fetchall()]
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao ler os ciclos do cliente: {e}")
+        return []
+
+
+def ultima_oferta_enviada(tenant_id: str, user_id: str | None = None) -> dict:
+    """{user_id: `registrado_em` da última oferta ENVIADA}, deste tenant; com
+    `user_id`, só a dele. É a leitura do limite de contato (Rodada 3, S5): um
+    cliente final recebe no máximo uma oferta a cada N dias.
+
+    Só leitura, só `ciclos_retencao`, sempre com o filtro de tenant. NUNCA
+    levanta: falha devolve dicionário vazio com log (sem a leitura, o limite
+    não segura ninguém; o log diz)."""
+    try:
+        sql = ("""SELECT user_id, MAX(registrado_em) AS quando FROM ciclos_retencao
+                   WHERE tenant_id = ? AND offer_type IS NOT NULL AND offer_sent = 1""")
+        params: tuple = (tenant_id or TENANT_PADRAO,)
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params += (user_id,)
+        with _conectar() as conn:
+            linhas = conn.execute(sql + " GROUP BY user_id", params).fetchall()
+        return {l["user_id"]: l["quando"] for l in linhas if l["quando"]}
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao ler a última oferta enviada: {e}")
+        return {}
+
+
+def ciclos_com_oferta(tenant_id: str) -> list[dict]:
+    """Os ciclos DESTE tenant em que o sistema escolheu uma oferta, do mais
+    antigo ao mais novo: o que foi oferecido, por onde, e o desfecho se já
+    chegou. Leitura para as rotas do voluntário no dashboard (Rodada 3): a
+    abordagem de cada cliente, as ofertas do mês e o valor mantido.
+
+    Só leitura, só `ciclos_retencao`, sempre com o filtro de tenant. NUNCA
+    levanta: falha devolve lista vazia com log, como o resto do módulo.
+    """
+    try:
+        with _conectar() as conn:
+            linhas = conn.execute(
+                """SELECT id, user_id, registrado_em, event, mrr, billing_profile,
+                          risk_score, criticality, offer_type, channel, offer_sent,
+                          accepted, desfecho_em, origem_desfecho
+                     FROM ciclos_retencao
+                    WHERE tenant_id = ? AND offer_type IS NOT NULL
+                 ORDER BY id""", (tenant_id,)).fetchall()
+            return [dict(l) for l in linhas]
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao ler os ciclos com oferta: {e}")
+        return []
+
+
+def marca_dos_ciclos(tenant_id: str):
+    """(maior id, quantos com desfecho) dos ciclos DESTE tenant: muda a cada
+    ciclo gravado e a cada desfecho registrado. É a metade do SDK na marca que
+    invalida o cache da régua (`insights_unificados`). `None` se a leitura
+    falhar: quem chama não usa o cache."""
+    try:
+        with _conectar() as conn:
+            linha = conn.execute(
+                "SELECT COALESCE(MAX(id), 0), COUNT(accepted) FROM ciclos_retencao "
+                "WHERE tenant_id = ?", (tenant_id,)).fetchone()
+            return int(linha[0]), int(linha[1])
+    except Exception as e:                       # noqa: BLE001
+        print(f"[RETENTION-LOG] Falha ao ler a marca dos ciclos: {e}")
+        return None
 
 
 def estatisticas() -> dict:
@@ -1088,6 +1179,15 @@ def _linha_da_trilha(l) -> dict:
     return d
 
 
+def tenants_da_trilha() -> list:
+    """Os tenants que têm decisão na trilha. Só leitura: é como o relógio sabe
+    de quem ler o prazo de retenção (Rodada 3, Fase 7). LEVANTA se falhar: o
+    expurgo que não consegue listar não pode fingir que não havia nada."""
+    with _conectar() as conn:
+        return [l["tenant_id"] for l in conn.execute(
+            "SELECT DISTINCT tenant_id FROM decisoes_automatizadas ORDER BY tenant_id").fetchall()]
+
+
 def decisoes_do_sujeito(tenant_id: str, sujeito_id: str, limite: int = 50,
                         antes_de: int | None = None) -> list[dict]:
     """As decisões deste sujeito NESTE tenant, mais recentes primeiro.
@@ -1239,8 +1339,9 @@ def apagar_trilha_expirada(agora: datetime | None = None, tenant_id: str | None 
     """RETENÇÃO: apaga as decisões com mais de `prazo_dias` (sem ele,
     `RETENCAO_TRILHA_DIAS`).
 
-    AINDA NÃO É CHAMADA POR NINGUÉM, de propósito: o prazo é decisão do Crai
-    (ver a constante) e precisa ser confirmado antes de existir um agendador.
+    QUEM CHAMA: só o expurgo diário do relógio (`api/relogio.py`), desde a
+    Rodada 3, com o prazo de 5 anos aprovado pelo Crai (há catraca: nenhum
+    outro arquivo a chama). Nunca é chamada sem prazo fora de teste.
     É a ÚNICA operação que remove linha desta tabela, e remove só pela ponta
     antiga — o que sobra continua encadeado (`verificar_cadeia` marca
     `inicio_truncado`). `tenant_id=None` aplica a todos os tenants; com

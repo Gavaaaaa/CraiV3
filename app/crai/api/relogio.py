@@ -10,7 +10,8 @@ parado.
 
 O QUE ELE É. Uma tarefa de fundo, criada no `lifespan` do FastAPI, que chama
 `passagem(agora)` a cada `CRAI_RELOGIO_INTERVALO_S` segundos (padrão 60). Uma
-vez por dia a passagem roda também o EXPURGO (`expurgar`, Bloco 4). A
+vez por dia a passagem roda também o EXPURGO (`expurgar`, Bloco 4) e a
+retenção da trilha do Art. 20 (`expurgar_trilha`, Rodada 3). A
 passagem é a mesma função que o teste e a demo chamam com um `agora` adiantado —
 o relógio só decide QUANDO ela roda. O que roda está em `ciclo_cobranca.varrer`,
 no mesmo lugar para o agendador e para quem o chame à mão.
@@ -44,12 +45,13 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ..churn_voluntary import retention_log
 from ..dunning import ciclo_cobranca, configuracao, retry_scheduler
-from . import registro_acesso
+from . import datas, registro_acesso
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +162,8 @@ def expurgar(agora: datetime) -> dict:
     passagem que a chamou fica marcada como falha no `/health`: retenção que
     falha em silêncio é dado guardado além do prazo sem ninguém saber.
 
-    A RETENÇÃO DA TRILHA DO ART. 20 (5 anos, D-E2-2) NÃO É CHAMADA DAQUI. A
-    função de retenção da trilha (`retention_log`) recebe o prazo em `prazo_dias`,
-    mas a catraca `test_art20_trilha.py::TestRetencaoEBestEffort` afirma que
-    ninguém a chama, e mudar esse teste é decisão do Crai. Ver
-    `docs/LIMITACOES.md`.
+    A RETENÇÃO DA TRILHA DO ART. 20 roda na mesma passagem diária, logo depois
+    deste expurgo, em `expurgar_trilha` (Rodada 3, Fase 7).
     """
     textos = 0
     tenants = ciclo_cobranca.tenants_com_texto_de_mensagem()
@@ -176,6 +175,37 @@ def expurgar(agora: datetime) -> dict:
                 "verificada(s); %d registro(s) de acesso apagado(s).",
                 agora.date().isoformat(), textos, len(tenants), acessos)
     return {"textos_de_mensagem_apagados": textos, "registros_de_acesso_apagados": acessos}
+
+
+# A retenção da trilha do Art. 20: 5 anos, aprovada pelo Crai na Rodada 3. É o
+# MÍNIMO: a empresa que configurou mais (`retencao_trilha_anos`, até 20) tem o
+# prazo dela respeitado; a que configurou menos fica com os 5 anos aprovados.
+RETENCAO_DA_TRILHA_ANOS = 5
+DIAS_POR_ANO = 365
+
+
+def expurgar_trilha(agora: datetime) -> int:
+    """A RETENÇÃO DA TRILHA DO ART. 20 (Rodada 3, Fase 7): apaga as decisões
+    com mais de 5 anos (ou do prazo da empresa, se ele for MAIOR). É o único
+    chamador de `retention_log.apagar_trilha_expirada`, e SEMPRE passa o prazo:
+    sem ele a função usaria a constante antiga dela (2 anos).
+
+    Sai só a ponta antiga; o que fica continua encadeado e verificável
+    (`verificar_cadeia` marca `inicio_truncado`). Nada mais na trilha muda.
+    Devolve quantas linhas saíram, e diz no log. Uma falha LEVANTA, como no
+    resto do expurgo: retenção que falha em silêncio é dado guardado além do
+    prazo sem ninguém saber."""
+    agora_utc = datas.com_fuso(agora).astimezone(timezone.utc)
+    apagadas, tenants = 0, retention_log.tenants_da_trilha()
+    for tenant_id in tenants:
+        anos = configuracao.ler(tenant_id).get("retencao_trilha_anos")
+        if isinstance(anos, bool) or not isinstance(anos, int) or anos < RETENCAO_DA_TRILHA_ANOS:
+            anos = RETENCAO_DA_TRILHA_ANOS
+        apagadas += retention_log.apagar_trilha_expirada(
+            agora_utc, tenant_id, prazo_dias=anos * DIAS_POR_ANO)
+    logger.info("[RETENCAO-TRILHA] %s: %d decisão(ões) da trilha do Art. 20 apagada(s), em %d "
+                "empresa(s) verificada(s).", agora.date().isoformat(), apagadas, len(tenants))
+    return apagadas
 
 
 async def passagem(agora: datetime) -> dict:
@@ -192,6 +222,8 @@ async def passagem(agora: datetime) -> dict:
     hoje = agora.date().isoformat()
     if _estado.get("ultimo_expurgo_em") != hoje:
         resultado["expurgo"] = expurgar(agora)
+        # Rodada 3, Fase 7: a retenção da trilha do Art. 20, no mesmo dia.
+        resultado["expurgo_da_trilha"] = expurgar_trilha(agora)
         _estado["ultimo_expurgo_em"] = hoje
     return resultado
 
@@ -259,9 +291,38 @@ async def desligar() -> None:
     _estado["ligado"] = False
 
 
+def configurar_saida(*fluxos) -> list:
+    """A SAÍDA DO SERVIÇO NUNCA DERRUBA UMA REQUISIÇÃO (Rodada 3, Fase 7).
+
+    O console do Windows, e a saída redirecionada para arquivo, usam cp1252. Um
+    `print` com um caractere que essa codificação não tem (um emoji vindo do
+    redator de mensagens, o nome de um cliente, uma seta) levantava
+    `UnicodeEncodeError` no meio da requisição. Aqui, na subida do serviço, a
+    saída padrão e a de erro passam a TROCAR o caractere por `?` em vez de
+    levantar. A codificação não muda (o terminal continua lendo o que sabe ler);
+    muda só o que acontece com o caractere que ela não tem.
+
+    Sem argumentos, vale para `sys.stdout` e `sys.stderr`. Devolve os fluxos
+    que foram reconfigurados. Nunca levanta: um fluxo que não sabe se
+    reconfigurar (um capturador de teste, por exemplo) fica como está."""
+    feitos = []
+    for fluxo in fluxos or (sys.stdout, sys.stderr):
+        reconfigurar = getattr(fluxo, "reconfigure", None)
+        if reconfigurar is None:
+            continue
+        try:
+            reconfigurar(errors="replace")
+            feitos.append(fluxo)
+        except Exception as e:                    # noqa: BLE001 - a saída não derruba a subida
+            logger.warning("[SAIDA] não foi possível reconfigurar a saída: %r", e)
+    return feitos
+
+
 @asynccontextmanager
 async def ciclo_de_vida(app):
-    """O `lifespan` do FastAPI: liga o relógio na subida, desliga na descida."""
+    """O `lifespan` do FastAPI: na subida, a saída deixa de levantar por
+    caractere e o relógio liga; na descida, o relógio desliga."""
+    configurar_saida()
     ligar()
     try:
         yield

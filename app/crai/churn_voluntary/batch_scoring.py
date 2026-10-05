@@ -403,6 +403,10 @@ def esquecer_calculos_da_regua() -> None:
     _ultimo_calculo_da_regua.clear()
     _referencia_do_score.clear()
     _referencia_do_mrr.clear()
+    # O cache da régua do dashboard (Rodada 3) guarda um resultado deste módulo:
+    # some junto. Import aqui dentro: `insights_unificados` importa este módulo.
+    from . import insights_unificados
+    insights_unificados.esquecer_cache()
 
 
 def ultimo_calculo_da_regua(tenant_id: str):
@@ -751,3 +755,16 @@ def criticidade_do_evento(tenant_id: str | None, risco: float, mrr, dias, uso,
             "posicao_na_base": None if pos is None else round(pos, 4),
             "origem_da_posicao": origem if ref else None,
             "mrr_no_topo": None if pos_mrr is None else mrr_no_topo(pos_mrr)}
+
+
+def criticidade_pela_regua(cliente: dict, regua: dict) -> str:
+    """A criticidade que a RÉGUA DA BASE dá a um cliente, mesmo com o modelo
+    ativo. `pontuar_cliente` deixa o modelo decidir quando ele existe; a
+    comparação régua x modelo do dashboard (Rodada 3) precisa das duas respostas
+    para o mesmo cliente. É a mesma conta do ramo da régua em `pontuar_cliente`:
+    risco pela posição na base e criticidade com o sinal absoluto."""
+    dias, uso = cliente.get("days_since_last"), cliente.get("features_used_30d")
+    if dias is None and uso is None:
+        return CRITICIDADE_SEM_DADO
+    return classify_criticality(risco_por_posicao(dias, uso, regua), cliente.get("mrr"),
+                                dias, uso)

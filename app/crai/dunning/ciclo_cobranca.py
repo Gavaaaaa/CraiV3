@@ -82,6 +82,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from .. import ambiente
 from .pix_automatico_retry import JANELA_DIAS, MAX_TENTATIVAS, fim_da_janela, inicio_da_janela
 
 logger = logging.getLogger(__name__)
@@ -441,9 +442,11 @@ _schema_garantido: set = set()
 # ── Infra ────────────────────────────────────────────────────────────────
 
 def caminho_do_banco() -> Path:
-    """Lido a cada chamada para o teste poder redirecionar via env."""
+    """Lido a cada chamada para o teste poder redirecionar via env. Dentro da
+    simulação do gateway (Rodada 3), é o arquivo de simulação da empresa
+    (`crai/ambiente.py`): o ciclo real e o simulado nunca dividem arquivo."""
     override = os.getenv(ENV_CAMINHO)
-    return Path(override) if override else DB_PATH
+    return ambiente.caminho(Path(override) if override else DB_PATH)
 
 
 def _agora_texto(agora: Optional[datetime] = None) -> str:
@@ -1889,6 +1892,44 @@ def apagar_texto_expirado(agora: datetime, tenant_id: Optional[str], dias: int) 
         conn.close()
 
 
+# ── Direitos do titular (Rodada 3, Fase 6) ───────────────────────────────
+
+def ciclos_da_recorrencia(tenant_id: str, id_recorrencia: str) -> list[dict]:
+    """Todos os ciclos DESTE tenant desta recorrência, do mais antigo ao mais
+    novo. Só leitura; é a parte do involuntário da exportação de um titular."""
+    if not id_recorrencia:
+        return []
+    conn = _conectar()
+    try:
+        return [dict(l) for l in conn.execute(
+            "SELECT * FROM ciclos_cobranca WHERE tenant_id IS ? AND id_recorrencia = ? "
+            "ORDER BY id", (tenant_id, str(id_recorrencia)))]
+    finally:
+        conn.close()
+
+
+def apagar_texto_da_recorrencia(tenant_id: str, id_recorrencia: str, agora: datetime) -> int:
+    """ANONIMIZAÇÃO (art. 18): apaga o TEXTO de todas as mensagens dos ciclos
+    desta recorrência, com ou sem desfecho. A linha fica (abordagem, canal,
+    datas), como em `apagar_texto_expirado`: é o que as métricas agregadas
+    usam. Idempotente. Devolve quantas linhas foram tocadas. Levanta se falhar."""
+    if not id_recorrencia:
+        return 0
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        tocadas = conn.execute(
+            """UPDATE mensagens_ciclo SET texto = NULL, texto_apagado_em = ?
+                WHERE texto_apagado_em IS NULL
+                  AND ciclo_id IN (SELECT c.id FROM ciclos_cobranca c
+                                    WHERE c.tenant_id IS ? AND c.id_recorrencia = ?)""",
+            (_iso(agora), tenant_id, str(id_recorrencia))).rowcount
+        conn.commit()
+        return int(tocadas)
+    finally:
+        conn.close()
+
+
 # ── Estorno da fee (Etapa 2, Bloco 5) ────────────────────────────────────
 # A CRAI cobra fee do que recupera. Se o dinheiro recuperado VOLTA ao pagador
 # dentro do prazo (o cliente final pede a devolução do Pix), a recuperação não
@@ -2380,3 +2421,124 @@ def _texto(valor) -> Optional[str]:
         texto = str(valor)
         return texto[:128] if texto else None
     return None
+
+
+# ── Leituras da visão geral do dashboard (Rodada 3, Fase 2) ──────────────
+#
+# Só leitura, sempre com o filtro de tenant, uma consulta por lista (sem uma
+# consulta por ciclo). As datas são as do ciclo: hora local sem fuso.
+
+def contar_ativos(tenant_id: str) -> int:
+    """Quantos ciclos DESTE tenant estão abertos agora (em análise ou em processo)."""
+    conn = _conectar()
+    try:
+        linha = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ciclos_cobranca WHERE tenant_id = ? AND estado IN "
+            f"({', '.join('?' * len(ESTADOS_ABERTOS))})",
+            (tenant_id, *sorted(ESTADOS_ABERTOS))).fetchone()
+        return int(linha["n"])
+    finally:
+        conn.close()
+
+
+_SQL_TENTATIVA_PAGA = ("(SELECT MIN(t.numero) FROM tentativas_cobranca t "
+                       f"WHERE t.ciclo_id = c.id AND t.resultado = {PAGA!r})")
+_SQL_CANAL_DA_MENSAGEM = ("(SELECT m.canal FROM mensagens_ciclo m WHERE m.ciclo_id = c.id "
+                          "AND m.enviada_em IS NOT NULL ORDER BY m.enviada_em DESC, m.id DESC "
+                          "LIMIT 1)")
+
+
+def desfechos_com_caminho(tenant_id: str, inicio: datetime, fim: datetime) -> list[dict]:
+    """Os ciclos DESTE tenant com desfecho em [inicio, fim), como
+    `ciclos_com_desfecho`, e mais o CAMINHO de cada um: a causa, o `status` da
+    tela, a tentativa que foi paga (`tentativa_paga`, ou None), o canal da
+    mensagem enviada (`canal_da_mensagem`, ou None) e os campos do estorno."""
+    conn = _conectar()
+    try:
+        linhas = conn.execute(
+            f"""SELECT c.id, c.id_recorrencia, c.estado, c.valor, c.fee, c.causa_original,
+                       c.valor_estornado, c.fee_estornada, c.mensagem_confirmada_em,
+                       COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) AS desfecho_em,
+                       {_sql_status()} AS status,
+                       {_SQL_TENTATIVA_PAGA} AS tentativa_paga,
+                       {_SQL_CANAL_DA_MENSAGEM} AS canal_da_mensagem
+                  FROM ciclos_cobranca c
+                 WHERE c.tenant_id = ? AND c.estado IN (?, ?, ?)
+                   AND COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) >= ?
+                   AND COALESCE(c.recuperado_em, c.perdido_em, c.descartado_em) < ?
+              ORDER BY desfecho_em, c.id""",
+            (tenant_id, RECUPERADO, PERDIDO, DESCARTADO, _iso(inicio), _iso(fim))).fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        conn.close()
+
+
+def coorte_do_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list[dict]:
+    """Os ciclos DESTE tenant ABERTOS em [inicio, fim), cada um com o `status`
+    da tela, se chegou à etapa da mensagem (`chegou_a_mensagem`) e as
+    tentativas que saíram (`tentativas`: `[{numero, resultado}]`, só as
+    disparadas ou com resultado). É a base do funil."""
+    marcas = ", ".join(repr(r) for r in sorted(RESULTADOS_EXECUTADOS))
+    conn = _conectar()
+    try:
+        ciclos = [dict(l) for l in conn.execute(
+            f"""SELECT c.id, c.valor, c.estado, {_sql_status()} AS status,
+                       (c.aguardando_escolha_em IS NOT NULL OR c.mensagem_em IS NOT NULL
+                        OR c.mensagem_confirmada_em IS NOT NULL) AS chegou_a_mensagem
+                  FROM ciclos_cobranca c
+                 WHERE c.tenant_id = ? AND c.aberto_em >= ? AND c.aberto_em < ?
+              ORDER BY c.id""", (tenant_id, _iso(inicio), _iso(fim)))]
+        tentativas = conn.execute(
+            f"""SELECT t.ciclo_id, t.numero, t.resultado FROM tentativas_cobranca t
+                  JOIN ciclos_cobranca c ON c.id = t.ciclo_id
+                 WHERE c.tenant_id = ? AND c.aberto_em >= ? AND c.aberto_em < ?
+                   AND (t.disparada_em IS NOT NULL OR t.resultado IN ({marcas}))
+              ORDER BY t.ciclo_id, t.numero""", (tenant_id, _iso(inicio), _iso(fim))).fetchall()
+    finally:
+        conn.close()
+    por_ciclo: dict = {}
+    for t in tentativas:
+        por_ciclo.setdefault(t["ciclo_id"], []).append(
+            {"numero": int(t["numero"]), "resultado": t["resultado"]})
+    for c in ciclos:
+        c["chegou_a_mensagem"] = bool(c["chegou_a_mensagem"])
+        c["tentativas"] = por_ciclo.get(c["id"], [])
+    return ciclos
+
+
+def atividade_recente(tenant_id: str, desde: datetime, limite: int) -> dict:
+    """O que aconteceu nos ciclos DESTE tenant desde `desde`, no máximo `limite`
+    de cada tipo, do mais novo ao mais antigo:
+
+        tentativas_falhas     tentativas com resultado `falhou`
+        mensagens_enviadas    ciclos com o envio confirmado, e o canal
+        aguardando_escolha    ciclos que esperam a escolha da empresa
+
+    Recuperações e estornos saem de `desfechos_com_caminho` e
+    `estornos_no_periodo`. Nenhum contato e nenhum texto de mensagem."""
+    marca = _iso(desde)
+    conn = _conectar()
+    try:
+        falhas = conn.execute(
+            """SELECT t.id, t.ciclo_id, t.numero, t.resultado_em, c.id_recorrencia, c.causa_original
+                 FROM tentativas_cobranca t JOIN ciclos_cobranca c ON c.id = t.ciclo_id
+                WHERE c.tenant_id = ? AND t.resultado = ? AND t.resultado_em >= ?
+             ORDER BY t.resultado_em DESC, t.id DESC LIMIT ?""",
+            (tenant_id, FALHOU, marca, int(limite))).fetchall()
+        enviadas = conn.execute(
+            f"""SELECT c.id, c.id_recorrencia, c.causa_original, c.mensagem_confirmada_em,
+                       {_SQL_CANAL_DA_MENSAGEM} AS canal_da_mensagem
+                  FROM ciclos_cobranca c
+                 WHERE c.tenant_id = ? AND c.mensagem_confirmada_em >= ?
+              ORDER BY c.mensagem_confirmada_em DESC, c.id DESC LIMIT ?""",
+            (tenant_id, marca, int(limite))).fetchall()
+        aguardando = conn.execute(
+            """SELECT c.id, c.id_recorrencia, c.aguardando_escolha_em FROM ciclos_cobranca c
+                WHERE c.tenant_id = ? AND c.estado = ? AND c.aguardando_escolha_em >= ?
+             ORDER BY c.aguardando_escolha_em DESC, c.id DESC LIMIT ?""",
+            (tenant_id, AGUARDANDO_ESCOLHA, marca, int(limite))).fetchall()
+    finally:
+        conn.close()
+    return {"tentativas_falhas": [dict(l) for l in falhas],
+            "mensagens_enviadas": [dict(l) for l in enviadas],
+            "aguardando_escolha": [dict(l) for l in aguardando]}

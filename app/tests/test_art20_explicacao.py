@@ -362,9 +362,17 @@ class TestOperadora:
         # nenhuma" é outro defeito que "veio a rota errada").
         assert rotas, ("nenhuma rota com 'titular' em app.routes — a catraca não tem "
                        "o que verificar (include_router deixou de achatar as rotas?)")
-        assert [r.path for r in rotas] == ["/titular/explicacao/{sujeito_id}"]
+        # Rodada 3, Fase 6: entraram as rotas do Art. 18 (exportar e anonimizar) e
+        # o texto para a política. A lista continua exata, e TODA rota de titular
+        # exige o tenant do token.
+        assert [r.path for r in rotas] == [
+            "/titular/explicacao/{sujeito_id}", "/titular/exportar", "/titular/anonimizar",
+            "/titular/texto-para-politica"]
         deps = {getattr(d.call, "__name__", "") for d in rotas[0].dependant.dependencies}
         assert "get_tenant_id" in deps
+        for rota in rotas:
+            nomes = {getattr(d.call, "__name__", "") for d in rota.dependant.dependencies}
+            assert nomes & {"get_tenant_id", "get_conta"}, rota.path
         assert "Art. 20 §1º" in titular_api.explicacao_do_titular.__doc__
         assert "segredo comercial" in titular_api.explicacao_do_titular.__doc__
 

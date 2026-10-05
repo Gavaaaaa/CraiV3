@@ -22,6 +22,13 @@ QUEM É PULADO, e por quê (cada um vira uma linha em `pulados`):
     ciclo_aberto        já existe ciclo de retenção sem desfecho para este
                         cliente. Rodar o lote duas vezes não contata ninguém
                         duas vezes.
+    nao_contatar        o cliente pediu para não receber mensagens (respondeu
+                        SAIR, ou a empresa o marcou). Rodada 3, Fase 6.
+    limite_de_contato   o cliente recebeu uma oferta há menos que o intervalo
+                        mínimo da empresa (`intervalo_minimo_ofertas_dias`,
+                        padrão 30). É a mesma regra do pipeline de eventos
+                        (Rodada 3, S5): uma oferta por cliente por intervalo,
+                        venha de onde vier.
 
 POR QUE NÃO RODA O GRAFO LANGGRAPH POR CLIENTE: o grafo chama a Claude API,
 o HubSpot e o WhatsApp a cada nó — segundos por cliente, e um lote de
@@ -156,7 +163,9 @@ def preparar(clientes: list[dict] | None, tenant_id: str) -> tuple[list[dict], l
 
 # ── Um cliente ───────────────────────────────────────────────────────────
 
-def motivo_para_pular(linha: dict, com_ciclo_aberto: set) -> tuple[str, str] | None:
+def motivo_para_pular(linha: dict, com_ciclo_aberto: set,
+                      com_oferta_recente: dict | None = None,
+                      nao_contatar: set | None = None) -> tuple[str, str] | None:
     """(motivo, detalhe) se o cliente NÃO deve ser contatado; None se deve."""
     crit = linha.get("criticality")
     if crit == CRITICIDADE_SEM_DADO or linha.get("risk_score") is None:
@@ -166,9 +175,16 @@ def motivo_para_pular(linha: dict, com_ciclo_aberto: set) -> tuple[str, str] | N
     if crit not in CRITERIO_INCLUSAO:
         return ("abaixo_do_criterio",
                 f"criticidade '{crit}': fora do critério de inclusão ({' ou '.join(CRITERIO_INCLUSAO)})")
+    if str(linha["customer_id_externo"]) in (nao_contatar or set()):
+        # Rodada 3, Fase 6: quem pediu para não ser contatado não entra no lote.
+        return (va.MOTIVO_NAO_CONTATAR, va.FRASE_DO_NAO_CONTATAR)
     if _user_id(linha["customer_id_externo"]) in com_ciclo_aberto:
         return ("ciclo_aberto",
                 "já existe ciclo de retenção sem desfecho para este cliente: não contatar duas vezes")
+    recente = (com_oferta_recente or {}).get(_user_id(linha["customer_id_externo"]))
+    if recente:
+        # Rodada 3, S5: o mesmo limite de contato do pipeline de eventos.
+        return (va.MOTIVO_LIMITE_DE_CONTATO, va.frase_do_limite(recente))
     return None
 
 
@@ -246,11 +262,15 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
             estado, [l["offer"] for l in estado["ofertas_consideradas"]], criticidade)
         em_pt = (textos.get(oferta) or {}).get("pt") or {}
         texto = em_pt.get("texto") or va._fallback_de_retencao(criticidade, label)
+        if estado.get("channel") in va.CANAIS_COM_LINHA_DE_SAIDA:
+            texto = va.com_linha_de_saida(texto)       # Rodada 3, Fase 6
         candidatas = va.montar_candidatas(
             estado, texto, origem_texto_vencedora=em_pt.get("origem") or "template",
             textos=textos)
     else:
         texto = va._fallback_de_retencao(criticidade, label)
+        if estado.get("channel") in va.CANAIS_COM_LINHA_DE_SAIDA:
+            texto = va.com_linha_de_saida(texto)       # Rodada 3, Fase 6
         candidatas = va.montar_candidatas(estado, texto, origem_texto_vencedora="template")
     estado = {**estado, "message": texto, "candidatas": candidatas, "offer_sent": True}
 
@@ -316,11 +336,26 @@ async def disparar(clientes: list[dict] | None, tenant_id: str, limite: int | No
         if c.get("offer_type") and c.get("accepted") is None
     }
 
+    # O limite de contato (S5): quem recebeu oferta há menos que o intervalo da
+    # empresa. Uma leitura para o lote inteiro.
+    ultimas = retention_log.ultima_oferta_enviada(tenant_id)
+    com_oferta_recente = {}
+    for user_id in ultimas:
+        recente = va.oferta_recente(tenant_id, user_id, ultimas)
+        if recente:
+            com_oferta_recente[user_id] = recente
+
+    # O descadastro (Fase 6): uma leitura para o lote inteiro.
+    try:
+        nao_contatar = set(clientes_importados.marcados_nao_contatar(tenant_id))
+    except clientes_importados.ConfiguracaoAusente:
+        nao_contatar = set()
+
     gerar = gerar_texto and len(linhas) <= LIMITE_GERACAO
 
     tratados, estados, pulados = [], [], list(descartes)
     for linha in linhas:
-        motivo = motivo_para_pular(linha, com_ciclo_aberto)
+        motivo = motivo_para_pular(linha, com_ciclo_aberto, com_oferta_recente, nao_contatar)
         if motivo:
             pulados.append({"customer_id_externo": linha["customer_id_externo"],
                             "criticality": linha.get("criticality"),

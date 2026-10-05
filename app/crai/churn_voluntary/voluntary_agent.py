@@ -34,6 +34,7 @@ fluxo termina.
 import asyncio
 import os
 import random
+from datetime import datetime, timezone
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from anthropic import AsyncAnthropic
@@ -60,13 +61,27 @@ from .risk_scorer import (
     classify_profile,
     mrr_utilizavel,
 )
+from .. import ambiente
+from . import offer_bandit as _offer_bandit
 from .offer_bandit import OfferBandit, is_critical_risk
+from ..config import AVISO_SAIR
+from ..dunning import configuracao
 from ..integrations.hubspot_crm import HubSpotCRM
+from . import clientes_importados
 from ..integrations.whatsapp_sender import destino_utilizavel, send_whatsapp
 
 claude   = AsyncAnthropic()
 _bandit  = OfferBandit()
 _bandit.load()  # warm start dos posteriores simulados; senão, priors de benchmark
+
+
+def _bandit_em_uso() -> OfferBandit:
+    """O bandit desta execução: o da instalação ou, dentro da simulação do
+    gateway (Rodada 3), a CÓPIA separada da empresa. O cliente fictício passa
+    pelo mesmo Thompson Sampling, e o bandit de verdade não aprende com ele."""
+    if ambiente.simulacao_ativa():
+        return _offer_bandit.copia_da_simulacao(ambiente.tenant_da_simulacao(), _bandit)
+    return _bandit
 _hubspot = HubSpotCRM()
 
 # Histórico simples de qual canal converteu por cliente (cold start em memória).
@@ -207,7 +222,8 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # A rodada inteira, não só o vencedor: o painel mostra as candidatas que o
     # bandit considerou. A escolha continua sendo a mesma — `rodada[0]` é o
     # que `choose_offer` devolveria com a mesma semente.
-    rodada = _bandit.classificar_ofertas(tenant, state["profile"], state["risk_score"], mrr=mrr)
+    rodada = _bandit_em_uso().classificar_ofertas(tenant, state["profile"], state["risk_score"],
+                                                  mrr=mrr)
     offer = rodada[0]["offer"]
     p_estimado = rodada[0]["p_estimado"]
     print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
@@ -585,7 +601,7 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
 
     if not any(linha.get("offer") == escolhida for linha in rodada):
         tenant = state.get("tenant_id") or TENANT_PADRAO
-        p = _bandit.conversion_rates(tenant, state.get("profile", "CLT")).get(escolhida, 0.0)
+        p = _bandit_em_uso().conversion_rates(tenant, state.get("profile", "CLT")).get(escolhida, 0.0)
         rodada = [{"offer": escolhida, "p_estimado": p, "p_amostrado": None,
                    "eprofit_amostrado": None, "custo": None}] + rodada
 
@@ -671,6 +687,21 @@ async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     coloca o campo no estado, e o sender é o consumidor final dele. Ligar o fio
     agora custa uma linha e evita que o Sprint 5 precise voltar aqui.
     """
+    # Rodada 3, Fase 6: a marca é relida NA HORA do envio (ela pode ter sido
+    # posta depois de a oferta ser escolhida), e a mensagem que sai por um canal
+    # em que o cliente pode responder carrega a linha de saída.
+    if pediu_para_nao_ser_contatado(state.get("tenant_id") or TENANT_PADRAO, state["user_id"]):
+        print(f"[CHURN-VOL] Não contatar: {FRASE_DO_NAO_CONTATAR} — oferta não enviada")
+        return {**state, "offer_sent": False, "sem_oferta_por": MOTIVO_NAO_CONTATAR}
+    if state["channel"] in CANAIS_COM_LINHA_DE_SAIDA:
+        # A candidata vencedora que o painel mostra é, linha por linha, o texto
+        # que sai: ela ganha a mesma linha.
+        mensagem = com_linha_de_saida(state["message"])
+        candidatas = [({**c, "texto": mensagem} if c.get("escolhida") else c)
+                      for c in state.get("candidatas") or []]
+        state = {**state, "message": mensagem}
+        if candidatas:
+            state["candidatas"] = candidatas
     if state["channel"] == "whatsapp":
         resultado = await send_whatsapp(
             state["props"].get("phone"), state["message"],
@@ -780,7 +811,7 @@ async def registrar_resultado_externo(user_id: str, offer_type: str, profile: st
     if resultado is not ResultadoDesfecho.FECHADO:
         return {"contabilizado": False, "ciclo": ciclo, "resultado": resultado}
 
-    _bandit.record_outcome(tenant_id, profile, offer_type, accepted)
+    _bandit_em_uso().record_outcome(tenant_id, profile, offer_type, accepted)
 
     canal = (ciclo or {}).get("channel")
     if accepted and canal:
@@ -823,10 +854,141 @@ async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
 
 # ── Roteamento condicional ──────────────────────────────────────────────
 
+# Abaixo deste risco o sistema não intervém (nenhuma oferta). Com nome para a
+# simulação do gateway (Rodada 3) dizer o corte na resposta, em vez de recopiar
+# o número.
+CORTE_DE_INTERVENCAO = 0.60
+
+
+# ── O limite de contato (Rodada 3, S5) ────────────────────────────────────
+#
+# Um cliente final recebe no máximo UMA oferta de retenção a cada
+# `intervalo_minimo_ofertas_dias` (configuração da empresa, padrão 30), venha o
+# evento de onde vier: o webhook do Segment, `POST /eventos` e o disparo em
+# lote passam todos por `oferta_recente`. Antes desta regra o pipeline de
+# eventos não tinha freio nenhum (cada evento com risco no corte virava uma
+# oferta), e o disparo em lote tinha só o do ciclo aberto (`ciclo_aberto`: não
+# contata de novo quem ainda não respondeu), que continua valendo.
+
+MOTIVO_LIMITE_DE_CONTATO = "limite_de_contato"
+REGRA_DO_LIMITE_DE_CONTATO = "voluntary_agent.limite_de_contato"
+
+# ── O descadastro (Rodada 3, Fase 6) ──────────────────────────────────────
+#
+# Quem pediu para não ser contatado (respondeu SAIR, ou a empresa marcou) não
+# recebe oferta nenhuma, por canal nenhum. A marca mora na base
+# (`clientes_importados.nao_contatar`), com a chave que a empresa usa para o
+# cliente; a identidade do pipeline é `user:<essa chave>`.
+MOTIVO_NAO_CONTATAR = "nao_contatar"
+REGRA_DO_NAO_CONTATAR = "voluntary_agent.nao_contatar"
+FRASE_DO_NAO_CONTATAR = "o cliente pediu para não receber mensagens"
+CANAIS_COM_LINHA_DE_SAIDA = ("whatsapp", "email")
+
+
+def id_do_cliente(user_id: str) -> str:
+    """A chave do cliente na base, a partir da identidade do pipeline."""
+    return user_id[len("user:"):] if isinstance(user_id, str) and user_id.startswith("user:") \
+        else user_id
+
+
+def pediu_para_nao_ser_contatado(tenant_id: str, user_id: str) -> bool:
+    """Este cliente tem a marca "não contatar"? Sem base configurada, não há
+    marca a ler (e o log diz)."""
+    try:
+        return clientes_importados.nao_contatar(
+            tenant_id or TENANT_PADRAO, id_do_cliente(user_id)) is not None
+    except clientes_importados.ConfiguracaoAusente:
+        return False
+
+
+def com_linha_de_saida(texto: str) -> str:
+    """O texto com a linha "responda SAIR" no fim, uma vez só."""
+    texto = (texto or "").rstrip()
+    return texto if texto.endswith(AVISO_SAIR) else f"{texto}\n{AVISO_SAIR}"
+
+
+def _instante(texto) -> datetime | None:
+    try:
+        quando = datetime.fromisoformat(str(texto))
+    except (TypeError, ValueError):
+        return None
+    return quando if quando.tzinfo else quando.replace(tzinfo=timezone.utc)
+
+
+def dias_desde(quando_texto, agora_texto: str | None = None) -> float | None:
+    """Quantos dias se passaram desde `quando_texto` (ISO 8601)."""
+    quando, agora = _instante(quando_texto), _instante(agora_texto or trilha._agora())
+    if quando is None or agora is None:
+        return None
+    return (agora - quando).total_seconds() / 86400
+
+
+def oferta_recente(tenant_id: str, user_id: str, ultimas: dict | None = None) -> dict | None:
+    """`{dias_desde_a_ultima_oferta, intervalo_minimo_ofertas_dias}` se este
+    cliente recebeu uma oferta há MENOS que o intervalo da empresa; None se
+    pode receber outra. `ultimas` é o dicionário de `ultima_oferta_enviada` já
+    lido (o lote lê uma vez só); sem ele, lê a deste cliente."""
+    tenant = tenant_id or TENANT_PADRAO
+    intervalo = configuracao.ler(tenant).get("intervalo_minimo_ofertas_dias")
+    if not isinstance(intervalo, int) or isinstance(intervalo, bool) or intervalo <= 0:
+        return None
+    if ultimas is None:
+        ultimas = trilha.ultima_oferta_enviada(tenant, user_id)
+    dias = dias_desde(ultimas.get(user_id))
+    if dias is None or dias < 0 or dias >= intervalo:
+        return None
+    return {"dias_desde_a_ultima_oferta": int(dias),
+            "intervalo_minimo_ofertas_dias": intervalo}
+
+
+def frase_do_limite(recente: dict) -> str:
+    """O motivo do limite de contato, em uma frase (a trilha e o lote usam a mesma)."""
+    dias = recente.get("dias_desde_a_ultima_oferta")
+    ha = ("há menos de 1 dia" if not dias else "há 1 dia" if dias == 1 else f"há {dias} dias")
+    return (f"o cliente recebeu uma oferta {ha}, e a empresa permite uma oferta a cada "
+            f"{recente.get('intervalo_minimo_ofertas_dias')} dias")
+
+
+async def respeitar_nao_contatar(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    """O risco pede intervenção, mas o cliente pediu para não ser contatado:
+    nenhuma oferta, por canal nenhum. Vai para a trilha do Art. 20 como decisão
+    de oferta tomada por regra."""
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    print(f"[CHURN-VOL] Não contatar: {FRASE_DO_NAO_CONTATAR} — nenhuma oferta")
+    dec = trilha.decisao(
+        tenant, state["user_id"], trilha.DOMINIO_VOLUNTARIO, trilha.TIPO_OFERTA,
+        trilha.MODELO_REGRA,
+        entradas={"risk_score": round(float(state["risk_score"]), 4)},
+        saida={"offer_type": "nenhuma oferta", "regra": REGRA_DO_NAO_CONTATAR,
+               "motivo_da_regra": FRASE_DO_NAO_CONTATAR})
+    return trilha.anotar_decisao({**state, "sem_oferta_por": MOTIVO_NAO_CONTATAR}, dec)
+
+
+async def respeitar_intervalo(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
+    """O risco pede intervenção, mas o cliente recebeu uma oferta há menos
+    que o intervalo da empresa: nenhuma oferta agora. Vai para a trilha do
+    Art. 20 como decisão de oferta tomada por regra, com o motivo."""
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    recente = oferta_recente(tenant, state["user_id"]) or {}
+    print(f"[CHURN-VOL] Limite de contato: {frase_do_limite(recente)} — nenhuma oferta agora")
+    dec = trilha.decisao(
+        tenant, state["user_id"], trilha.DOMINIO_VOLUNTARIO, trilha.TIPO_OFERTA,
+        trilha.MODELO_REGRA,
+        entradas={"risk_score": round(float(state["risk_score"]), 4)},
+        saida={"offer_type": "nenhuma oferta agora", "regra": REGRA_DO_LIMITE_DE_CONTATO,
+               "motivo_da_regra": frase_do_limite(recente)})
+    return trilha.anotar_decisao({**state, "sem_oferta_por": MOTIVO_LIMITE_DE_CONTATO}, dec)
+
+
 def route_after_risk(state: ChurnVoluntaryState) -> str:
-    if state["risk_score"] < 0.60:
+    if state["risk_score"] < CORTE_DE_INTERVENCAO:
         print(f"[CHURN-VOL] Risco baixo ({state['risk_score']:.2f}) — não intervém")
         return "update_crm"
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    if pediu_para_nao_ser_contatado(tenant, state["user_id"]):
+        return "respeitar_nao_contatar"
+    if oferta_recente(tenant, state["user_id"]):
+        return "respeitar_intervalo"
     return "choose_offer"
 
 
@@ -862,13 +1024,19 @@ def build_voluntary_churn_graph(simular: bool | None = None) -> StateGraph:
     graph.add_node("generate_message", generate_message)
     graph.add_node("send_offer",       send_offer)
     graph.add_node("update_crm",       update_crm)
+    graph.add_node("respeitar_intervalo", respeitar_intervalo)
+    graph.add_node("respeitar_nao_contatar", respeitar_nao_contatar)
 
     graph.set_entry_point("assess_risk")
 
     graph.add_conditional_edges("assess_risk", route_after_risk, {
         "choose_offer": "choose_offer",
+        "respeitar_intervalo": "respeitar_intervalo",
+        "respeitar_nao_contatar": "respeitar_nao_contatar",
         "update_crm":   "update_crm",
     })
+    graph.add_edge("respeitar_intervalo", "update_crm")
+    graph.add_edge("respeitar_nao_contatar", "update_crm")
 
     graph.add_edge("choose_offer",     "choose_channel")
     graph.add_edge("choose_channel",   "generate_message")
@@ -910,7 +1078,13 @@ _AGENTES = {
 
 
 def agente_do_modo():
-    """O agente compilado do modo que o ambiente pede AGORA."""
+    """O agente compilado do modo que o ambiente pede AGORA.
+
+    Dentro da simulação do gateway (Rodada 3) é SEMPRE o grafo de produção, que
+    termina no envio: o aceite do cliente fictício vem da propensão escondida
+    dele, e nunca do sorteio do `track_outcome` sobre o próprio bandit."""
+    if ambiente.simulacao_ativa():
+        return _AGENTES[False]
     return _AGENTES[modo_simulacao()]
 
 

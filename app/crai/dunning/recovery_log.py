@@ -57,6 +57,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from .. import ambiente
 from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
 
 logger = logging.getLogger(__name__)
@@ -134,9 +135,11 @@ CREATE INDEX IF NOT EXISTS idx_ciclo_recuperacao_tenant
 
 
 def caminho_do_banco() -> Path:
-    """Lido a cada chamada para o teste poder redirecionar via env."""
+    """Lido a cada chamada para o teste poder redirecionar via env. Dentro da
+    simulação do gateway (Rodada 3), é o arquivo de simulação da empresa: nada
+    do que é simulado entra neste dataset de treino."""
     override = os.getenv(ENV_CAMINHO)
-    return Path(override) if override else DB_PATH
+    return ambiente.caminho(Path(override) if override else DB_PATH)
 
 
 # Colunas acrescentadas DEPOIS do schema original, com o tipo de cada uma.
@@ -169,6 +172,12 @@ def _conectar() -> sqlite3.Connection:
 
 
 def _agora() -> str:
+    # Dentro da simulação do gateway (Rodada 3) o arquivo é o da simulação, e o
+    # instante é o do relógio simulado da empresa. Fora dela, o de sempre.
+    simulado = ambiente.relogio_simulado()
+    if simulado is not None:
+        from ..api import datas          # import tardio: só o fuso da instalação
+        return datas.com_fuso(simulado).astimezone(timezone.utc).isoformat(timespec="seconds")
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 

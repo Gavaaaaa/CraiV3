@@ -12,6 +12,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from .. import ambiente
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -42,7 +44,8 @@ class HubSpotCRM:
 
     async def upsert_contact(self, customer_id: str, **extra) -> Optional[str]:
         props = {"stripe_customer_id": customer_id, "lifecyclestage": "customer", **extra}
-        if self.dry:
+        # Dentro da simulação do gateway (Rodada 3) o CRM nunca é chamado de verdade.
+        if self.dry or ambiente.simulacao_ativa():
             print(f"[HUBSPOT-SIM] Contact upsert: {customer_id}")
             return f"sim_contact_{customer_id}"
         try:
@@ -55,7 +58,8 @@ class HubSpotCRM:
 
     async def create_deal(self, name: str, pipeline: str, stage: str, props: dict) -> Optional[str]:
         full_props = {"dealname": name, "pipeline": pipeline, "dealstage": DEAL_STAGES.get(stage, stage), **props}
-        if self.dry:
+        # Dentro da simulação do gateway (Rodada 3) o CRM nunca é chamado de verdade.
+        if self.dry or ambiente.simulacao_ativa():
             print(f"[HUBSPOT-SIM] Deal criado: {name} | pipeline={pipeline} | stage={stage}")
             # md5 e nao hash(): o hash() de string e randomizado por processo,
             # o que faria o id do deal mudar a cada execucao da demo.

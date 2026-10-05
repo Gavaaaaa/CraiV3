@@ -565,14 +565,24 @@ class TestCrudNaoEntra:
 
 class TestRetencaoEBestEffort:
     def test_retencao_declarada_e_a_funcao_nao_e_chamada_por_ninguem(self):
+        # Rodada 3, Fase 7 (aprovado pelo Crai): a retenção de 5 anos passou a
+        # rodar no expurgo diário. A catraca agora afirma que SÓ O RELÓGIO chama
+        # a função, uma vez só, e sempre com o prazo.
         assert isinstance(rl.RETENCAO_TRILHA_DIAS, int) and rl.RETENCAO_TRILHA_DIAS > 0
         assert "CONFIRMADO" in inspect.getsource(rl).split("RETENCAO_TRILHA_DIAS = ")[0][-1200:]
         import pathlib
+        import re
         raiz = pathlib.Path(rl.__file__).resolve().parent.parent
         chamadores = [p for p in raiz.rglob("*.py")
                       if "apagar_trilha_expirada(" in p.read_text(encoding="utf-8")
                       and p.name != "retention_log.py"]
-        assert chamadores == [], chamadores
+        assert [p.relative_to(raiz).as_posix() for p in chamadores] == ["api/relogio.py"], chamadores
+        fonte = chamadores[0].read_text(encoding="utf-8")
+        chamadas = re.findall(r"apagar_trilha_expirada\(([^)]*)\)", fonte, flags=re.S)
+        assert len(chamadas) == 1, "o relógio chama a retenção num lugar só"
+        assert "prazo_dias=" in chamadas[0], "sem prazo valeria a constante antiga (2 anos)"
+        from crai.api import relogio
+        assert relogio.RETENCAO_DA_TRILHA_ANOS == 5 and relogio.DIAS_POR_ANO == 365
 
     def test_apagar_trilha_expirada_tira_so_o_antigo_e_a_cadeia_segue_verificavel(self):
         antiga = _dec(A, decidido_em="2020-01-01T00:00:00+00:00")

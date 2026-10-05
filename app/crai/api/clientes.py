@@ -48,8 +48,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 
-from ..accounts import get_tenant_id
-from ..churn_voluntary import batch_scoring, clientes_importados, importacao
+from ..accounts import get_conta, get_tenant_id
+from ..accounts.auth import exigir_papel
+from ..churn_voluntary import (batch_scoring, clientes_importados, importacao, mantido,
+                               origem_da_base)
+from . import datas, registro_acesso
 from .idempotencia import CLIENTES_API, chave_do_evento
 
 logger = logging.getLogger(__name__)
@@ -152,6 +155,12 @@ def _e_reenvio(tenant_id: str, request: Request, chave: Optional[str]) -> bool:
         tenant_id, request.method, request.url.path, chave.strip()))
 
 
+def _base_atualizada_pela_api(tenant_id: str) -> None:
+    """Rodada 3: a última escrita aceita na base veio pela API (o dashboard
+    mostra a origem em `GET /clientes/base`). Melhor esforço."""
+    origem_da_base.registrar(tenant_id, origem_da_base.ORIGEM_API, datas.agora_local())
+
+
 def _com_base(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -198,6 +207,7 @@ async def upsert_cliente(
         return _resposta(tenant_id, linha, reenvio=True)
 
     linha = _com_base(clientes_importados.upsert_um, tenant_id, cliente, reativar=reativar)
+    _base_atualizada_pela_api(tenant_id)
     logger.info("[CLIENTES-API] tenant=%s upsert id=%s reativar=%s",
                 tenant_id, cliente["customer_id_externo"], reativar)
     return _resposta(tenant_id, linha, reenvio=False)
@@ -260,6 +270,8 @@ async def sincronizar_lote(
                 "reenvio": True, **_regua(tenant_id)}
 
     importados = _com_base(clientes_importados.gravar, tenant_id, clientes)
+    if importados:
+        _base_atualizada_pela_api(tenant_id)
     logger.info("[CLIENTES-API] tenant=%s lote importados=%d rejeitados=%d",
                 tenant_id, importados, len(rejeitados))
     return {
@@ -314,6 +326,7 @@ async def atualizar_cliente(
                       customer_id_externo, campos)
     if linha is None:                       # sumiu entre a leitura e a escrita
         raise _404()
+    _base_atualizada_pela_api(tenant_id)
     logger.info("[CLIENTES-API] tenant=%s patch id=%s campos=%s",
                 tenant_id, customer_id_externo, sorted(campos))
     return _resposta(tenant_id, linha, reenvio=False)
@@ -370,7 +383,87 @@ async def cancelar_cliente(
     linha = _com_base(clientes_importados.cancelar, tenant_id, customer_id_externo, motivo)
     if linha is None:
         raise _404()
+    if not ja_estava:
+        _base_atualizada_pela_api(tenant_id)
+        # Rodada 3 (V2/V3): o cancelamento dentro do prazo estorna o valor
+        # mantido da retenção deste cliente. Melhor esforço: a falha aqui não
+        # derruba o cancelamento, e a próxima leitura do mantido refaz a conta.
+        mantido.sincronizar_sem_levantar(tenant_id)
     # Sem o motivo no log, de propósito: é texto livre do backend do cliente.
     logger.info("[CLIENTES-API] tenant=%s cancelado id=%s ja_estava=%s",
                 tenant_id, customer_id_externo, ja_estava)
     return _resposta(tenant_id, linha, ja_estava_cancelado=ja_estava, reenvio=False)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Rodada 3, Fase 6: o descadastro ("não contatar")
+# ══════════════════════════════════════════════════════════════════════════
+#
+#     POST   /clientes/{id}/nao-contatar     marca: nenhuma mensagem sai para ele
+#     DELETE /clientes/{id}/nao-contatar     a volta
+#
+# Só `owner` e `admin`, e SÓ com o token de login: a chave de API não vale aqui
+# (as duas rotas ficam fora de `chaves_api.ROTAS_COM_CHAVE`). Com a marca, a
+# cadeia de canal do involuntário devolve `sem_canal` com o motivo
+# `cliente_pediu_para_nao_ser_contatado`, e o voluntário não faz oferta. As
+# tentativas de cobrança do Pix NÃO param: a marca é só de mensagem.
+
+def _marca_publica(marca: Optional[dict]) -> Optional[dict]:
+    if marca is None:
+        return None
+    return {"marcado_em": datas.iso_com_fuso(marca["marcado_em"]), "origem": marca["origem"]}
+
+
+@router.post("/clientes/{customer_id_externo}/nao-contatar")
+async def marcar_nao_contatar(customer_id_externo: str,
+                              conta: dict = Depends(get_conta)) -> dict:
+    """Marca o cliente como "não contatar": nenhuma mensagem sai para ele, no
+    involuntário nem no voluntário. As tentativas de cobrança continuam. Exige
+    `owner` ou `admin`. Idempotente: marcar de novo devolve a data original
+    (`ja_estava_marcado: true`). Cliente inexistente e cliente de outra empresa
+    respondem o mesmo 404."""
+    exigir_papel(conta, "owner", "admin")
+    tenant_id = conta["tenant_id"]
+    try:
+        if clientes_importados.obter(tenant_id, customer_id_externo) is None:
+            raise _404()
+        antes = clientes_importados.nao_contatar(tenant_id, customer_id_externo)
+        marca = clientes_importados.marcar_nao_contatar(
+            tenant_id, customer_id_externo, clientes_importados.ORIGEM_EMPRESA)
+    except clientes_importados.ConfiguracaoAusente as e:
+        raise _500_base(e) from e
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_NAO_CONTATAR, conta.get("papel"),
+                              datas.agora_local())
+    logger.info("[NAO-CONTATAR] tenant=%s: cliente marcado", tenant_id)
+    return {"customer_id_externo": customer_id_externo, "nao_contatar": _marca_publica(marca),
+            "ja_estava_marcado": antes is not None}
+
+
+@router.delete("/clientes/{customer_id_externo}/nao-contatar")
+async def voltar_a_contatar(customer_id_externo: str,
+                            conta: dict = Depends(get_conta)) -> dict:
+    """Tira a marca de "não contatar". Exige `owner` ou `admin`. Sem marca, é 200
+    com `estava_marcado: false`. A marca posta pela ANONIMIZAÇÃO não sai (409
+    `marca_da_anonimizacao`): os contatos daquele cliente foram apagados, e não
+    há por onde voltar a falar com ele. Cliente inexistente e de outra empresa:
+    o mesmo 404."""
+    exigir_papel(conta, "owner", "admin")
+    tenant_id = conta["tenant_id"]
+    try:
+        if clientes_importados.obter(tenant_id, customer_id_externo) is None:
+            raise _404()
+        marca = clientes_importados.nao_contatar(tenant_id, customer_id_externo)
+        if marca is not None and marca["origem"] == clientes_importados.ORIGEM_ANONIMIZACAO:
+            raise HTTPException(status_code=409, detail={
+                "motivo": "marca_da_anonimizacao",
+                "detalhe": "este cliente foi anonimizado: os contatos dele foram apagados, e a "
+                           "marca de não contatar não pode ser retirada"})
+        estava = clientes_importados.desmarcar_nao_contatar(tenant_id, customer_id_externo)
+    except clientes_importados.ConfiguracaoAusente as e:
+        raise _500_base(e) from e
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_VOLTAR_A_CONTATAR,
+                              conta.get("papel"), datas.agora_local())
+    logger.info("[NAO-CONTATAR] tenant=%s: marca retirada", tenant_id)
+    return {"customer_id_externo": customer_id_externo, "nao_contatar": None,
+            "estava_marcado": estava,
+            "origem_da_marca_retirada": marca["origem"] if marca else None}

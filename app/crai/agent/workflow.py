@@ -26,6 +26,7 @@ from ..dunning.pix_automatico_retry import (
     fim_da_janela,
     inicio_da_janela,
 )
+from .. import ambiente
 from ..dunning.dunning_engine import DunningEngine
 from ..dunning import canal_involuntario, ciclo_cobranca, configuracao, recovery_log, retry_state
 from ..dunning.retry_scheduler import disparar_tentativa
@@ -77,8 +78,11 @@ def _agora() -> datetime:
     esperar 60 dias. Chamar `datetime.now()` direto dentro dos nós tornaria
     o invariante "3 por janela de 7 dias" indistinguível, em teste, do
     invariante errado "3 por contrato, para sempre".
+
+    Dentro da simulação do gateway (Rodada 3) é o relógio simulado da empresa
+    (`crai/ambiente.py`); fora dela, o relógio de sempre.
     """
-    return datetime.now()
+    return ambiente.relogio_simulado() or datetime.now()
 
 
 def _janela_vigente(state: AgentState, agora: datetime) -> tuple[int, Optional[datetime]]:
@@ -799,6 +803,12 @@ async def trigger_dunning(state: AgentState) -> AgentState:
             "dunning_sent", "channel", "metodo_pagamento", "message_sent", "mensagem_meta")},
             "decisoes": list(state.get("decisoes") or []) + list(enviado.get("decisoes") or [])}
 
+    # Rodada 3, Fase 6: nem o caminho direto (sem ciclo) fala com quem pediu
+    # para não ser contatado.
+    if canal_involuntario.pediu_para_nao_ser_contatado(
+            state.get("tenant_id"), canal_involuntario.cliente_da_recorrencia(
+                state.get("tenant_id"), state["customer_id"])):
+        return {**state, "dunning_sent": False}
     p_recovery = _p_recovery(state)
     result = await _dunning.run_campaign(state["customer_id"], state["failure_cause"],
                                           p_recovery, state["amount"],

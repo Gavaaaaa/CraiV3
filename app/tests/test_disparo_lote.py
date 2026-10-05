@@ -209,13 +209,24 @@ class TestRegistroDoEnvio:
         assert segundo["resumo"]["por_motivo"]["ciclo_aberto"] == 4
         assert len(rl.ultimo_ciclo_por_cliente(TENANT_PAINEL)) == 4
 
-    def test_ciclo_fechado_libera_novo_contato(self, cliente):
+    def test_ciclo_fechado_libera_novo_contato(self, cliente, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+        from crai.dunning import configuracao
+        intervalo = configuracao.ler(TENANT_PAINEL)["intervalo_minimo_ofertas_dias"]
         primeiro = _post(cliente, {"clientes": [_c("x", dias=45, uso=0)]})
         oferta = primeiro["clientes"][0]["offer_type"]
         assert (rl.registrar_desfecho(TENANT_PAINEL, "user:x", oferta, False)
                 is rl.ResultadoDesfecho.FECHADO)
+        # Rodada 3 (S5): o ciclo fechado deixou de segurar, mas o limite de
+        # contato segura até o intervalo da empresa passar.
         segundo = _post(cliente, {"clientes": [_c("x", dias=45, uso=0)]})
-        assert segundo["resumo"]["processados"] == 1
+        assert segundo["resumo"]["processados"] == 0
+        assert segundo["resumo"]["por_motivo"] == {"limite_de_contato": 1}
+        # Passado o intervalo, o ciclo fechado libera o novo contato, como antes.
+        depois = datetime.now(timezone.utc) + timedelta(days=intervalo, minutes=1)
+        monkeypatch.setattr(rl, "_agora", lambda: depois.isoformat(timespec="seconds"))
+        terceiro = _post(cliente, {"clientes": [_c("x", dias=45, uso=0)]})
+        assert terceiro["resumo"]["processados"] == 1
 
 
 # ── (f): invariantes em todo o lote ──────────────────────────────────────

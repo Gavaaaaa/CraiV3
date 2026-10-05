@@ -44,6 +44,7 @@ from types import MappingProxyType
 from datetime import datetime, time, timedelta
 from typing import Optional
 
+from .. import ambiente
 from ..config import CANAIS_HUMANOS
 from . import ciclo_cobranca
 
@@ -68,6 +69,10 @@ PADROES = {
     "posicao_grave_pct": 10,
     "posicao_preocupante_pct": 20,
     "prazo_estorno_dias": 30,
+    # Rodada 3 (S5): um cliente final recebe no máximo UMA oferta de retenção a
+    # cada tantos dias, venha o evento de onde vier (Segment, `POST /eventos`,
+    # disparo em lote). A empresa escolhe de 1 a 365.
+    "intervalo_minimo_ofertas_dias": 30,
     "canal_presumido": None,
 }
 CHAVES_INTERNAS = frozenset({"canal_presumido"})
@@ -151,6 +156,8 @@ def _validar_chave(campo: str, valor):
         return _numero(campo, valor, 0, 100)
     if campo == "prazo_estorno_dias":
         return _inteiro(campo, valor, 1, 365)
+    if campo == "intervalo_minimo_ofertas_dias":
+        return _inteiro(campo, valor, 1, 365)
     raise ConfiguracaoInvalida(campo, "chave desconhecida")
 
 
@@ -200,7 +207,18 @@ def _gravada(tenant_id: str) -> dict:
 
 
 def ler(tenant_id: str) -> dict:
-    """A configuração efetiva da empresa: padrões ← gravada ← fixa."""
+    """A configuração efetiva da empresa: padrões ← gravada ← fixa.
+
+    Dentro da simulação do gateway (Rodada 3) vale a configuração REAL da
+    empresa (modo, prazo, janela de contato), lida fora da simulação, mais um
+    canal presumido: o cliente fictício não está na base, e sem isto a mensagem
+    dele nunca teria por onde sair. O canal é o primeiro dos permitidos."""
+    if ambiente.simulacao_ativa():
+        with ambiente.fora_da_simulacao():
+            efetiva = ler(tenant_id)
+        if not efetiva.get("canal_presumido"):
+            efetiva["canal_presumido"] = efetiva["canais_permitidos"][0]
+        return efetiva
     efetiva = deepcopy(PADROES)
     efetiva.update(_gravada(tenant_id))
     efetiva.update(deepcopy(_FIXAS.get(tenant_id, {})))

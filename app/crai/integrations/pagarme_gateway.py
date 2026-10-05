@@ -45,6 +45,7 @@ import logging
 import os
 from typing import Optional
 
+from .. import ambiente
 from ..dunning.pix_automatico_retry import PixRetryPolicyViolation
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,13 @@ def modo_real() -> bool:
     Uma constante de módulo congelaria o modo no momento em que o pacote foi
     importado — e a suíte, que liga e desliga a env por teste, mediria sempre o
     modo do primeiro import.
+
+    Dentro da simulação do gateway (Rodada 3) o modo é SEMPRE o simulado, mesmo
+    com a credencial de verdade configurada: a cobrança de um cliente fictício
+    nunca chega ao PSP.
     """
+    if ambiente.simulacao_ativa():
+        return False
     return os.getenv(ENV_LIVE, "").strip() in {"1", "true", "True"}
 
 

@@ -43,6 +43,11 @@ class ChurnVoluntaryState(TypedDict):
     # ou descartado.
     canais_considerados: Optional[list]
 
+    # Por que o sistema NÃO fez oferta mesmo com o risco no corte: hoje, só
+    # `limite_de_contato` (Rodada 3, S5). None quando houve oferta, ou quando o
+    # risco ficou abaixo do corte.
+    sem_oferta_por: Optional[str]
+
     # Resultado
     offer_sent: bool
     accepted:   Optional[bool]

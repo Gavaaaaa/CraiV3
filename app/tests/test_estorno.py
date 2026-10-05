@@ -495,7 +495,20 @@ class TestIsolamentoEOrigem:
             "/clientes", "/clientes/lote", "/clientes/{customer_id_externo}", "/clientes/importar",
             "/insights/enviar", "/ciclos/{ciclo_id}/mensagens/escolher",
             "/ciclos/{ciclo_id}/mensagens/regerar", "/configuracao",
-            "/integracao/chaves", "/integracao/chaves/{chave_id}"}
+            "/integracao/chaves", "/integracao/chaves/{chave_id}",
+            # Rodada 3, Fase 3: a simulação do gateway. Escreve só nos arquivos
+            # de simulação da empresa, e nenhuma destas rotas gera estorno.
+            "/simulacao", "/simulacao/cliente", "/simulacao/cobrar",
+            "/simulacao/avancar", "/simulacao/retencao",
+            # Rodada 3, Fase 4: o assistente. É POST, e não escreve nada.
+            "/assistente",
+            # Rodada 3, Fase 5: o evento de comportamento. Roda o pipeline
+            # voluntário; não toca o ciclo de cobrança nem gera estorno.
+            "/eventos",
+            # Rodada 3, Fase 6: os direitos do titular e o descadastro. Apagam
+            # texto e contato, e marcam "não contatar"; nenhuma gera estorno.
+            "/titular/exportar", "/titular/anonimizar",
+            "/clientes/{customer_id_externo}/nao-contatar"}
 
         ciclo = _recuperar(cliente, relogio, "RN_a_mao")
         dono = cliente.projeto.bearer(A, papel="owner")

@@ -19,10 +19,13 @@ sozinha — risco crítico muda o TOM da mensagem (ver `is_critical_risk`), nunc
 o destinatário da decisão.
 """
 
+import copy
 import json
 from pathlib import Path
 
 import numpy as np
+
+from .. import ambiente
 
 # ── Diretório de persistência (mesmo padrão dos módulos 1-3) ─────────────
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -381,3 +384,57 @@ class OfferBandit:
                 json.dump(self.state, f, indent=2, ensure_ascii=False)
         except OSError as e:
             print(f"[BANDIT] Falha ao persistir estado: {e}")
+
+
+# ── A cópia da simulação do gateway (Rodada 3, Fase 3) ────────────────────
+#
+# O cliente fictício em risco passa pelo MESMO Thompson Sampling, mas o bandit
+# de verdade não pode aprender com ele. Dentro da simulação, `voluntary_agent`
+# usa uma CÓPIA: nasce do posterior que a empresa tem agora (ou dos priors de
+# benchmark), aprende só com a simulação e é gravada no arquivo de simulação da
+# empresa (`ambiente.caminho_simulado`), apagado junto com o resto na limpeza.
+# O estado do bandit real nunca é escrito por aqui, nem em memória.
+
+class _BanditDaSimulacao(OfferBandit):
+    def __init__(self, caminho: Path, estado: dict):
+        super().__init__()
+        self._caminho = caminho
+        self.state = estado
+
+    def _persist(self):
+        try:
+            self._caminho.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._caminho, "w", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2, ensure_ascii=False)
+        except Exception as e:                    # noqa: BLE001 - como o bandit real
+            print(f"[BANDIT] Erro ao gravar a copia da simulacao: {e}")
+
+
+_copias_da_simulacao: dict = {}
+
+
+def copia_da_simulacao(tenant_id: str, origem: "OfferBandit") -> "OfferBandit":
+    """O bandit que a simulação de `tenant_id` usa: a cópia separada."""
+    caminho = ambiente.caminho_simulado(Path(STATE_PATH), tenant_id)
+    chave = str(caminho)
+    copia = _copias_da_simulacao.get(chave)
+    if copia is None:
+        estado = None
+        if caminho.exists():
+            try:
+                with open(caminho, encoding="utf-8") as f:
+                    estado, _ = sanear_estado(json.load(f))
+            except Exception as e:                # noqa: BLE001
+                print(f"[BANDIT] Copia da simulacao ilegivel ({e}): recomecando do posterior atual")
+        if not estado or tenant_id not in estado:
+            do_tenant = origem.state.get(tenant_id)
+            estado = {tenant_id: copy.deepcopy(do_tenant) if do_tenant
+                      else _priors_de_benchmark()}
+        copia = _BanditDaSimulacao(caminho, estado)
+        _copias_da_simulacao[chave] = copia
+    return copia
+
+
+def esquecer_copia_da_simulacao(tenant_id: str) -> None:
+    """A cópia em memória some junto com o arquivo (a limpeza da simulação)."""
+    _copias_da_simulacao.pop(str(ambiente.caminho_simulado(Path(STATE_PATH), tenant_id)), None)

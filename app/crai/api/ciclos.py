@@ -62,11 +62,13 @@ Este módulo NÃO importa de `app.py` (é o `app.py` que o monta).
 import base64
 import json
 import logging
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path
 
+from .. import ambiente, simulador
 from ..accounts import get_conta, get_tenant_id
 from ..accounts.auth import exigir_papel
 from ..agent import workflow
@@ -195,8 +197,12 @@ def _linha_publica(ciclo: dict, nomes: Optional[dict] = None) -> dict:
     diz de quem é), sem identidade de cobrança do PSP."""
     causa = ciclo.get("causa_original")
     estorno = _estorno(ciclo)
+    # Rodada 3: o ciclo da simulação do gateway sai com outro id (o 7 real e o 7
+    # simulado são ciclos diferentes) e marcado, para a tela nunca os confundir.
+    simulado = simulador.e_simulada(ciclo)
     return {
-        "id": ciclo["id"],
+        "id": ciclo["id"] + simulador.ID_DA_SIMULACAO if simulado else ciclo["id"],
+        "simulado": simulado,
         "status": ciclo["status"],
         "estado": ciclo["estado"],
         "id_recorrencia": ciclo["id_recorrencia"],
@@ -230,6 +236,7 @@ async def listar_ciclos(
     q: Optional[str] = None,
     cursor: Optional[str] = None,
     limite: Optional[int] = None,
+    incluir_simulados: bool = False,
     conta: dict = Depends(get_conta),
 ) -> dict:
     """Os ciclos da empresa, do mais recentemente atualizado ao mais antigo.
@@ -239,6 +246,11 @@ async def listar_ciclos(
     ISO 8601); `?q=` prefixo do id da recorrência ou o id exato da cobrança;
     `?limite=` 1..200 (padrão 50); `?cursor=` o `proximo_cursor` da página
     anterior.
+
+    `?incluir_simulados=true` (Rodada 3) junta, na PRIMEIRA página, os ciclos da
+    simulação do gateway desta empresa, com os mesmos filtros, cada um com
+    `simulado: true` e o nome do cliente fictício. Sem o parâmetro, a lista é
+    só de ciclos reais.
     """
     tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
@@ -254,17 +266,29 @@ async def listar_ciclos(
     texto = q.strip() if q else None
     if texto and len(texto) > 128:
         raise _422("busca_longa", "no máximo 128 caracteres", "q")
+    abertos_desde, abertos_ate = _data_do_filtro(desde, "desde"), _data_do_filtro(ate, "ate")
     pagina = cc.listar_ciclos(
-        tenant_id, status=lista_status, desde=_data_do_filtro(desde, "desde"),
-        ate=_data_do_filtro(ate, "ate"), texto=texto or None,
+        tenant_id, status=lista_status, desde=abertos_desde, ate=abertos_ate,
+        texto=texto or None,
         cursor=_decodificar_cursor(cursor) if cursor else None, limite=limite + 1)
     tem_mais = len(pagina) > limite
     pagina = pagina[:limite]
     nomes = _nomes(tenant_id, pagina)
+    linhas = [_linha_publica(c, nomes) for c in pagina]
+    if incluir_simulados and not cursor:
+        simulados = simulador.na_simulacao(tenant_id, lambda: (
+            cc.listar_ciclos(tenant_id, status=lista_status, desde=abertos_desde,
+                             ate=abertos_ate, texto=texto or None, limite=LIMITE_MAXIMO),
+            simulador.nomes(tenant_id)))
+        if simulados:
+            do_simulador, nomes_ficticios = simulados
+            linhas += [_linha_publica({**c, simulador.MARCA_DE_LINHA: True}, nomes_ficticios)
+                       for c in do_simulador]
+            linhas.sort(key=lambda l: datas.com_fuso(l["atualizado_em"]), reverse=True)
     # A lista lê o `cliente_nome` da base: é leitura de dado de titular (Bloco 4).
     registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CICLOS, conta.get("papel"),
                               datas.agora_local())
-    return {"ciclos": [_linha_publica(c, nomes) for c in pagina],
+    return {"ciclos": linhas,
             "proximo_cursor": _codificar_cursor(pagina[-1]) if tem_mais and pagina else None,
             "tem_mais": tem_mais}
 
@@ -469,23 +493,35 @@ def _linha_do_tempo(ciclo: dict, tentativas: list, decisoes: list,
     return [{k: v for k, v in e.items() if not k.startswith("_")} for e in eventos]
 
 
-@router.get("/ciclos/{ciclo_id}")
-async def ler_ciclo(
-    ciclo_id: int = Path(..., ge=1, le=ID_MAXIMO),
-    conta: dict = Depends(get_conta),
-) -> dict:
-    """Um ciclo da empresa e a linha do tempo dele: abertura, diagnóstico (com
-    as cinco maiores contribuições em linguagem simples), cada tentativa,
-    mensagem, desfecho, e as decisões da trilha do Art. 20 do período.
-    404 idêntico para ciclo inexistente e de outra empresa (R12)."""
-    tenant_id = conta["tenant_id"]
-    ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
-    if ciclo is None:
+@contextmanager
+def _ambiente_do_ciclo(tenant_id: str, ciclo_id: int):
+    """`(id interno, simulado, agora)` para um id de ciclo vindo da rota.
+
+    Id acima de `simulador.ID_DA_SIMULACAO` é de um ciclo da SIMULAÇÃO do
+    gateway (Rodada 3): o corpo da rota roda sobre os arquivos de simulação da
+    empresa do token, com o relógio simulado dela. Empresa que nunca simulou
+    responde o mesmo 404 de um ciclo que não existe: o id de um ciclo simulado
+    de outra empresa não abre nada aqui."""
+    if ciclo_id <= simulador.ID_DA_SIMULACAO:
+        yield ciclo_id, False, datas.agora_local()
+        return
+    if not simulador.existe(tenant_id):
         raise _404()
-    agora = datas.agora_local()
-    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CICLO, conta.get("papel"), agora)
+    with ambiente.em_simulacao(tenant_id):
+        relogio = simulador.relogio(tenant_id)
+    agora = relogio["agora"] if relogio else datas.agora_local()
+    with ambiente.em_simulacao(tenant_id, agora):
+        yield ciclo_id - simulador.ID_DA_SIMULACAO, True, agora
+
+
+def detalhe_do_ciclo(tenant_id: str, ciclo: dict, agora: datetime, nomes: Optional[dict],
+                     simulado: bool = False) -> dict:
+    """O corpo de `GET /ciclos/{id}` para um ciclo já encontrado. A simulação
+    do gateway devolve o ciclo dela nesta mesma forma."""
+    if simulado:
+        ciclo = {**ciclo, simulador.MARCA_DE_LINHA: True}
     decisoes, ambigua = _decisoes_do_ciclo(tenant_id, ciclo, agora)
-    publica = _linha_publica(ciclo, _nomes(tenant_id, [ciclo]))
+    publica = _linha_publica(ciclo, nomes)
     publica.update(janela_inicio=datas.iso_com_fuso(ciclo["janela_inicio"]),
                    janela_fim=datas.iso_com_fuso(ciclo["janela_fim"]))
     mensagens = cc.mensagens_do_ciclo(ciclo["id"])
@@ -495,12 +531,37 @@ async def ler_ciclo(
             "diagnostico": _diagnostico(decisoes),
             "mensagens": [_mensagem_publica(m) for m in mensagens],
             "modo_mensagem": config["modo_mensagem_involuntario"],
-            "escolha_ate": _escolha_ate(ciclo, config),
+            # Com a mensagem já escolhida não há mais prazo de escolha, mesmo que o
+            # ciclo ainda espere a janela de contato abrir para a mensagem sair.
+            "escolha_ate": None if escolhida else _escolha_ate(ciclo, config),
             "escolhida_por": escolhida["escolhida_por"] if escolhida else None,
             "linha_do_tempo": _linha_do_tempo(ciclo, cc.tentativas_do_ciclo(ciclo["id"]),
                                               decisoes, mensagens,
                                               cc.estornos_do_ciclo(ciclo["id"])),
             "trilha_ambigua": ambigua}
+
+
+@router.get("/ciclos/{ciclo_id}")
+async def ler_ciclo(
+    ciclo_id: int = Path(..., ge=1, le=ID_MAXIMO),
+    conta: dict = Depends(get_conta),
+) -> dict:
+    """Um ciclo da empresa e a linha do tempo dele: abertura, diagnóstico (com
+    as cinco maiores contribuições em linguagem simples), cada tentativa,
+    mensagem, desfecho, e as decisões da trilha do Art. 20 do período.
+    404 idêntico para ciclo inexistente e de outra empresa (R12). O id de um
+    ciclo da simulação do gateway (`simulado: true` na lista) abre o ciclo
+    simulado da própria empresa."""
+    tenant_id = conta["tenant_id"]
+    with _ambiente_do_ciclo(tenant_id, ciclo_id) as (interno, simulado, agora):
+        ciclo = cc.ciclo_do_tenant(tenant_id, interno)
+        if ciclo is None:
+            raise _404()
+        nomes = simulador.nomes(tenant_id) if simulado else _nomes(tenant_id, [ciclo])
+        detalhe = detalhe_do_ciclo(tenant_id, ciclo, agora, nomes, simulado)
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CICLO, conta.get("papel"),
+                              datas.agora_local())
+    return detalhe
 
 
 # ── As três mensagens: escolher e regerar ─────────────────────────────────
@@ -532,35 +593,38 @@ async def escolher_mensagem(
     uma das geradas. Exige `owner` ou `admin` (403 para `membro`). 404 idêntico
     para ciclo inexistente e de outra empresa; 409 se o ciclo não espera
     escolha (já escolhida, enviada, fechada). A mensagem sai na hora se a
-    janela de contato e um canal permitirem; senão, o relógio a envia depois."""
+    janela de contato e um canal permitirem; senão, o relógio a envia depois.
+    Vale também para o ciclo da simulação do gateway, com o relógio simulado."""
     papel = exigir_papel(conta, "owner", "admin")
     tenant_id = conta["tenant_id"]
-    ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
-    if ciclo is None:
-        raise _404()
-    if not isinstance(corpo, dict) or set(corpo) - {"rodada", "abordagem"}:
-        extras = sorted(set(corpo) - {"rodada", "abordagem"}) if isinstance(corpo, dict) else []
-        raise _422("campo_desconhecido", "o corpo aceita só `rodada` e `abordagem`: a "
-                   "mensagem é sempre uma das sugestões geradas", extras[0] if extras else "corpo")
-    rodada, abordagem = corpo.get("rodada"), corpo.get("abordagem")
-    if isinstance(rodada, bool) or not isinstance(rodada, int) or rodada < 1:
-        raise _422("rodada_invalida", "esperado inteiro >= 1", "rodada")
-    if abordagem not in cc.ABORDAGENS:
-        raise _422("abordagem_invalida", f"esperado um de {', '.join(cc.ABORDAGENS)}",
-                   "abordagem")
-    if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(ciclo_id):
-        raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
-    existe = any(m["rodada"] == rodada and m["abordagem"] == abordagem
-                 for m in cc.mensagens_do_ciclo(ciclo_id))
-    if not existe:
-        raise _422("sugestao_inexistente", "não há esta sugestão neste ciclo", "rodada")
-    agora = datas.agora_local()
-    if workflow.registrar_escolha(ciclo_id, papel, agora, rodada, abordagem) is None:
-        raise _409("ciclo_nao_aguarda_escolha", "a escolha já foi feita (pela empresa ou pelo prazo)")
-    enviado = await workflow.enviar_mensagem_escolhida(ciclo_id, agora)
-    return {"ciclo_id": ciclo_id, "rodada": rodada, "abordagem": abordagem,
-            "escolhida_por": papel, "enviada": enviado is not None,
-            "espera": None if enviado is not None else _espera(ciclo_id, tenant_id, agora)}
+    with _ambiente_do_ciclo(tenant_id, ciclo_id) as (interno, _, agora):
+        ciclo = cc.ciclo_do_tenant(tenant_id, interno)
+        if ciclo is None:
+            raise _404()
+        if not isinstance(corpo, dict) or set(corpo) - {"rodada", "abordagem"}:
+            extras = sorted(set(corpo) - {"rodada", "abordagem"}) if isinstance(corpo, dict) else []
+            raise _422("campo_desconhecido", "o corpo aceita só `rodada` e `abordagem`: a "
+                       "mensagem é sempre uma das sugestões geradas",
+                       extras[0] if extras else "corpo")
+        rodada, abordagem = corpo.get("rodada"), corpo.get("abordagem")
+        if isinstance(rodada, bool) or not isinstance(rodada, int) or rodada < 1:
+            raise _422("rodada_invalida", "esperado inteiro >= 1", "rodada")
+        if abordagem not in cc.ABORDAGENS:
+            raise _422("abordagem_invalida", f"esperado um de {', '.join(cc.ABORDAGENS)}",
+                       "abordagem")
+        if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(interno):
+            raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
+        existe = any(m["rodada"] == rodada and m["abordagem"] == abordagem
+                     for m in cc.mensagens_do_ciclo(interno))
+        if not existe:
+            raise _422("sugestao_inexistente", "não há esta sugestão neste ciclo", "rodada")
+        if workflow.registrar_escolha(interno, papel, agora, rodada, abordagem) is None:
+            raise _409("ciclo_nao_aguarda_escolha",
+                       "a escolha já foi feita (pela empresa ou pelo prazo)")
+        enviado = await workflow.enviar_mensagem_escolhida(interno, agora)
+        return {"ciclo_id": ciclo_id, "rodada": rodada, "abordagem": abordagem,
+                "escolhida_por": papel, "enviada": enviado is not None,
+                "espera": None if enviado is not None else _espera(interno, tenant_id, agora)}
 
 
 @router.post("/ciclos/{ciclo_id}/mensagens/regerar")
@@ -574,26 +638,27 @@ async def regerar_mensagens(
     recomendada da ÚLTIMA é a que sai por prazo. Vale como decisão na trilha."""
     papel = exigir_papel(conta, "owner", "admin")
     tenant_id = conta["tenant_id"]
-    ciclo = cc.ciclo_do_tenant(tenant_id, ciclo_id)
-    if ciclo is None:
-        raise _404()
-    config = configuracao.ler(tenant_id)
-    if config["modo_mensagem_involuntario"] != configuracao.MODO_ESCOLHA:
-        raise _409("modo_automatico", "a empresa está no modo automático: não há escolha a fazer")
-    if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(ciclo_id):
-        raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
-    agora = datas.agora_local()
-    limite = datas.para_local(ciclo["aguardando_escolha_em"]) + timedelta(
-        hours=config["prazo_escolha_horas"])
-    if agora >= limite:
-        raise _409("prazo_de_escolha_vencido", "o prazo de escolha acabou")
-    rodada = await workflow.gerar_rodada(ciclo_id, agora, papel=papel)
-    if rodada is None:
-        raise _409("ciclo_nao_aguarda_escolha", "a escolha foi feita durante a geração")
-    return {"ciclo_id": ciclo_id, "rodada": rodada,
-            "mensagens": [_mensagem_publica(m) for m in cc.mensagens_do_ciclo(ciclo_id)
-                          if m["rodada"] == rodada],
-            "escolha_ate": datas.iso_com_fuso(limite)}
+    with _ambiente_do_ciclo(tenant_id, ciclo_id) as (interno, _, agora):
+        ciclo = cc.ciclo_do_tenant(tenant_id, interno)
+        if ciclo is None:
+            raise _404()
+        config = configuracao.ler(tenant_id)
+        if config["modo_mensagem_involuntario"] != configuracao.MODO_ESCOLHA:
+            raise _409("modo_automatico",
+                       "a empresa está no modo automático: não há escolha a fazer")
+        if ciclo["estado"] != cc.AGUARDANDO_ESCOLHA or cc.mensagem_escolhida(interno):
+            raise _409("ciclo_nao_aguarda_escolha", "este ciclo não está esperando uma escolha")
+        limite = datas.para_local(ciclo["aguardando_escolha_em"]) + timedelta(
+            hours=config["prazo_escolha_horas"])
+        if agora >= limite:
+            raise _409("prazo_de_escolha_vencido", "o prazo de escolha acabou")
+        rodada = await workflow.gerar_rodada(interno, agora, papel=papel)
+        if rodada is None:
+            raise _409("ciclo_nao_aguarda_escolha", "a escolha foi feita durante a geração")
+        return {"ciclo_id": ciclo_id, "rodada": rodada,
+                "mensagens": [_mensagem_publica(m) for m in cc.mensagens_do_ciclo(interno)
+                              if m["rodada"] == rodada],
+                "escolha_ate": datas.iso_com_fuso(limite)}
 
 
 # ── Métricas ──────────────────────────────────────────────────────────────
@@ -623,12 +688,14 @@ def _resumo(linhas: list, estornos: Optional[list] = None) -> dict:
 
 
 @router.get("/metrics/involuntario/mes")
-async def metricas_do_mes(mes: Optional[str] = None,
+async def metricas_do_mes(mes: Optional[str] = None, incluir_simulados: bool = False,
                           tenant_id: str = Depends(get_tenant_id)) -> dict:
     """O mês da empresa (`?mes=AAAA-MM`; padrão: o mês corrente no fuso da
     instalação). Fonte: `ciclos_cobranca`, a fonte da verdade do ciclo — não o
     dataset de treino. Valor líquido e taxa sobre os ciclos com desfecho no
-    mês; as contagens por status, sobre os ciclos abertos no mês."""
+    mês; as contagens por status, sobre os ciclos abertos no mês.
+    `?incluir_simulados=true` soma os ciclos da simulação do gateway desta
+    empresa; sem o parâmetro, os números são só dos ciclos reais."""
     if mes is None or not mes.strip():
         hoje = datas.agora_local()
         ano, numero = hoje.year, hoje.month
@@ -642,20 +709,24 @@ async def metricas_do_mes(mes: Optional[str] = None,
             raise _422("mes_invalido", "esperado AAAA-MM", "mes")
     inicio = datetime(ano, numero, 1)
     fim = datetime(ano + (numero == 12), numero % 12 + 1, 1)
+    # `d`: o deslocamento do relógio simulado (zero para os ciclos reais).
+    ler = lambda fn: simulador.com_simulados(tenant_id, incluir_simulados, fn)   # noqa: E731
     return {"mes": f"{ano:04d}-{numero:02d}",
             "inicio": datas.iso_com_fuso(inicio), "fim": datas.iso_com_fuso(fim),
-            **_resumo(cc.ciclos_com_desfecho(tenant_id, inicio, fim),
-                      cc.estornos_no_periodo(tenant_id, inicio, fim)),
-            "ciclos_abertos_no_mes": cc.contagem_por_status(tenant_id, inicio, fim),
+            **_resumo(ler(lambda d: cc.ciclos_com_desfecho(tenant_id, inicio + d, fim + d)),
+                      ler(lambda d: cc.estornos_no_periodo(tenant_id, inicio + d, fim + d))),
+            "ciclos_abertos_no_mes": ler(
+                lambda d: cc.contagem_por_status(tenant_id, inicio + d, fim + d)),
             # Agora, não no mês: quantos ciclos esperam a escolha da empresa.
-            "aguardando_escolha": cc.contar_aguardando_escolha(tenant_id)}
+            "aguardando_escolha": ler(lambda d: cc.contar_aguardando_escolha(tenant_id))}
 
 
 @router.get("/metrics/involuntario/serie")
-async def serie_diaria(dias: Optional[int] = None,
+async def serie_diaria(dias: Optional[int] = None, incluir_simulados: bool = False,
                        tenant_id: str = Depends(get_tenant_id)) -> dict:
     """Um ponto por dia, dos últimos `?dias=` (1..365, padrão 30) até hoje,
-    pelo dia do DESFECHO. Dias sem desfecho entram com zero e taxa `null`."""
+    pelo dia do DESFECHO. Dias sem desfecho entram com zero e taxa `null`.
+    `?incluir_simulados=true` soma os ciclos da simulação do gateway."""
     dias = DIAS_PADRAO if dias is None else dias
     if not 1 <= dias <= DIAS_MAXIMO:
         raise _422("dias_invalido", f"esperado inteiro entre 1 e {DIAS_MAXIMO}", "dias")
@@ -663,11 +734,12 @@ async def serie_diaria(dias: Optional[int] = None,
     primeiro = hoje - timedelta(days=dias - 1)
     inicio = datetime.combine(primeiro, datetime.min.time())
     fim = datetime.combine(hoje + timedelta(days=1), datetime.min.time())
+    ler = lambda fn: simulador.com_simulados(tenant_id, incluir_simulados, fn)   # noqa: E731
     por_dia: dict = {}
-    for linha in cc.ciclos_com_desfecho(tenant_id, inicio, fim):
+    for linha in ler(lambda d: cc.ciclos_com_desfecho(tenant_id, inicio + d, fim + d)):
         por_dia.setdefault(str(linha["desfecho_em"])[:10], []).append(linha)
     estornos_por_dia: dict = {}
-    for estorno in cc.estornos_no_periodo(tenant_id, inicio, fim):
+    for estorno in ler(lambda d: cc.estornos_no_periodo(tenant_id, inicio + d, fim + d)):
         estornos_por_dia.setdefault(str(estorno["recebido_em"])[:10], []).append(estorno)
     pontos = []
     for i in range(dias):

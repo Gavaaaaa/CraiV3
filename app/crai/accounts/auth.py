@@ -99,7 +99,8 @@ async def get_conta(authorization: Optional[str] = Header(default=None)) -> dict
         raise _401("chave_nao_vale_nesta_rota",
                    "a chave de API só autentica as rotas da API de clientes "
                    "(POST /clientes, POST /clientes/lote, PATCH /clientes/{id} e "
-                   "DELETE /clientes/{id}); esta rota exige o token de login")
+                   "DELETE /clientes/{id}) e POST /eventos; esta rota exige o token "
+                   "de login")
     try:
         claims = supabase_auth.validar_token(token)
         tenant = supabase_auth.tenant_das_claims(claims)
@@ -169,18 +170,21 @@ def _rota_aceita_chave(request: Optional[Request]) -> bool:
     return (request.method.upper(), caminho) in chaves_api.ROTAS_COM_CHAVE
 
 
-def _tenant_da_chave(chave: str) -> str:
+def _tenant_da_chave(chave: str, eventos: bool = False) -> str:
     try:
-        return chaves_api.autenticar(chave)
+        return chaves_api.autenticar(chave, eventos=eventos)
     except chaves_api.ChaveInvalida:
         # K6: um corpo só para inexistente, malformada e revogada.
         raise _401("chave_invalida", "chave de API inválida ou revogada") from None
     except chaves_api.LimiteDeUso as e:
+        # S6: os eventos têm limite próprio, e a resposta diz qual estourou.
+        limite = (chaves_api.limite_de_eventos_por_minuto() if eventos
+                  else chaves_api.limite_por_minuto())
         raise HTTPException(
             status_code=429,
-            detail={"motivo": "limite_de_uso",
-                    "detalhe": f"limite de {chaves_api.limite_por_minuto()} requisições por "
-                               f"minuto desta chave atingido; tente de novo em {e.espera} s"},
+            detail={"motivo": "limite_de_eventos" if eventos else "limite_de_uso",
+                    "detalhe": f"limite de {limite} {'eventos' if eventos else 'requisições'} "
+                               f"por minuto desta chave atingido; tente de novo em {e.espera} s"},
             headers={"Retry-After": str(e.espera)}) from None
 
 
@@ -191,5 +195,6 @@ async def get_tenant_id(request: Request = None,
     if _rota_aceita_chave(request):
         token = _token_do_header(authorization)
         if chaves_api.parece_chave(token):
-            return _tenant_da_chave(token)
+            rota = (request.method.upper(), getattr(request.scope.get("route"), "path", None))
+            return _tenant_da_chave(token, eventos=rota == chaves_api.ROTA_DE_EVENTOS)
     return (await get_conta(authorization))["tenant_id"]

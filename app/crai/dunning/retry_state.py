@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .. import ambiente
 from . import ciclo_cobranca
 from .pix_automatico_retry import inicio_da_janela
 
@@ -61,7 +62,7 @@ def caminho_do_estado() -> Path:
     """O JSON legado, lido só pela migração. Lido a cada chamada para o teste
     poder redirecionar via env."""
     override = os.getenv(ENV_CAMINHO)
-    return Path(override) if override else CAMINHO_PADRAO
+    return ambiente.caminho(Path(override) if override else CAMINHO_PADRAO)
 
 
 def _iso(valor) -> Optional[str]:

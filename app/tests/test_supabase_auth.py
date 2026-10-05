@@ -331,8 +331,17 @@ class TestWebhooksIntocados:
         # própria configuração, e só a dela.
         # `/integracao` entrou na Rodada 2: a empresa lista, gera e revoga as
         # próprias chaves de API, com o token de login.
+        # `/atividade` e `/extrato` entraram na Rodada 3 (Fase 2): a visão geral
+        # do dashboard lê os eventos e a memória de cálculo da empresa do token.
+        # `/simulacao` entrou na Rodada 3 (Fase 3): a simulação do gateway é da
+        # empresa do token, e só mexe nos arquivos de simulação dela.
+        # `/assistente` entrou na Rodada 3 (Fase 4): a pergunta é da empresa do
+        # token, e o assistente lê só os totais dela.
+        # `/eventos` entrou na Rodada 3 (Fase 5): o evento de comportamento
+        # mandado pelo servidor da empresa, com a chave de API ou o token.
         SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos",
-                        "/configuracao", "/integracao")
+                        "/configuracao", "/integracao", "/atividade", "/extrato",
+                        "/simulacao", "/assistente", "/eventos")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")

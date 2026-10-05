@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv                      # noqa: E402
 load_dotenv()
 
+from .. import ambiente
 from ..agent.main_agent import crai_agent
 from ..agent.pix_codes import CAUSA_LEGIVEL
 from ..agent.state import AgentState, PaymentMethod
@@ -57,7 +58,7 @@ from ..churn_voluntary.voluntary_agent import agente_do_modo, registrar_resultad
 from ..churn_voluntary.offer_bandit import OFFERS, PROFILES, TENANT_PADRAO
 from ..churn_voluntary.state import ChurnVoluntaryState
 from ..churn_voluntary import (clientes_importados, disparo_lote, importacao,
-                               insights_unificados, retention_log)
+                               insights_unificados, origem_da_base, retention_log)
 from ..integrations import email_sender
 from ..accounts import get_conta, get_tenant_id
 from ..integrations.payment_gateway import (
@@ -80,11 +81,17 @@ from .idempotencia import (
 )
 from . import ciclos as ciclos_api
 from . import clientes as clientes_api
+from . import datas as datas_api
 from . import configuracao as configuracao_api
 from . import dev_token
 from . import integracao as integracao_api
 from . import relogio
+from . import assistente as assistente_api
+from . import eventos_recebidos
+from . import simulacao as simulacao_api
 from . import titular as titular_api
+from . import visao_geral as visao_geral_api
+from . import voluntario as voluntario_api
 from ..security.webhook_verification import (
     verify_stripe_signature,
     verify_segment_signature,
@@ -93,6 +100,13 @@ from ..security.webhook_verification import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _agora() -> datetime:
+    """Hora local sem fuso. Dentro da simulação do gateway (Rodada 3), a do
+    relógio simulado da empresa (`crai/ambiente.py`); fora dela, a de sempre."""
+    return ambiente.relogio_simulado() or datetime.now()
+
 
 # `lifespan`: o relógio do serviço (Etapa 2, Bloco 1) — a tarefa de fundo que
 # dispara as tentativas 2 e 3 e varre os ciclos. Ver `api/relogio.py`.
@@ -780,7 +794,19 @@ async def segment_webhook(request: Request) -> JSONResponse:
         raise _reject_unsigned(request, "segment")
 
     payload = _objeto_json_do_corpo(raw, "SEGMENT")
+    user_id, evento, props = _evento_voluntario_validado(payload, "SEGMENT")
+    await _run_voluntary_pipeline(
+        user_id=user_id, event=evento, props=props,
+        tenant_id=_tenant_da_requisicao(request, payload, "SEGMENT"),
+    )
+    return JSONResponse({"status": "ok"})
 
+
+def _evento_voluntario_validado(payload: dict, origem: str) -> tuple:
+    """`(identidade qualificada, evento, propriedades)` de um evento de
+    comportamento, ou o 422 que a forma dele pede. É a validação do webhook do
+    Segment, e é UMA: `POST /eventos` (Rodada 3, S2) passa por aqui também, com
+    o mesmo vocabulário e as mesmas recusas."""
     # As três formas que o pipeline de churn voluntário assume do evento.
     # `userId` vira chave de dicionário e `billing_profile` vira chave do
     # bandit: qualquer coisa não-hashable ali estourava com `TypeError`
@@ -801,29 +827,75 @@ async def segment_webhook(request: Request) -> JSONResponse:
     # SOBRESCREVEU o estado do primeiro (perfil CLT virou PJ). É o P0-6 por
     # outra porta, e a defesa é a mesma — o `thread_id` precisa ser único por
     # cliente, não só não-vazio.
-    identificado = _campo_com_forma(payload, "userId", (str,), "SEGMENT")
-    anonimo = _campo_com_forma(payload, "anonymousId", (str,), "SEGMENT")
+    identificado = _campo_com_forma(payload, "userId", (str,), origem)
+    anonimo = _campo_com_forma(payload, "anonymousId", (str,), origem)
     user_id = identificado or anonimo
     if not user_id:
-        logger.warning("[SEGMENT] Evento sem userId e sem anonymousId — 422")
+        logger.warning("[%s] Evento sem userId e sem anonymousId — 422", origem)
         raise HTTPException(status_code=422, detail={
             "motivo": MOTIVO_SEM_IDENTIFICACAO,
             "detalhe": ("evento sem `userId` e sem `anonymousId` — sem isso, "
                         "clientes distintos dividiriam o mesmo checkpoint"),
         })
-    evento = _campo_com_forma(payload, "event", (str,), "SEGMENT", default="")
-    props = _campo_com_forma(payload, "properties", (dict,), "SEGMENT", default={})
+    evento = _campo_com_forma(payload, "event", (str,), origem, default="")
+    props = _campo_com_forma(payload, "properties", (dict,), origem, default={})
     if "billing_profile" in props:
-        _campo_com_forma(props, "billing_profile", (str,), "SEGMENT")
-    _recusar_inteiro_grande_demais(props, "SEGMENT")
+        _campo_com_forma(props, "billing_profile", (str,), origem)
+    _recusar_inteiro_grande_demais(props, origem)
+    return (_identidade_voluntaria("userId" if identificado else "anonymousId", user_id),
+            evento, props)
 
-    await _run_voluntary_pipeline(
-        user_id=_identidade_voluntaria(
-            "userId" if identificado else "anonymousId", user_id),
-        event=evento, props=props,
-        tenant_id=_tenant_da_requisicao(request, payload, "SEGMENT"),
-    )
-    return JSONResponse({"status": "ok"})
+
+@app.post("/eventos")
+async def receber_evento(request: Request,
+                         tenant_id: str = Depends(get_tenant_id)) -> JSONResponse:
+    """Um evento de comportamento do cliente final, mandado pelo SERVIDOR da
+    empresa (Rodada 3, Fase 5). Autenticado pela chave de API da empresa
+    (`crai_live_...`) ou pelo token de login.
+
+    O corpo é o do webhook do Segment, com o mesmo vocabulário e a mesma
+    validação (`_evento_voluntario_validado`):
+
+        {"userId": "c-001",                      (ou "anonymousId")
+         "event": "Cancellation Page Viewed",    (ou "Downgrade Clicked", "Session Started")
+         "properties": {"mrr": 1500.0, "billing_profile": "PJ", ...},
+         "messageId": "evt-123",                 (opcional: a chave de idempotência)
+         "timestamp": "2026-10-04T12:00:00Z"}    (opcional)
+
+    S4  o tenant é o da chave (ou do token). Não é lido do corpo: um
+        `tenant_id` no corpo é ignorado, e o `userId` vale só dentro da empresa.
+    S5  o evento segue pelo MESMO pipeline voluntário do Segment, e o limite de
+        contato vale igual: no máximo uma oferta por cliente a cada
+        `intervalo_minimo_ofertas_dias` da configuração da empresa.
+    S6  limite próprio por chave: `CRAI_EVENTOS_LIMITE_POR_MINUTO` (padrão
+        600). Acima, 429 `limite_de_eventos` com `Retry-After`.
+    S7  idempotente: o mesmo evento reenviado conta uma vez
+        (`api/eventos_recebidos.py`), e a resposta diz `duplicado: true`.
+
+    A resposta não diz o risco nem se houve oferta: `{"status": "ok",
+    "duplicado": false}`. Quem decide se e quando falar com o cliente é a CRAI.
+    """
+    raw = await request.body()
+    payload = _objeto_json_do_corpo(raw, "EVENTOS")
+    user_id, evento, props = _evento_voluntario_validado(payload, "EVENTOS")
+    message_id = payload.get("messageId")
+    if message_id is not None and (not isinstance(message_id, str) or not message_id.strip()
+                                   or len(message_id) > eventos_recebidos.MESSAGE_ID_MAX):
+        raise HTTPException(status_code=422, detail={
+            "motivo": "campo_com_forma_invalida", "campo": "messageId",
+            "detalhe": f"esperado texto de 1 a {eventos_recebidos.MESSAGE_ID_MAX} caracteres"})
+    chave = eventos_recebidos.chave_do_evento(tenant_id, payload)
+    if not eventos_recebidos.registrar(tenant_id, chave, datas_api.agora_local()):
+        logger.info("[EVENTOS] tenant=%s: evento repetido, não reprocessado", tenant_id)
+        return JSONResponse({"status": "ok", "duplicado": True})
+    try:
+        await _run_voluntary_pipeline(user_id=user_id, event=evento, props=props,
+                                      tenant_id=tenant_id)
+    except Exception:
+        # O processamento falhou: o reenvio da empresa precisa poder refazê-lo.
+        eventos_recebidos.esquecer(tenant_id, chave)
+        raise
+    return JSONResponse({"status": "ok", "duplicado": False})
 
 
 @app.post("/webhooks/retention-outcome")
@@ -956,6 +1028,49 @@ class SimulateChurnRisk(BaseModel):
     phone: Optional[str] = None
 
 
+class SimulateRespostaSair(BaseModel):
+    # Quem respondeu: pela recorrência da cobrança (a mensagem do involuntário)
+    # ou pelo identificador que a empresa usa para o cliente (a do voluntário).
+    id_recorrencia: Optional[str] = None
+    customer_id_externo: Optional[str] = None
+    tenant_id: Optional[str] = None
+
+
+@app.post("/simulate/resposta-sair")
+async def simulate_resposta_sair(request: Request,
+                                 payload: SimulateRespostaSair) -> JSONResponse:
+    """O cliente final respondeu SAIR a uma mensagem (Rodada 3, Fase 6). Como o
+    envio de mensagens é simulado, a resposta também é: esta rota faz o que o
+    provedor de mensagens fará ao receber a palavra. Marca o cliente como "não
+    contatar" (`origem: resposta_sair`): nenhuma mensagem sai mais para ele. As
+    tentativas de cobrança do Pix continuam.
+
+    Só existe com `ENV=development` ou `demo` (403 fora deles), como as outras
+    rotas de simulação. Idempotente."""
+    _require_simulation_env()
+    tenant = _tenant_da_requisicao(
+        request, {"tenant_id": payload.tenant_id} if payload.tenant_id else {}, "SIMULATE")
+    if bool(payload.id_recorrencia) == bool(payload.customer_id_externo):
+        raise HTTPException(status_code=422, detail={
+            "motivo": "identificacao_invalida",
+            "detalhe": "informe `id_recorrencia` OU `customer_id_externo`, um dos dois"})
+    cliente_id = payload.customer_id_externo
+    if payload.id_recorrencia:
+        cliente = clientes_importados.obter_por_recorrencia(tenant, payload.id_recorrencia)
+        if cliente is None:
+            raise HTTPException(status_code=404, detail={
+                "motivo": "cliente_nao_encontrado",
+                "detalhe": "não há cliente desta recorrência na base desta empresa"})
+        cliente_id = cliente["customer_id_externo"]
+    ja_estava = clientes_importados.nao_contatar(tenant, cliente_id) is not None
+    marca = clientes_importados.marcar_nao_contatar(
+        tenant, cliente_id, clientes_importados.ORIGEM_RESPOSTA_SAIR)
+    logger.info("[NAO-CONTATAR] tenant=%s: resposta SAIR registrada", tenant)
+    return JSONResponse({"status": "cliente_marcado", "ja_estava_marcado": ja_estava,
+                         "nao_contatar": {"marcado_em": datas_api.iso_com_fuso(marca["marcado_em"]),
+                                          "origem": marca["origem"]}})
+
+
 @app.post("/simulate/churn-risk")
 async def simulate_churn_risk(request: Request,
                              payload: SimulateChurnRisk) -> JSONResponse:
@@ -1018,12 +1133,76 @@ async def metricas_de_recuperacao(desde: Optional[str] = None,
     return JSONResponse(recovery_log.metricas(tenant_id=tenant_id, desde=desde))
 
 
+MODELOS_DO_SISTEMA = ("classificador_de_falha", "detector_de_anomalia", "dia_provavel_de_saldo",
+                      "risco_voluntario")
+
+
+def modelos_carregados() -> dict:
+    """Quais dos modelos do sistema estão carregados NESTE processo. Sem
+    modelo, cada decisão cai na regra de reserva dela: o serviço responde, mas
+    a tela precisa avisar. Só nomes e contagem; nenhum caminho de arquivo."""
+    from ..agent import workflow
+    from ..churn_voluntary import risk_scorer
+    estado = {
+        "classificador_de_falha": bool(getattr(workflow._classifier, "is_fitted", False)),
+        "detector_de_anomalia": bool(getattr(workflow._detector, "is_fitted", False)),
+        "dia_provavel_de_saldo": bool(getattr(workflow._payday, "is_fitted", False)),
+        "risco_voluntario": bool(risk_scorer.modelo_ativo()),
+    }
+    return {"carregados": sum(estado.values()), "total": len(MODELOS_DO_SISTEMA),
+            "ausentes": [nome for nome in MODELOS_DO_SISTEMA if not estado[nome]]}
+
+
+def redator_disponivel() -> bool:
+    """O redator de mensagens (o LLM) tem chave configurada? Sem ela, as
+    mensagens saem dos textos de reserva. Não é um teste de rede: diz se o
+    serviço TEM como chamar o redator, não se ele respondeu agora."""
+    return bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
+
+
+async def _base_de_quem_pergunta(request: Request) -> Optional[dict]:
+    """A última atualização da base DA EMPRESA DO TOKEN, se o `/health` veio com
+    um token de login válido: `{"informada": True, "atualizada_em", "origem"}`,
+    com os dois `None` quando a empresa não tem base. Sem token, ou com token
+    inválido, None: o `/health` continua público e não diz nada de empresa
+    nenhuma."""
+    autorizacao = request.headers.get("authorization")
+    if not autorizacao:
+        return None
+    try:
+        conta = await get_conta(autorizacao)
+    except HTTPException:
+        return None
+    tenant_id = conta["tenant_id"]
+    try:
+        resumo = clientes_importados.resumo(tenant_id)
+    except clientes_importados.ConfiguracaoAusente:
+        return None
+    ultima = origem_da_base.ultima(tenant_id)
+    if resumo["atualizada_em"] is None:
+        return {"informada": True, "atualizada_em": None, "origem": None}
+    return {"informada": True, "origem": ultima["origem"] if ultima else None,
+            "atualizada_em": datas_api.iso_com_fuso(
+                ultima["atualizada_em"] if ultima else resumo["atualizada_em"])}
+
+
 @app.get("/health")
-async def health():
+async def health(request: Request):
     """Sinal de vida, e o estado do relógio: sem ele, um ciclo parado em
-    `recobrando` não se distingue de um relógio que não está rodando."""
-    return {"status": "ok", "service": "crai-agent-v2",
-            "relogio": relogio.estado_para_health()}
+    `recobrando` não se distingue de um relógio que não está rodando.
+
+    Desde a Rodada 3 diz também quantos modelos estão carregados e se o redator
+    de mensagens tem como ser chamado. Continua PÚBLICA. Com um token de login
+    válido no cabeçalho, acrescenta `base`: a última atualização da base da
+    empresa do token (e só dela)."""
+    resposta = {"status": "ok", "service": "crai-agent-v2",
+                "relogio": relogio.estado_para_health(),
+                "modelos": modelos_carregados(),
+                "redator": {"disponivel": redator_disponivel()}}
+    base = await _base_de_quem_pergunta(request)
+    if base is not None:
+        resposta["base"] = base
+    return resposta
 
 
 # ── Self-service (empresa autenticada via Supabase) ───────────────────────
@@ -1046,6 +1225,16 @@ app.include_router(configuracao_api.router)
 # As chaves de API da empresa (Rodada 2) — `api/integracao.py`. A chave em si
 # autentica só as quatro rotas de `api/clientes.py` (`accounts/chaves_api.py`).
 app.include_router(integracao_api.router)
+# A página do voluntário no dashboard (Rodada 3) - `api/voluntario.py`.
+app.include_router(voluntario_api.router)
+# A visão geral do dashboard (Rodada 3) - `api/visao_geral.py`.
+app.include_router(visao_geral_api.router)
+# A simulação do gateway (Rodada 3) - `api/simulacao.py`. Autenticada, da
+# empresa do token, em qualquer ambiente: nunca toca PSP nem envia mensagem.
+app.include_router(simulacao_api.router)
+# O assistente do dashboard (Rodada 3) - `api/assistente.py`. Só lê: a
+# documentação de produto e os totais da empresa do token.
+app.include_router(assistente_api.router)
 # O token de DESENVOLVIMENTO do dashboard: a rota só é montada com
 # `ENV=development`, e a chave que assina nasce aqui, em memória — ver
 # `api/dev_token.py`. Fora de `development`, `/dev/token` não existe.
@@ -1084,6 +1273,9 @@ async def importar_clientes(
         logger.error("[IMPORTACAO] %s", e)
         raise HTTPException(status_code=500, detail={
             "motivo": "base_nao_configurada", "detalhe": str(e)})
+    if relatorio.get("importados"):
+        # Rodada 3: a última escrita aceita na base veio pelo anexo.
+        origem_da_base.registrar(tenant_id, origem_da_base.ORIGEM_ANEXO)
     return JSONResponse(relatorio)
 
 
@@ -1689,7 +1881,7 @@ async def _fechar_ciclo_recuperado(
                     customer_id, e2e_id[:16])
         return {"ciclo": "reenvio", "fee": 0.0}
 
-    agora = datetime.now()
+    agora = _agora()
     # A trava do cliente cobre a leitura e a escrita do ciclo pelo mesmo motivo
     # que cobre o `ainvoke`: uma confirmação chegando junto com uma falha do
     # mesmo mandato intercalaria leitura e gravação.
@@ -1799,8 +1991,9 @@ async def _run_involuntary_pipeline(
     invoice_id: str,
     retries_done: Optional[int] = None,
     tenant_id: str = TENANT_PADRAO,
-) -> None:
-    """Monta o state inicial e roda o grafo de churn involuntário.
+) -> dict:
+    """Monta o state inicial e roda o grafo de churn involuntário. Devolve o
+    state final (a simulação do gateway lê dele o que o sistema diagnosticou).
 
     `payment_method` é preenchido AQUI, na entrada, antes de qualquer nó de
     decisão — é o que permite ao grafo escolher a política de retentativa certa
@@ -1863,7 +2056,7 @@ async def _run_involuntary_pipeline(
     # Uma execução por vez, por cliente. Ver `_trava_do_cliente`.
     config = {"configurable": {"thread_id": customer_id}}
     async with _trava_do_cliente(customer_id):
-        await crai_agent.ainvoke(initial, config)
+        return await crai_agent.ainvoke(initial, config)
 
 
 # Prefixos das duas origens de identidade do churn voluntário. Têm o mesmo
@@ -1929,7 +2122,7 @@ async def _run_voluntary_pipeline(user_id: str, event: str, props: dict,
     # envio e o de simulação passa por `track_outcome`. Ver o docstring de
     # `voluntary_agent` — são topologias diferentes, escolhidas por
     # `CRAI_SIMULATE_OUTCOMES`.
-    await agente_do_modo().ainvoke(initial, config)
+    return await agente_do_modo().ainvoke(initial, config)
 
 
 def _build_fake_stripe_event(p: SimulatePayment) -> dict:

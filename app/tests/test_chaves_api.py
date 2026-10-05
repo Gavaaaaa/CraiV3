@@ -57,6 +57,9 @@ AS_QUATRO = [
     ("PATCH", "/clientes/{customer_id_externo}"),
     ("DELETE", "/clientes/{customer_id_externo}"),
 ]
+# Rodada 3, Fase 5 (S1): a chave passa a valer também em `POST /eventos`. K8
+# deixa de ser "as quatro rotas de clientes" e vira "as quatro e a de eventos".
+ROTAS_DA_CHAVE = AS_QUATRO + [("POST", "/eventos")]
 
 
 @pytest.fixture(autouse=True)
@@ -477,7 +480,8 @@ def _caminho_concreto(modelo: str) -> str:
 class TestSoAsQuatroRotas:
 
     def test_a_lista_fechada_sao_as_quatro_rotas_de_clientes_e_elas_existem(self):
-        assert chaves_api.ROTAS_COM_CHAVE == frozenset(AS_QUATRO)
+        assert chaves_api.ROTAS_COM_CHAVE == frozenset(ROTAS_DA_CHAVE)
+        assert len(chaves_api.ROTAS_COM_CHAVE) == 5
         existentes = {(m, p) for m, p, _ in _rotas_do_app()}
         assert chaves_api.ROTAS_COM_CHAVE <= existentes, (
             "uma rota da lista da chave não existe mais no aplicativo: a chave deixaria de "
@@ -508,8 +512,8 @@ class TestSoAsQuatroRotas:
                                         headers=_bearer(INVENTADA))
             assert _igual_byte_a_byte(r, inventada), (
                 f"{metodo} {modelo} responde diferente a chave válida e a chave inventada")
-        assert aceitaram == set(AS_QUATRO), (
-            f"rotas fora da lista aceitaram a chave: {sorted(aceitaram - set(AS_QUATRO))}")
+        assert aceitaram == set(ROTAS_DA_CHAVE), (
+            f"rotas fora da lista aceitaram a chave: {sorted(aceitaram - set(ROTAS_DA_CHAVE))}")
 
     def test_so_as_rotas_que_usam_a_dependencia_de_tenant_leem_a_chave(self):
         """A chave só é consultada por `get_tenant_id`. As quatro rotas a usam;

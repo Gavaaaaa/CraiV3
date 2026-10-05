@@ -36,6 +36,11 @@ MOTIVO_CONTATO_DA_BASE = "contato_da_base"
 MOTIVO_SEM_MAPEAMENTO = "sem_mapeamento"
 MOTIVO_SEM_CONTATO = "sem_contato"
 MOTIVO_PRESUMIDO = "presumido"
+# Rodada 3, Fase 6: o cliente pediu para não ser contatado (respondeu SAIR, ou a
+# empresa o marcou). Vence tudo, inclusive o canal presumido: nenhuma mensagem
+# sai para ele. As tentativas de cobrança do Pix NÃO param: a marca é só de
+# mensagem.
+MOTIVO_NAO_CONTATAR = "cliente_pediu_para_nao_ser_contatado"
 
 # Qual coluna da base torna cada canal elegível.
 CONTATO_DO_CANAL = {"whatsapp": "telefone", "email": "email"}
@@ -57,10 +62,25 @@ def cliente_da_recorrencia(tenant_id: str, id_recorrencia: str) -> Optional[dict
         return None
 
 
+def pediu_para_nao_ser_contatado(tenant_id: str, cliente: Optional[dict]) -> bool:
+    """O cliente desta cobrança tem a marca "não contatar"? Lida na base a cada
+    chamada (na escolha do canal e de novo no envio): a marca posta entre uma
+    coisa e outra já vale."""
+    if cliente is None:
+        return False
+    try:
+        return clientes_importados.nao_contatar(
+            tenant_id, cliente.get("customer_id_externo")) is not None
+    except clientes_importados.ConfiguracaoAusente:
+        return False
+
+
 def escolher_canal(tenant_id: str, id_recorrencia: str, config: dict) -> dict:
     """`{"canal", "motivo_canal", "primeiro_nome", "tempo_de_casa"}` — sem contato."""
     cliente = cliente_da_recorrencia(tenant_id, id_recorrencia)
     base = {"primeiro_nome": primeiro_nome(cliente), "tempo_de_casa": faixa_de_tempo_de_casa(cliente)}
+    if pediu_para_nao_ser_contatado(tenant_id, cliente):
+        return {"canal": SEM_CANAL, "motivo_canal": MOTIVO_NAO_CONTATAR, **base}
     if cliente is not None:
         for canal in config["canais_permitidos"]:
             if cliente.get(CONTATO_DO_CANAL.get(canal, "")):

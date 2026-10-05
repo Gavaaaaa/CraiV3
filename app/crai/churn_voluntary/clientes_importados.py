@@ -96,6 +96,30 @@ CREATE TABLE IF NOT EXISTS {TABELA} (
 );
 """
 
+# A MARCA "NÃO CONTATAR" (Rodada 3, Fase 6). Uma linha por cliente que pediu
+# para não receber mensagens, na mesma base (o mesmo destino: Postgres em
+# produção, SQLite em teste), com a mesma chave do cliente. Fica numa tabela
+# própria, e não numa coluna de `clientes_importados`, por três motivos: a
+# marca não entra na foto que a planilha e a API regravam; ela vale também
+# para o cliente que o sistema só conhece por evento (sem linha na base); e a
+# tabela que já está em produção não muda. `origem`: quem marcou.
+TABELA_NAO_CONTATAR = "clientes_nao_contatar"
+NAO_CONTATAR_SQL = f"""
+CREATE TABLE IF NOT EXISTS {TABELA_NAO_CONTATAR} (
+    tenant_id           TEXT NOT NULL,
+    customer_id_externo TEXT NOT NULL,
+    marcado_em          TEXT NOT NULL,
+    origem              TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, customer_id_externo)
+)
+"""
+ORIGEM_EMPRESA = "empresa"                  # a empresa marcou, pelo painel
+ORIGEM_RESPOSTA_SAIR = "resposta_sair"      # o cliente respondeu SAIR a uma mensagem
+ORIGEM_ANONIMIZACAO = "anonimizacao"        # os contatos dele foram apagados (art. 18)
+ORIGENS_DO_NAO_CONTATAR = (ORIGEM_EMPRESA, ORIGEM_RESPOSTA_SAIR, ORIGEM_ANONIMIZACAO)
+# Os campos de contato e de identificação direta que a anonimização apaga.
+CAMPOS_DE_CONTATO = ("nome", "email", "telefone", "motivo_cancelamento")
+
 # `id_recorrencia` é única por tenant. NULL não colide (SQLite e Postgres tratam
 # dois NULL como distintos num índice único): cliente sem mapeamento é o normal.
 INDICE_RECORRENCIA_SQL = f"""
@@ -263,6 +287,7 @@ def _garantir_schema(conn: _Conexao, alvo: str) -> None:
         conn.executar(SCHEMA_SQL)
         _migrar_schema(conn)
         conn.executar(INDICE_RECORRENCIA_SQL)
+        conn.executar(NAO_CONTATAR_SQL)
         conn.commit()
         _schema_garantido.add(alvo)
 
@@ -297,6 +322,16 @@ def esquecer_schema_garantido() -> None:
 
 
 # ── Escrita ───────────────────────────────────────────────────────────────
+
+# Quantas escritas ESTE processo fez na base de cada tenant. É a parte exata da
+# marca que invalida o cache da régua (`marca_da_base`): duas escritas no mesmo
+# segundo, que os carimbos de data não distinguem, mudam este número.
+_escritas: dict = {}
+
+
+def _marcar_escrita(tenant_id: str) -> None:
+    _escritas[tenant_id] = _escritas.get(tenant_id, 0) + 1
+
 
 class _conflito_de_recorrencia:
     """Traduz a violação de `uq_cliente_recorrencia` (a única restrição de
@@ -361,6 +396,7 @@ def gravar(tenant_id: str, clientes: list[dict]) -> int:
         with _conectar() as conn:
             for c in clientes:
                 conn.executar(_UPSERT, _params_upsert(tenant_id, c, agora))
+    _marcar_escrita(tenant_id)
     return len(clientes)
 
 
@@ -374,6 +410,7 @@ def upsert_um(tenant_id: str, cliente: dict, reativar: bool = False) -> dict:
     isso. Se o cliente não estava cancelado, `reativar` não muda nada.
     """
     agora = _agora()
+    _marcar_escrita(tenant_id)
     with _conflito_de_recorrencia(), _conectar() as conn:
         conn.executar(_UPSERT, _params_upsert(tenant_id, cliente, agora))
         if reativar:
@@ -404,6 +441,7 @@ def atualizar_parcial(tenant_id: str, customer_id_externo: str, campos: dict):
         raise ValueError(
             f"atualizar_parcial não aceita {sorted(desconhecidos)}; "
             f"aceita {list(COLUNAS_PARCIAIS)}")
+    _marcar_escrita(tenant_id)
     with _conflito_de_recorrencia(), _conectar() as conn:
         if _buscar(conn, tenant_id, customer_id_externo) is None:
             return None
@@ -434,6 +472,7 @@ def cancelar(tenant_id: str, customer_id_externo: str, motivo=None):
     """
     if motivo is not None:
         motivo = str(motivo)[:MOTIVO_CANCELAMENTO_MAX]
+    _marcar_escrita(tenant_id)
     with _conectar() as conn:
         linha = _buscar(conn, tenant_id, customer_id_externo)
         if linha is None:
@@ -445,6 +484,83 @@ def cancelar(tenant_id: str, customer_id_externo: str, motivo=None):
                 (_agora(), motivo, tenant_id, customer_id_externo))
             linha = _buscar(conn, tenant_id, customer_id_externo)
         return linha
+
+
+# ── Não contatar (Rodada 3, Fase 6) ───────────────────────────────────────
+
+def marcar_nao_contatar(tenant_id: str, customer_id_externo: str, origem: str) -> dict:
+    """Marca o cliente como "não contatar". Devolve `{marcado_em, origem}` como
+    ficou. Idempotente, e preserva a PRIMEIRA marca: quem já está marcado
+    continua com a data e a origem de antes. Não exige que o cliente esteja na
+    base: quem chama decide (a rota do painel exige; a resposta SAIR, não)."""
+    if origem not in ORIGENS_DO_NAO_CONTATAR:
+        raise ValueError(f"origem desconhecida: {origem!r}")
+    with _conectar() as conn:
+        conn.executar(
+            f"INSERT INTO {TABELA_NAO_CONTATAR} (tenant_id, customer_id_externo, marcado_em, origem) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (tenant_id, customer_id_externo) DO NOTHING",
+            (tenant_id, str(customer_id_externo), _agora(), origem))
+        linha = conn.executar(
+            f"SELECT marcado_em, origem FROM {TABELA_NAO_CONTATAR} "
+            "WHERE tenant_id = ? AND customer_id_externo = ?",
+            (tenant_id, str(customer_id_externo)))[0]
+    return {"marcado_em": linha["marcado_em"], "origem": linha["origem"]}
+
+
+def desmarcar_nao_contatar(tenant_id: str, customer_id_externo: str) -> bool:
+    """Tira a marca. True se havia marca; False se não havia."""
+    with _conectar() as conn:
+        havia = bool(conn.executar(
+            f"SELECT 1 AS um FROM {TABELA_NAO_CONTATAR} "
+            "WHERE tenant_id = ? AND customer_id_externo = ?",
+            (tenant_id, str(customer_id_externo))))
+        conn.executar(
+            f"DELETE FROM {TABELA_NAO_CONTATAR} WHERE tenant_id = ? AND customer_id_externo = ?",
+            (tenant_id, str(customer_id_externo)))
+    return havia
+
+
+def nao_contatar(tenant_id: str, customer_id_externo) -> dict | None:
+    """`{marcado_em, origem}` se ESTE cliente DESTE tenant pediu para não ser
+    contatado; None se não. É a leitura que a cadeia de canal faz na hora de
+    escolher o canal e, de novo, na hora de enviar."""
+    if customer_id_externo is None or str(customer_id_externo) == "":
+        return None
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT marcado_em, origem FROM {TABELA_NAO_CONTATAR} "
+            "WHERE tenant_id = ? AND customer_id_externo = ?",
+            (tenant_id, str(customer_id_externo)))
+    return dict(linhas[0]) if linhas else None
+
+
+def marcados_nao_contatar(tenant_id: str) -> dict:
+    """{customer_id_externo: {marcado_em, origem}} de todos os marcados do tenant."""
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT customer_id_externo, marcado_em, origem FROM {TABELA_NAO_CONTATAR} "
+            "WHERE tenant_id = ?", (tenant_id,))
+    return {l["customer_id_externo"]: {"marcado_em": l["marcado_em"], "origem": l["origem"]}
+            for l in linhas}
+
+
+def apagar_contatos(tenant_id: str, customer_id_externo: str):
+    """ANONIMIZAÇÃO (art. 18): apaga o nome, o e-mail, o telefone e o motivo de
+    cancelamento (texto livre) deste cliente. O resto da linha fica: o MRR, o
+    perfil, o comportamento e os carimbos são o que as métricas agregadas
+    usam. Devolve a lista dos campos que TINHAM valor e foram apagados; `None`
+    se o cliente não existe neste tenant. Idempotente."""
+    _marcar_escrita(tenant_id)
+    with _conectar() as conn:
+        linha = _buscar(conn, tenant_id, customer_id_externo)
+        if linha is None:
+            return None
+        apagados = [c for c in CAMPOS_DE_CONTATO if linha.get(c) not in (None, "")]
+        conn.executar(
+            f"UPDATE {TABELA} SET {', '.join(f'{c} = NULL' for c in CAMPOS_DE_CONTATO)} "
+            "WHERE tenant_id = ? AND customer_id_externo = ?",
+            (tenant_id, customer_id_externo))
+    return apagados
 
 
 def apagar_tenant(tenant_id: str) -> int:
@@ -464,6 +580,7 @@ def apagar_tenant(tenant_id: str) -> int:
         antes = conn.executar(
             f"SELECT COUNT(*) AS n FROM {TABELA} WHERE tenant_id = ?", (tenant_id,))
         conn.executar(f"DELETE FROM {TABELA} WHERE tenant_id = ?", (tenant_id,))
+    _marcar_escrita(tenant_id)
     return int(antes[0]["n"]) if antes else 0
 
 
@@ -554,3 +671,78 @@ def contar(tenant_id: str, incluir_cancelados: bool = False) -> int:
             f"SELECT COUNT(*) AS n FROM {TABELA} WHERE tenant_id = ?{filtro}",
             (tenant_id,))
         return int(linhas[0]["n"]) if linhas else 0
+
+
+# ── Leituras do dashboard do voluntário (Rodada 3) ────────────────────────
+
+def marca_da_base(tenant_id: str) -> tuple:
+    """Uma marca que MUDA a cada escrita na base deste tenant. É o que invalida
+    o cache da régua (`insights_unificados.painel_de_risco`).
+
+    Duas partes: o contador de escritas DESTE processo (exato) e uma foto barata
+    da tabela (quantas linhas, quantos cancelados e os carimbos mais recentes),
+    que pega a escrita feita por OUTRO processo. Os carimbos têm resolução de
+    segundo: a escrita de outro processo que não mude nenhuma contagem e caia no
+    mesmo segundo da anterior só é vista na escrita seguinte. Limite declarado
+    em `docs/LIMITACOES.md`.
+    """
+    with _conectar() as conn:
+        linha = conn.executar(
+            f"SELECT COUNT(*) AS n, COUNT(cancelado_em) AS cancelados, "
+            f"MAX(importado_em) AS importado, MAX(atualizado_em) AS atualizado, "
+            f"MAX(cancelado_em) AS cancelado FROM {TABELA} WHERE tenant_id = ?",
+            (tenant_id,))[0]
+    return (_destino(), _escritas.get(tenant_id, 0), int(linha["n"] or 0),
+            int(linha["cancelados"] or 0), linha["importado"], linha["atualizado"],
+            linha["cancelado"])
+
+
+def carimbos(tenant_id: str) -> dict:
+    """{customer_id_externo: (importado_em, atualizado_em, nome)} dos clientes
+    ATIVOS deste tenant, numa consulta só. Para a lista "atualizados mais
+    recentemente" do dashboard: o nome é o que a lista de ciclos já mostra."""
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT customer_id_externo, importado_em, atualizado_em, nome FROM {TABELA} "
+            "WHERE tenant_id = ? AND cancelado_em IS NULL", (tenant_id,))
+    return {l["customer_id_externo"]: (l["importado_em"], l["atualizado_em"], l["nome"])
+            for l in linhas}
+
+
+def obter_varios(tenant_id: str, ids: list) -> dict:
+    """{customer_id_externo: linha} dos clientes DESTE tenant com estes ids,
+    cancelados ou não, numa consulta por bloco. Id de outro tenant não aparece."""
+    ids = sorted({str(i) for i in ids if i})
+    achados: dict = {}
+    if not ids:
+        return achados
+    with _conectar() as conn:
+        for inicio in range(0, len(ids), 500):
+            bloco = ids[inicio:inicio + 500]
+            for l in conn.executar(
+                    f"SELECT {', '.join(COLUNAS)} FROM {TABELA} WHERE tenant_id = ? "
+                    f"AND customer_id_externo IN ({', '.join('?' * len(bloco))})",
+                    (tenant_id, *bloco)):
+                achados[l["customer_id_externo"]] = l
+    return achados
+
+
+def resumo(tenant_id: str) -> dict:
+    """A base em três números, sem carregar as linhas: quantos clientes ativos,
+    quantos deles têm dado de comportamento (`days_since_last` ou
+    `features_used_30d`, o mínimo para o risco ser avaliado) e o carimbo da
+    escrita mais recente (importação, alteração ou cancelamento)."""
+    with _conectar() as conn:
+        linha = conn.executar(
+            f"SELECT COUNT(*) AS total, "
+            f"SUM(CASE WHEN days_since_last IS NOT NULL OR features_used_30d IS NOT NULL "
+            f"THEN 1 ELSE 0 END) AS com_dados FROM {TABELA} "
+            "WHERE tenant_id = ? AND cancelado_em IS NULL", (tenant_id,))[0]
+        marcas = conn.executar(
+            f"SELECT MAX(importado_em) AS importado, MAX(atualizado_em) AS atualizado, "
+            f"MAX(cancelado_em) AS cancelado FROM {TABELA} WHERE tenant_id = ?",
+            (tenant_id,))[0]
+    carimbos_da_base = [m for m in (marcas["importado"], marcas["atualizado"],
+                                    marcas["cancelado"]) if m]
+    return {"total": int(linha["total"] or 0), "com_dados": int(linha["com_dados"] or 0),
+            "atualizada_em": max(carimbos_da_base) if carimbos_da_base else None}

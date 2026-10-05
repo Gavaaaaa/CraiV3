@@ -26,8 +26,10 @@ explicação, essa é gerada agora, com as mesmas features e o evento.
 """
 
 import logging
+import threading
 
-from . import batch_scoring, retention_log
+from . import batch_scoring, clientes_importados, retention_log
+from . import risk_scorer as _rs
 
 logger = logging.getLogger(__name__)
 
@@ -139,3 +141,71 @@ def filtrar(ranking: list[dict], limite=None, criticidade_minima=None) -> list[d
     if limite is not None:
         linhas = linhas[:limite]
     return linhas
+
+
+# ── O cache da régua (Rodada 3, Fase 1) ───────────────────────────────────
+#
+# `clientes_em_risco` recalcula a base INTEIRA a cada chamada. Com o dashboard
+# consultando de tempo em tempo, isso pesa: a página do voluntário pede a lista,
+# os totais e a comparação a cada minuto. `painel_de_risco` guarda o resultado
+# por tenant e só recalcula quando a MARCA muda. A marca junta:
+#
+#   - a base importada (`clientes_importados.marca_da_base`): toda escrita deste
+#     processo, e a foto da tabela para a escrita de outro processo;
+#   - os ciclos do SDK (`retention_log.marca_dos_ciclos`): ciclo novo ou desfecho;
+#   - quem decide o risco agora (modelo ativo, contrato, arquivo do modelo e o
+#     limiar de alto valor) e o idioma.
+#
+# Qualquer escrita na base do tenant muda a marca, e a leitura seguinte
+# recalcula. Sem conseguir ler a marca (banco fora), não há cache: calcula e
+# devolve. O `/insights` antigo NÃO passa por aqui: continua recalculando a cada
+# chamada, como o contrato dele diz.
+#
+# O QUE É GUARDADO é o ranking completo do tenant (com o e-mail da base, como o
+# `/insights` devolve). Fica só na memória do processo, um resultado por tenant,
+# e some no reinício. Quem lê não altera as listas devolvidas.
+
+_cache_lock = threading.Lock()
+_cache: dict = {}
+
+
+def esquecer_cache() -> None:
+    """Zera o cache de todos os tenants (testes, e troca de modelo a quente)."""
+    with _cache_lock:
+        _cache.clear()
+
+
+def marca_do_tenant(tenant_id: str, idioma: str = "pt"):
+    """A marca que invalida o cache, ou None se alguma leitura falhou."""
+    ciclos = retention_log.marca_dos_ciclos(tenant_id)
+    if ciclos is None:
+        return None
+    return (clientes_importados.marca_da_base(tenant_id), ciclos,
+            str(retention_log.caminho_do_banco()), idioma,
+            batch_scoring.posicao_pelo_modelo_ativa(), _rs.modelo_ativo(),
+            str(_rs.MODELO_PATH), _rs.limiar_de_alto_valor())
+
+
+def em_cache(tenant_id: str, nome: str, calcular, idioma: str = "pt"):
+    """`calcular()` guardado por (tenant, nome) enquanto a marca do tenant não
+    mudar. É por aqui que as rotas do dashboard reaproveitam um cálculo que
+    depende só da base."""
+    marca = marca_do_tenant(tenant_id, idioma)
+    if marca is None:
+        return calcular()
+    chave = (tenant_id, nome)
+    with _cache_lock:
+        guardado = _cache.get(chave)
+    if guardado is not None and guardado[0] == marca:
+        return guardado[1]
+    valor = calcular()
+    with _cache_lock:
+        _cache[chave] = (marca, valor)
+    return valor
+
+
+def painel_de_risco(tenant_id: str, idioma: str = "pt") -> list[dict]:
+    """O mesmo ranking de `clientes_em_risco`, do cache enquanto a base do
+    tenant não mudar. NÃO altere a lista devolvida."""
+    return em_cache(tenant_id, f"ranking:{idioma}",
+                    lambda: clientes_em_risco(tenant_id, idioma), idioma)

@@ -20,6 +20,7 @@ from anthropic import AsyncAnthropic
 
 from ..agent.pix_codes import CAUSA_LEGIVEL
 from ..churn_voluntary import retention_log as trilha
+from ..config import AVISO_SAIR
 from .ciclo_cobranca import ABORDAGENS
 from langgraph.graph import StateGraph, END
 
@@ -97,11 +98,14 @@ CAUSA_DE_RESERVA = "processing_error"
 
 
 def com_aviso(texto: str) -> str:
-    """O texto com a linha de mensagem automática no fim, uma vez só."""
+    """O texto com as duas linhas do fim, uma vez só cada: como sair
+    (`AVISO_SAIR`, Rodada 3) e, por último, a de mensagem automática."""
     texto = (texto or "").rstrip()
     if texto.endswith(AVISO_AUTOMATICO):
-        return texto
-    return f"{texto}\n{AVISO_AUTOMATICO}"
+        texto = texto[:-len(AVISO_AUTOMATICO)].rstrip()
+    if texto.endswith(AVISO_SAIR):
+        texto = texto[:-len(AVISO_SAIR)].rstrip()
+    return f"{texto}\n{AVISO_SAIR}\n{AVISO_AUTOMATICO}"
 
 
 def abordagem_recomendada(causa: Optional[str], p_recovery: Optional[float]) -> str:

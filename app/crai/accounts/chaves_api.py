@@ -19,7 +19,8 @@ AS REGRAS, e onde cada uma mora:
         quem responde (`accounts/auth.py`) devolve o mesmo 401 para as três.
     K7  o tenant é o gravado com a chave na criação, que veio do token de quem
         a criou. Nunca vem do corpo.
-    K8  `ROTAS_COM_CHAVE` é a lista fechada das rotas que a chave autentica.
+    K8  `ROTAS_COM_CHAVE` é a lista fechada das rotas que a chave autentica:
+        as quatro da API de clientes e, desde a Rodada 3, `POST /eventos`.
         Fora dela a chave nem é consultada (`accounts/auth.py`).
     K10 no máximo `MAX_ATIVAS` chaves ativas por empresa, contadas e gravadas
         na mesma transação (`BEGIN IMMEDIATE`).
@@ -73,15 +74,23 @@ NOME_MAX = 60
 MAX_ATIVAS = 5
 ENV_LIMITE = "CRAI_API_LIMITE_POR_MINUTO"
 LIMITE_PADRAO = 120
+# S6 (Rodada 3): os eventos de comportamento têm limite próprio, contado à
+# parte do das rotas de clientes. Um sistema que avisa cada visita não pode
+# gastar o limite de quem atualiza a base, nem o contrário.
+ENV_LIMITE_EVENTOS = "CRAI_EVENTOS_LIMITE_POR_MINUTO"
+LIMITE_EVENTOS_PADRAO = 600
 JANELA_SEGUNDOS = 60
 
 # K8: (método, modelo da rota). É por esta lista, e só por ela, que
 # `accounts/auth.get_tenant_id` decide se consulta a chave.
+ROTA_DE_EVENTOS = ("POST", "/eventos")
 ROTAS_COM_CHAVE = frozenset({
     ("POST", "/clientes"),
     ("POST", "/clientes/lote"),
     ("PATCH", "/clientes/{customer_id_externo}"),
     ("DELETE", "/clientes/{customer_id_externo}"),
+    # Rodada 3 (S1): os eventos de comportamento do cliente final.
+    ROTA_DE_EVENTOS,
 })
 
 # `token_urlsafe(32)` devolve sempre 43 caracteres de [A-Za-z0-9_-].
@@ -290,13 +299,24 @@ def limite_por_minuto() -> int:
     return valor if valor >= 1 else LIMITE_PADRAO
 
 
-def _consumir(chave_id: str) -> Optional[int]:
+def limite_de_eventos_por_minuto() -> int:
+    """S6: o limite de `POST /eventos` por chave e por minuto. Lido a cada
+    chamada. Valor ausente, ilegível ou menor que 1 vale o padrão."""
+    try:
+        valor = int((os.getenv(ENV_LIMITE_EVENTOS) or "").strip())
+    except ValueError:
+        return LIMITE_EVENTOS_PADRAO
+    return valor if valor >= 1 else LIMITE_EVENTOS_PADRAO
+
+
+def _consumir(chave_id: str, eventos: bool = False) -> Optional[int]:
     """Conta um uso da chave na janela. None se coube; senão, quantos segundos
-    faltam para o uso mais antigo sair da janela."""
+    faltam para o uso mais antigo sair da janela. `eventos` conta na janela dos
+    eventos (S6), separada da das rotas de clientes."""
     agora = _relogio()
-    limite = limite_por_minuto()
+    limite = limite_de_eventos_por_minuto() if eventos else limite_por_minuto()
     with _limite_lock:
-        fila = _usos.setdefault(chave_id, deque())
+        fila = _usos.setdefault((chave_id, "eventos") if eventos else chave_id, deque())
         while fila and agora - fila[0] >= JANELA_SEGUNDOS:
             fila.popleft()
         if len(fila) >= limite:
@@ -332,9 +352,10 @@ def _registrar_uso(chave_id: str, agora: Optional[datetime]) -> None:
         logger.error("[CHAVE-API] uso não registrado (id=%s): %r", chave_id, e)
 
 
-def autenticar(chave: str, agora: Optional[datetime] = None) -> str:
+def autenticar(chave: str, agora: Optional[datetime] = None, eventos: bool = False) -> str:
     """O tenant da chave, se ela vale. Levanta `ChaveInvalida` (inexistente,
-    malformada ou revogada, sem distinção) ou `LimiteDeUso`.
+    malformada ou revogada, sem distinção) ou `LimiteDeUso`. `eventos` conta o
+    uso no limite próprio dos eventos (S6).
 
     A ordem: forma, banco, limite, registro do uso. Requisição recusada pelo
     limite não conta como uso."""
@@ -354,7 +375,7 @@ def autenticar(chave: str, agora: Optional[datetime] = None) -> str:
             achada = linha
     if achada is None or achada["revogada_em"] is not None:
         raise ChaveInvalida()
-    espera = _consumir(achada["id"])
+    espera = _consumir(achada["id"], eventos)
     if espera is not None:
         raise LimiteDeUso(espera)
     _registrar_uso(achada["id"], agora)

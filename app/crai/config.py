@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 # ── Envs ─────────────────────────────────────────────────────────────────
 ENV_SUCCESS_FEE = "CRAI_SUCCESS_FEE_PCT"
+ENV_SUCCESS_FEE_VOLUNTARIO = "CRAI_SUCCESS_FEE_VOLUNTARIO_PCT"
+
+# Rodada 3, Fase 6 (descadastro): a linha que toda mensagem ao cliente final
+# carrega. Quem responde SAIR é marcado como "não contatar" e não recebe mais
+# mensagem nenhuma, nem do involuntário nem do voluntário.
+AVISO_SAIR = "Para não receber mais mensagens, responda SAIR."
 ENV_CUSTO_WHATSAPP = "CRAI_CUSTO_INTERVENCAO_WHATSAPP"
 ENV_CUSTO_TENTATIVA_PIX = "CRAI_CUSTO_TENTATIVA_PIX"
 
@@ -104,6 +110,16 @@ def success_fee_pct() -> float:
     um erro de digitação — e um que sairia caro no primeiro fechamento de ciclo.
     """
     return _float_da_env(ENV_SUCCESS_FEE, SUCCESS_FEE_PCT_PADRAO, 0.0, 1.0)
+
+
+def success_fee_voluntario_pct() -> float:
+    """Percentual do valor MANTIDO no churn voluntário que a CRAI cobra.
+
+    Sem `CRAI_SUCCESS_FEE_VOLUNTARIO_PCT`, vale o mesmo percentual do
+    involuntário (`success_fee_pct`): até a Rodada 3 o voluntário não tinha fee
+    nenhuma no código, e a única taxa declarada da instalação era essa.
+    """
+    return _float_da_env(ENV_SUCCESS_FEE_VOLUNTARIO, success_fee_pct(), 0.0, 1.0)
 
 
 def custo_intervencao(canal: str = CANAL_PADRAO) -> float:
