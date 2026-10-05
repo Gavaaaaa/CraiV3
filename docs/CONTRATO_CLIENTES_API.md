@@ -59,7 +59,8 @@ outra e revogue a antiga.
 **O que a chave faz e o que não faz.**
 
 - Autentica **só** estas quatro rotas: `POST /clientes`, `POST /clientes/lote`,
-  `PATCH /clientes/{id}` e `DELETE /clientes/{id}`. Em qualquer outra rota
+  `PATCH /clientes/{id}` e `DELETE /clientes/{id}`; e, desde a Rodada 3, uma
+  quinta: `POST /eventos` (seção 6). Em qualquer outra rota
   (dashboard, configuração, ciclos, titular, `/insights`, `/clientes/importar`
   e as próprias rotas de chave) ela não vale: 401.
 - O `tenant_id` vem **da chave**, nunca do corpo nem de header. Tudo o que 0.2
@@ -119,7 +120,7 @@ chamar("DELETE", "/clientes/c-001", {"motivo": "mudou de fornecedor"})
 | HTTP | `motivo` | Quando |
 |---|---|---|
 | 401 | `chave_invalida` | a chave não existe, está malformada ou foi revogada. **A resposta é a mesma nos três casos**, byte a byte: nada revela se a chave existe |
-| 401 | `chave_nao_vale_nesta_rota` | a chave foi enviada a uma rota fora das quatro. A resposta não depende de a chave ser válida |
+| 401 | `chave_nao_vale_nesta_rota` | a chave foi enviada a uma rota fora das cinco (as quatro de clientes e `POST /eventos`). A resposta não depende de a chave ser válida |
 | 429 | `limite_de_uso` | a chave passou do limite por minuto. O header `Retry-After` traz em quantos segundos tentar de novo; a requisição recusada não foi aplicada |
 
 Um `Authorization: Bearer` que não começa por `crai_live_` é tratado como
@@ -501,3 +502,56 @@ Para conferir se um cliente específico está cancelado sem ler o ranking:
 `DELETE /clientes/{id}` com `Idempotency-Key` não serve para isso — use o
 `ja_estava_cancelado` de um DELETE real só se a intenção for cancelar. Uma
 rota `GET /clientes/{id}` não faz parte deste contrato.
+
+---
+
+## 6. `POST /eventos` — avisar o que o cliente final fez (Rodada 3)
+
+O sistema da empresa avisa a CRAI de um evento de comportamento ("abriu a página de
+cancelamento"), do **servidor dela**, com a mesma chave de API. Antes disto, o evento só
+chegava pelo Segment.
+
+**Autenticação:** a chave de API (`Authorization: Bearer crai_live_...`) ou o token de login.
+O tenant vem da chave: um `tenant_id` no corpo ou em header é ignorado.
+
+**A chave é secreta.** Esta chamada sai do servidor da empresa. Não coloque a chave em
+página web nem em aplicativo: quem a tiver altera a base de clientes. O SDK de navegador,
+com chave pública, é de outra etapa.
+
+**Corpo:** o mesmo do webhook do Segment, com o mesmo vocabulário e a mesma validação.
+
+```json
+{"userId": "c-001",
+ "event": "Cancellation Page Viewed",
+ "properties": {"mrr": 1500.0, "billing_profile": "PJ"},
+ "messageId": "evento-0001",
+ "timestamp": "2026-10-04T12:00:00Z"}
+```
+
+| Campo | Regra |
+|---|---|
+| `userId` ou `anonymousId` | texto; pelo menos um. Use em `userId` o mesmo identificador do cadastro (`customer_id_externo`) |
+| `event` | texto. Os que o sistema reconhece: `Cancellation Page Viewed`, `Downgrade Clicked`, `Session Started`. Outro nome é aceito e não gera ação |
+| `properties` | objeto, opcional. Os campos de comportamento do cadastro (`mrr`, `billing_profile`, `days_since_last`, `features_used_30d`, ...) |
+| `messageId` | texto de 1 a 128 caracteres, opcional. É a chave de idempotência |
+| `timestamp` | opcional. Sem `messageId`, entra na identificação do evento |
+
+**Resposta 200:** `{"status": "ok", "duplicado": false}`. A resposta não diz o risco nem se
+houve oferta: quem decide se e quando falar com o cliente é a CRAI, pelas regras da
+configuração da empresa.
+
+**Idempotência.** O mesmo evento reenviado conta uma vez, e a resposta do reenvio traz
+`duplicado: true`. Com `messageId`, é ele que identifica o evento. Sem ele, o que identifica
+é o conteúdo (`userId` ou `anonymousId`, `event`, `properties` e `timestamp`): para avisar o
+mesmo fato de novo, mude o `timestamp`. A memória de eventos recebidos dura 30 dias.
+
+**Limite de contato.** O evento segue pelo mesmo caminho do Segment. Um cliente final recebe
+no máximo uma oferta de retenção a cada `intervalo_minimo_ofertas_dias` (configuração da
+empresa, de 1 a 365 dias, padrão 30), venha o evento de onde vier.
+
+| HTTP | `motivo` | Quando |
+|---|---|---|
+| 400 | (texto) | o corpo não é JSON, ou não é um objeto |
+| 401 | `chave_invalida` | chave inexistente, malformada ou revogada (a mesma resposta nas três) |
+| 422 | `evento_sem_identificacao` ou `campo_com_forma_invalida` | sem `userId` e sem `anonymousId`; campo com tipo errado; `messageId` vazio ou longo demais |
+| 429 | `limite_de_eventos` | a chave passou de `CRAI_EVENTOS_LIMITE_POR_MINUTO` (padrão 600) eventos por minuto. É um limite próprio, separado do das rotas de clientes. `Retry-After` diz quando tentar de novo; o evento recusado não foi processado |

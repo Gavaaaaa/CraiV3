@@ -563,17 +563,19 @@ expurgo, CORS e token de desenvolvimento: `docs/interno/RELATORIO_ETAPA2_BLOCO*.
    folga. Depende de os dois relógios concordarem; dois ciclos sobrepostos do mesmo
    mandato saem com `trilha_ambigua: true`.
 
-9. **O expurgo diário apaga o texto das mensagens e o registro de acesso, e ainda não a
-   trilha.** Uma vez por dia o relógio apaga o texto das mensagens dos ciclos fechados há
-   mais de `retencao_mensagens_dias` (90 por padrão; a abordagem fica) e os registros de
-   acesso com mais de 12 meses, e diz no log quantas linhas tocou. **A retenção da trilha
-   do Art. 20 (5 anos) não está ligada:** a função de retenção já recebe o prazo
-   (`prazo_dias`), mas o relógio não a chama, porque a catraca
-   `test_art20_trilha.py::TestRetencaoEBestEffort` afirma que ninguém a chama. Hoje a
-   trilha **não é apagada nunca**. Os prazos de 24 meses dos ciclos e de 6 meses da base
-   depois do contrato estão na configuração e também **não são executados** (Etapa 3). O
-   dia do último expurgo mora na memória do processo: depois de um reinício ele roda de
-   novo, o que não faz mal (é idempotente).
+9. **O expurgo diário apaga o texto das mensagens, o registro de acesso e, desde a Rodada
+   3, a ponta antiga da trilha.** Uma vez por dia o relógio apaga o texto das mensagens dos
+   ciclos fechados há mais de `retencao_mensagens_dias` (90 por padrão; a abordagem fica),
+   os registros de acesso com mais de 12 meses e as decisões da trilha do Art. 20 com mais
+   de **5 anos** (`api/relogio.py::expurgar_trilha`, o único chamador da função de
+   retenção), e diz no log quantas linhas tocou. Os 5 anos são o mínimo: a empresa que
+   configurou `retencao_trilha_anos` maior tem o prazo dela; a que configurou menor fica
+   com 5. A trilha é truncada só pela ponta antiga, e o que sobra continua encadeado
+   (`verificar_cadeia` marca `inicio_truncado`). A trilha dos arquivos de simulação não é
+   tocada pelo relógio (ela sai quando a empresa apaga a simulação). Os prazos de 24 meses
+   dos ciclos e de 6 meses da base depois do contrato estão na configuração e **não são
+   executados**. O dia do último expurgo mora na memória do processo: depois de um reinício
+   ele roda de novo, o que não faz mal (é idempotente).
 
 10. **O registro de acesso guarda o papel, não a pessoa.** Cada leitura de
     `GET /titular/explicacao/{id}`, `GET /ciclos/{id}` e `GET /ciclos` grava empresa, rota,
@@ -654,7 +656,8 @@ dinheiro de uma cobrança recuperada volta ao pagador dentro do prazo da empresa
 
 Declarado ao fim da Fase 1 da Rodada 2 (`docs/interno/RELATORIO_RODADA_2.md`). A empresa
 gera uma chave `crai_live_...` no dashboard, e o sistema dela passa a chamar as quatro rotas
-da API de clientes sem ninguém logado (`docs/CONTRATO_CLIENTES_API.md`, seção 0.1b).
+da API de clientes sem ninguém logado (`docs/CONTRATO_CLIENTES_API.md`, seção 0.1b). Desde a
+Rodada 3 a chave vale em uma quinta rota, `POST /eventos` (ver a seção dos eventos, abaixo).
 
 1. **Um tipo de chave só.** Toda chave é de produção. **Não existe chave de teste** nem
    ambiente de teste: quem quer experimentar a integração usa uma empresa de teste.
@@ -714,3 +717,368 @@ da API de clientes sem ninguém logado (`docs/CONTRATO_CLIENTES_API.md`, seção
     por `crai_live_` é tratado como token de login e recebe os erros de token. Numa rota
     fora das quatro, qualquer texto com o prefixo recebe 401 `chave_nao_vale_nesta_rota` sem
     que a chave seja consultada.
+
+### O voluntário e a visão geral no dashboard: o que as rotas declaram (04/10/2026)
+
+As rotas de leitura das páginas Voluntário e Visão geral (`api/voluntario.py` e
+`api/visao_geral.py`). O que cada número é, e o que ele não é:
+
+1. **O "mantido" do voluntário conta 1 mês de MRR, e a fee é a do involuntário.** O valor
+   mantido é `MESES_DE_MRR_MANTIDOS` mês(es) do MRR de quem aceitou a oferta, menos o
+   desconto concedido, líquido da fee. O número de meses é uma constante só
+   (`churn_voluntary/mantido.py`, hoje `1`), e o prazo do estorno é o `prazo_estorno_dias`
+   da empresa (padrão 30). O plano de negócio fala em 6 meses e 90 dias: a troca é essa
+   linha e essa configuração. A fee do voluntário é `CRAI_SUCCESS_FEE_VOLUNTARIO_PCT`; sem
+   ela, vale a do involuntário (`CRAI_SUCCESS_FEE_PCT`, padrão 15%).
+
+2. **O desconto concedido é uma conta por oferta.** Desconto de 10% ou 20%: o percentual
+   sobre o MRR, pelos meses em que vale dentro da janela contada (o desconto vale 3 meses).
+   Pausa de 1 mês: um mês inteiro de MRR. Com 1 mês contado, **a pausa mantém R$ 0**: o
+   cliente ficou, mas naquele mês não houve receita. Pix ou boleto: zero de desconto.
+
+3. **A linha do mantido nasce numa sincronização, não no instante do aceite.** O aceite mora
+   no dataset de treino (`ciclos_retencao`), que não guarda dinheiro. A tabela
+   `retencoes_mantidas` é preenchida quando alguém lê o mantido e depois de um
+   `DELETE /clientes/{id}`. A **data** de cada linha é a do fato (o aceite, o cancelamento);
+   o MRR, o desconto e a fee são os do momento da sincronização e, gravados, não mudam mais.
+   Se a fee da instalação mudar entre o aceite e a primeira leitura, vale a nova.
+
+4. **Sem MRR conhecido, a retenção não vira valor.** Se o ciclo não gravou o MRR e o cliente
+   não está na base, o aceite aparece em `aceites_sem_valor` e não entra no dinheiro.
+
+5. **O aceite sorteado não é dinheiro de verdade.** Com `CRAI_SIMULATE_OUTCOMES=1` o
+   desfecho é um sorteio. Essas retenções ficam marcadas e só aparecem com
+   `incluir_simulados=true`.
+
+6. **O cancelamento que estorna é o da base importada.** Só `cancelado_em` conta (chega pelo
+   `DELETE /clientes/{id}`). Um cliente que só existe no SDK (sem linha na base) nunca é
+   estornado, porque não há como saber que ele cancelou.
+
+7. **O cache da régua é por processo.** `GET /clientes/recentes`, `/clientes/base` e os
+   totais usam o ranking guardado em memória, recalculado quando a base do tenant muda. A
+   escrita deste processo invalida na hora. A escrita de **outro** processo é percebida por
+   uma foto da tabela (contagens e carimbos de data com resolução de segundo): se ela não
+   mudar nenhuma contagem e cair no mesmo segundo da escrita anterior, só é vista na
+   escrita seguinte. Reiniciar o serviço zera o cache. O `GET /insights` não usa o cache.
+
+8. **A origem da base (`api` ou `anexo`) só existe para escritas feitas depois da Rodada 3,**
+   e é da última escrita aceita, não de cada cliente. Base anterior tem origem `null`.
+
+9. **Régua x modelo não é um teste com grupo de controle.** As duas avaliam a mesma base (a
+   de hoje mais quem cancelou no período), com os últimos dados que cada cliente tinha. O
+   sistema não guarda o histórico de faixas: "avisou antes" quer dizer "marca como grave o
+   cliente com os dados de antes do cancelamento". A rota devolve vazio sem o modelo v3
+   ativo, com menos de 30 clientes com dado, ou com menos de 5 cancelamentos no período.
+
+10. **O funil é da coorte do mês, e os outros números são do período.** O funil conta as
+    cobranças que **falharam** no mês pedido, onde quer que estejam hoje. Os cartões, a série
+    e "o que funciona" contam o que **teve desfecho** no período. Ciclos ativos, aguardando
+    escolha e risco grave são de agora.
+
+11. **"Canais" mistura dois tipos de resposta.** No involuntário, resposta é a cobrança
+    recuperada depois da mensagem, sem ter sido por uma tentativa. No voluntário, é a oferta
+    aceita. Os dois somam no mesmo canal.
+
+12. **A atividade recente não tem "entrou em risco grave" de verdade.** O sistema não grava
+    a mudança de faixa. O evento "entrou em risco grave" é o ciclo de retenção em que o
+    cliente foi avaliado como crítico (um evento do SDK ou do disparo em lote).
+
+13. **O voluntário depende da claim `plano` do token.** Fora do premium, os campos do
+    voluntário vêm `null` na visão geral, na série, na atividade e no extrato. O login real
+    só terá a claim na Etapa 5: até lá, só o token de desenvolvimento vê o voluntário na
+    visão geral. As rotas próprias do voluntário (`/clientes/recentes`,
+    `/metrics/voluntario/*`) não conferem o plano.
+
+14. **`GET /health` diz se o redator TEM chave, não se ele respondeu.** `redator.disponivel`
+    é a presença de `ANTHROPIC_API_KEY`. Os modelos contados são os quatro que o serviço
+    carrega (classificador de falha, detector de anomalia, dia provável de saldo e risco
+    voluntário), neste processo. A `base` só vem com um token de login válido, e é a da
+    empresa do token.
+
+15. **`retencoes_mantidas` e `base_atualizacoes` não têm expurgo,** e moram no SQLite local
+    do ciclo de cobrança, com a limitação já declarada para esse arquivo.
+
+### A simulação do gateway: o que é de verdade e o que não é (04/10/2026)
+
+A página "Simulação do gateway" (`api/simulacao.py`, `simulador.py`, `ambiente.py`). O
+cliente, o banco dele e o relógio são fictícios. O que age sobre eles é o sistema de sempre:
+o mesmo pipeline do webhook do Pix, os mesmos modelos, a mesma regra do BACEN, o mesmo
+agendador e as mesmas rotas de escolha de mensagem.
+
+1. **A simulação mora em arquivos separados, um conjunto por empresa.** Ao lado de cada
+   arquivo real há o de simulação da empresa (`recovery_cycles.simulacao.<empresa>.db`,
+   `retention_cycles.simulacao.<empresa>.db`, `pix_retry_state.simulacao.<empresa>.json` e
+   `bandit_state.simulacao.<empresa>.json`). Nada do que é simulado entra no ciclo real, no
+   dataset de treino, na trilha do Art. 20 real, no bandit real nem nas métricas reais. Há
+   teste que confere os arquivos reais byte a byte antes e depois de uma simulação inteira.
+   **Isto vale para o SQLite local.** Quando o ciclo de cobrança for para um banco gerenciado,
+   a simulação precisa de um esquema ou de um banco próprio: o mecanismo de hoje troca o
+   caminho do arquivo.
+
+2. **A base de clientes não tem cópia de simulação.** O cliente fictício não é gravado na
+   base da empresa (que em produção mora no Postgres). Por isso, dentro da simulação, a
+   mensagem dele sai pelo primeiro canal permitido da empresa (canal presumido), e o nome
+   que a tela mostra vem das tabelas da própria simulação.
+
+3. **O relógio simulado é um por empresa, e só anda para a frente.** As tentativas simuladas
+   só saem quando a empresa avança o relógio: o relógio de verdade nunca abre os arquivos de
+   simulação. "Avançar N dias" para na primeira ação que acontecer. Se a empresa criar
+   vários clientes fictícios, o relógio é o mesmo para todos.
+
+4. **O histórico do cliente fictício é o perfil sintético do sistema.** Tempo de casa,
+   histórico de pagamento e falhas em 90 dias saem do mesmo provedor que atende um pagador
+   sem histórico conectado (limitação já declarada do involuntário): são deterministas pelo
+   id da recorrência. **O perfil do formulário (CLT, PJ, freelancer) não é lido pelo
+   sistema:** o dia provável de saldo é estimado pelo modelo, sozinho. A tela diz isso.
+
+5. **A verdade escondida fica numa tabela separada** (`simulacao_verdade`), lida só pelo PSP
+   simulado, pela resposta do cliente à mensagem e pela comparação "sem a CRAI". Nenhum
+   módulo do pipeline importa o simulador (teste estático), e dois clientes iguais no que o
+   sistema vê e opostos na verdade recebem o mesmo diagnóstico (teste dinâmico). A verdade
+   volta só para a empresa que a criou, no verso do cartão.
+
+6. **O sorteio do PSP simulado é determinístico.** A mesma simulação, repetida, dá o mesmo
+   resultado: o sorteio sai do id do cliente fictício e do número da cobrança. Com chance
+   de 100% sempre passa; com 0%, nunca.
+
+7. **A resposta à mensagem é uma regra, não um modelo.** Dois dias depois de a mensagem sair,
+   o cliente fictício paga se já tem saldo e o sorteio dele deixar (a chance de pagar mais 20
+   pontos). Quem não paga fica como qualquer ciclo real: `mensagem_enviada` até o prazo de
+   recuperação (30 dias) e depois `perdido`.
+
+8. **"Sem a CRAI" é a regra do Pix Automático, e não uma medição.** As duas janelas
+   automáticas do dia do vencimento rodam sob responsabilidade do banco do pagador; a
+   recobrança nos 7 dias seguintes só acontece se o recebedor pedir
+   (`dunning/pix_automatico_retry.py`). Sem a CRAI ninguém pede: sem saldo no dia, a cobrança
+   se perde. Não é uma comparação com grupo de controle.
+
+9. **Na retenção simulada, cada sinal marcado vira um dado, e o não marcado não vira nada.**
+   "Abriu a página de cancelamento" é o evento do SDK; "uso em queda" são 24 dias sem entrar
+   e 1 funcionalidade usada; "chamados" e "pagamentos com falha" são as duas colunas da
+   base. O sistema decide como decidiria com um cliente de verdade: **com dado de uso e o
+   modelo v3 ativo, quem decide é o modelo, e o risco que ele dá fica abaixo do corte de
+   intervenção (0,60) em todas as combinações testadas** (o máximo medido foi 0,40, com uso em
+   queda, chamados, pagamentos com falha e a página de cancelamento aberta). Nesse caso a
+   resposta é "sem oferta", com o risco e o corte. Sem dado de uso, decide a régua: a página
+   de cancelamento dá 0,90 e há oferta. Não é defeito da simulação: é o comportamento do
+   modelo v3 promovido, e está registrado como pendência da rodada.
+
+10. **O aceite simulado vem da propensão escondida, e o bandit de verdade não aprende.** A
+    simulação usa uma cópia do bandit da empresa (nasce do que ele sabe agora, aprende só
+    com a simulação, é apagada na limpeza). A oferta sai do sorteio dessa cópia (Thompson
+    Sampling): o mesmo cliente fictício pode receber ofertas diferentes em rodadas
+    diferentes. Com 1 mês contado, a pausa de 1 mês mantém R$ 0, e a tela explica.
+
+11. **Com "Mostrar: Simulação", o agora da simulação aparece como agora há pouco.** O
+    relógio simulado costuma estar dias à frente. Nas métricas, na série, na atividade e no
+    extrato, as datas simuladas voltam o quanto ele está à frente (mais 60 segundos de
+    folga): o que aconteceu "agora" na simulação aparece há um minuto, e o que aconteceu 3
+    dias simulados antes, 3 dias atrás. A lista de ciclos e o painel do ciclo simulado
+    mostram as datas do relógio simulado, sem recuo.
+
+12. **Os ids dos ciclos simulados são somados a 9.000.000.000.000** nas rotas, para o ciclo
+    real 7 e o simulado 7 nunca se confundirem. O id de um ciclo simulado de outra empresa
+    responde o mesmo 404 de um ciclo que não existe.
+
+13. **Apagar a simulação apaga os arquivos.** `DELETE /simulacao` remove os arquivos de
+    simulação da empresa. No Windows, um arquivo em uso por outra requisição não pode ser
+    apagado: a rota responde 409 e a pessoa tenta de novo. Não há expurgo automático: a
+    simulação fica até a empresa apagar.
+
+14. **"Simular outro cliente" não apaga nada.** Os ciclos simulados anteriores continuam
+    (e aparecem com "Mostrar: Simulação"). Só "Apagar todos os dados da simulação" limpa.
+
+15. **O membro lê a simulação e não a executa.** Criar, cobrar, avançar e apagar exigem dono
+    ou administrador. A chave de API não abre nenhuma rota da simulação.
+
+### O assistente do dashboard: o que ele lê e o que ele não é (04/10/2026)
+
+`POST /assistente` (`api/assistente.py`). A pergunta vai ao mesmo LLM que escreve as
+mensagens, com a documentação de produto (`api/assistente_documentacao.md`) e os totais da
+empresa do token.
+
+1. **O que vai ao LLM é só número e rótulo de lista fechada.** Antes do envio, o contexto
+   passa por um filtro que apaga qualquer texto que não seja um rótulo escrito no código
+   (causa, oferta, canal, etapa, modo), uma data ou uma hora. Nome, e-mail, telefone, CPF,
+   id de cliente e texto de mensagem não têm por onde entrar. Há teste com a base cheia, e
+   teste que faz uma função de métrica "vazar" um nome e confere que ele não sai.
+
+2. **Um nome digitado na pergunta vai como foi digitado.** E-mail, CPF, CNPJ, telefone,
+   chave Pix aleatória e número longo digitados na pergunta são trocados por `[removido]`
+   antes do envio. Um nome de pessoa não tem forma que o sistema reconheça: se o usuário
+   escrever "por que a Maria Souza está em risco?", o nome vai ao LLM. O assistente não tem
+   dado nenhum sobre ela para responder.
+
+3. **A defesa contra "ignore as regras" não depende de o LLM obedecer.** O prompt do sistema
+   diz que a pergunta é dado, e a pergunta vai cercada e sem `<` nem `>`. Mas o que garante é
+   outra coisa: o LLM não recebe dado de cliente e não tem ferramenta nenhuma. O pior caso
+   (ele repetir o que recebeu) mostra a documentação e os totais da própria empresa. O texto
+   que volta passa pela mesma máscara, e os links só podem ser os de uma lista fechada de
+   páginas do painel.
+
+4. **A resposta do LLM não é conferida contra os números.** Ele recebe os totais certos, mas
+   pode errar uma conta ou uma frase. A tela continua mandando conferir nas páginas (os links).
+   Não há avaliação automática da qualidade das respostas.
+
+5. **Não guarda a conversa, e por isso não tem memória.** Cada pergunta vai sozinha: "e no
+   mês passado?" não sabe do que se falava antes. O log do serviço registra a empresa, a
+   origem da resposta e os tamanhos, nunca a pergunta nem a resposta.
+
+6. **Os números são dos últimos 30 dias e do mês corrente.** O assistente não consulta outro
+   período, não vê um ciclo específico e não vê a simulação do gateway.
+
+7. **A taxa da CRAI não vai ao LLM** (R11). Para "quanto a CRAI cobra", ele explica a regra
+   (só sobre resultado) e aponta o extrato.
+
+8. **O limite é por empresa, por hora e por processo** (`CRAI_ASSISTENTE_LIMITE_POR_HORA`,
+   padrão 60). Fica na memória: reiniciar o serviço zera, e com mais de um worker cada um
+   conta o seu.
+
+9. **Sem a chave do LLM, o assistente é um texto fixo.** Com `ANTHROPIC_API_KEY` ausente, o
+   LLM fora do ar, lento (25 s) ou devolvendo vazio, a resposta é o texto de ajuda
+   (`origem: "ajuda"`), que a tela marca como "Resposta fixa". O motor de respostas prontas
+   que vivia no navegador só existe no modo demonstração (sem backend).
+
+10. **O modelo é o do redator de mensagens** (`claude-sonnet-5`, o mesmo nome escrito em
+    `dunning_engine.py`), e pode ser trocado por `CRAI_ASSISTENTE_MODELO`. A documentação de
+    produto é escrita à mão: se o produto mudar, ela precisa ser atualizada junto.
+
+### Os eventos de comportamento pela chave de API: o que a rota declara (04/10/2026)
+
+`POST /eventos` (`api/app.py::receber_evento`, `api/eventos_recebidos.py`) e o limite de
+contato do pipeline voluntário (`churn_voluntary/voluntary_agent.py`).
+
+1. **A chave é secreta e só serve no servidor da empresa.** Não existe chave pública. Uma
+   chave posta numa página web ou num aplicativo fica à vista de qualquer visitante, e quem
+   a tem altera e cancela clientes da empresa (a chave não tem escopos). **O SDK de
+   navegador, com chave pública e sem poder de escrita na base, é de outra etapa.**
+
+2. **O mesmo caminho do Segment, com o tenant da chave.** A validação e o pipeline são os do
+   webhook do Segment (uma função só: `_evento_voluntario_validado`). A diferença é de onde
+   vem o tenant: no Segment, do cabeçalho ou do corpo assinado; aqui, da chave. Um
+   `tenant_id` no corpo é ignorado.
+
+3. **As `properties` entram como vieram.** Como no Segment, o que a empresa mandar em
+   `properties` vai para o estado do pipeline. Só os campos conhecidos são gravados no
+   dataset e na trilha. A recomendação continua: mandar só os campos que o contrato pede.
+
+4. **A idempotência dura 30 dias, e é por conteúdo quando não há `messageId`.** Sem
+   `messageId` e sem `timestamp`, dois avisos idênticos do mesmo fato (o cliente abriu a
+   página de cancelamento duas vezes) contam como um só dentro de 30 dias. Com `timestamp`
+   ou `messageId` diferente, são dois eventos. A tabela guarda só o SHA-256 da chave de
+   idempotência, o tenant e a hora.
+
+5. **O webhook do Segment não ganhou idempotência** (a tarefa manda ele continuar igual): um
+   evento reenviado pelo Segment roda o pipeline de novo. O limite de contato impede a
+   segunda oferta, mas o dataset ganha a segunda linha.
+
+6. **O limite de contato é pela última oferta ENVIADA.** Um cliente final recebe no máximo
+   uma oferta a cada `intervalo_minimo_ofertas_dias` (1 a 365, padrão 30), contando da
+   última oferta que saiu para ele, por qualquer origem (Segment, `POST /eventos`, disparo em
+   lote). Evento sem risco não gasta o intervalo. O que NÃO conta: uma oferta decidida
+   cuja entrega falhou (ela não foi enviada). **Antes desta rodada o pipeline de eventos não tinha freio
+   nenhum,** e o disparo em lote tinha só o do ciclo aberto, que continua valendo. A decisão
+   de não ofertar vai para a trilha do Art. 20, com a regra e o motivo.
+
+7. **O intervalo é contado em dias corridos a partir do instante da oferta,** e não em dias
+   de calendário: com 30 dias, a oferta seguinte é possível 30 x 24 horas depois.
+
+8. **A tela de Configuração ainda não mostra o intervalo.** A chave
+   `intervalo_minimo_ofertas_dias` é lida e gravada por `GET` e `PUT /configuracao`; o
+   dashboard ainda não tem o campo.
+
+9. **O limite de eventos é por chave, por minuto e por processo**
+   (`CRAI_EVENTOS_LIMITE_POR_MINUTO`, padrão 600), separado do limite das rotas de clientes
+   (`CRAI_API_LIMITE_POR_MINUTO`, padrão 120). Fica na memória de cada worker. **Com o token
+   de login não há limite** (como nas outras rotas do token).
+
+10. **A resposta não diz o que o sistema decidiu.** `POST /eventos` devolve só `ok` e
+    `duplicado`. O risco, a oferta e o canal aparecem no painel (página Voluntário).
+
+### Direitos do titular e descadastro: o que as rotas declaram (04/10/2026)
+
+`POST /titular/exportar`, `POST /titular/anonimizar`, `GET /titular/texto-para-politica`
+(`api/titular.py`), `POST` e `DELETE /clientes/{id}/nao-contatar` (`api/clientes.py`) e
+`POST /simulate/resposta-sair` (`api/app.py`).
+
+1. **A exportação não repete o e-mail nem o telefone.** Ela diz se cada contato está
+   guardado (`contatos_guardados`), sem o valor. A regra da Rodada 3 é que nenhuma rota
+   devolve telefone, e-mail, CPF ou chave Pix, e quem forneceu esses dados foi a própria
+   empresa. Se a leitura jurídica do Art. 18 pedir o valor na exportação, é uma decisão a
+   tomar. O nome, os valores, as datas, o texto das mensagens ainda guardado e as decisões
+   automatizadas vêm inteiros.
+
+2. **"Anonimizar" apaga os contatos e o texto das mensagens; o identificador fica.** Saem
+   o nome, o e-mail, o telefone, o motivo de cancelamento e o texto de todas as mensagens
+   do titular. Ficam os valores, as datas e os desfechos (as métricas agregadas não mudam),
+   a chave que a empresa usa para o cliente (`customer_id_externo`, um pseudônimo dela) e a
+   trilha do Art. 20. **Não é anonimização no sentido forte:** quem tem a tabela de clientes
+   da empresa ainda liga os registros ao titular. A trilha não é tocada, e só sai pelo prazo
+   de retenção.
+
+3. **Anonimizar marca "não contatar", e essa marca não sai.** Sem contato não há por onde
+   falar com o titular; a marca garante que nem o canal presumido nem um telefone vindo num
+   evento sejam usados. `DELETE /clientes/{id}/nao-contatar` responde 409 para ela.
+
+4. **O titular é identificado pela chave da empresa.** Uma cobrança cuja recorrência não
+   está ligada a nenhum cliente da base não é alcançada pela exportação nem pela
+   anonimização. Nesse caso a CRAI não guarda nome nem contato, mas o texto das mensagens
+   geradas fica até o expurgo (90 dias depois do desfecho, por padrão).
+
+5. **A marca "não contatar" mora numa tabela própria** (`clientes_nao_contatar`), no mesmo
+   destino da base importada (Postgres em produção, SQLite em desenvolvimento), criada na
+   primeira conexão. Ela não entra na foto que a planilha e a API regravam: sobrevive à
+   reimportação, à alteração e ao cancelamento do cliente. Apagar a base inteira de uma
+   empresa (`apagar_tenant`) **não** apaga as marcas.
+
+6. **A marca é só de mensagem.** As tentativas de cobrança do Pix continuam: fazem parte do
+   contrato, e não são contato de marketing. No involuntário, a cadeia de canal devolve
+   `sem_canal` com o motivo `cliente_pediu_para_nao_ser_contatado`, na geração das sugestões
+   e de novo na hora do envio (a marca posta no meio do caminho já vale). No voluntário, não
+   há oferta, e a decisão vai para a trilha.
+
+7. **A empresa pode tirar a marca que veio de uma resposta SAIR.** A rota existe para o
+   cliente que pede para voltar a receber. A responsabilidade por tirar a marca é da
+   empresa (controladora); o registro de acesso guarda quem tirou e quando.
+
+8. **A resposta SAIR é simulada.** `POST /simulate/resposta-sair` só existe em
+   `development` e `demo`. Quando o envio de mensagens for de verdade, o provedor precisa
+   chamar o mesmo caminho ao receber a palavra. Só "SAIR" está previsto; variações
+   ("PARAR", "STOP", "CANCELAR") não são reconhecidas por ninguém hoje.
+
+9. **A linha "responda SAIR" vai em toda mensagem em que o cliente pode responder.** No
+   involuntário, sempre (antes da linha de mensagem automática; a linha é posta de novo na
+   hora do envio, então uma sugestão gerada antes desta rodada também sai com ela). No
+   voluntário, nas mensagens por WhatsApp e por e-mail; o aviso dentro do produto (popup)
+   não leva a linha, porque não há como responder a ele.
+
+10. **O texto para a política depende de um arquivo do repositório**
+    (`docs/lgpd/texto-para-politica-de-privacidade.md`). Numa instalação que só tenha a
+    pasta `app/`, a rota responde 503. Os prazos do texto são os da configuração da empresa.
+    O texto não promete o expurgo dos ciclos nem o da base, que ainda não são executados.
+    **É um texto de apoio: precisa de revisão jurídica antes de ser publicado.**
+
+11. **A explicação na tela é a decisão mais recente, como foi registrada.** O texto cita o
+    nome técnico do modelo e a versão do artefato. A tela manda revisar antes de repassar ao
+    cliente. A rota (`GET /titular/explicacao/{id}`) devolve todas as decisões; a tela
+    mostra uma.
+
+12. **Exportar, anonimizar, marcar e desmarcar entram no registro de acesso** (empresa,
+    rota, papel e hora, por 12 meses). O registro não guarda qual titular foi pedido.
+
+### A saída do serviço e a atualização da tela (04/10/2026)
+
+1. **A saída do serviço troca o caractere que o terminal não tem por `?`.** Na subida
+   (`api/relogio.py::configurar_saida`, chamada no `lifespan`), a saída padrão e a de erro
+   passam a substituir, em vez de levantar. Antes, um `print` com um emoji ou uma seta, com
+   a saída em cp1252 (o console do Windows, ou a saída redirecionada para arquivo),
+   derrubava a requisição. A codificação não muda: no log, o caractere aparece como `?`.
+   Vale para o serviço no ar; um script que importe os módulos sem subir o serviço não
+   passa por isso.
+
+2. **A tela se atualiza sozinha, por consulta periódica.** As páginas com dados do backend
+   (Visão geral, Involuntário, Voluntário) consultam de novo a cada 60 segundos, e o painel
+   de um ciclo aberto a cada 5. Não é tempo real: uma mudança pode levar até esse tempo
+   para aparecer. A consulta para com a aba do navegador escondida, não mostra o estado de
+   "carregando" e, se falhar, mantém o que já estava na tela. Com muitas abas abertas, cada
+   uma faz as suas consultas.

@@ -157,8 +157,9 @@ O painel é bilíngue (português e inglês). Todo texto visível passa pelo dic
 ## Dashboard novo (em desenvolvimento)
 
 > **Provisório.** Esta seção descreve o dashboard que está sendo integrado, em `dashboard/`.
-> Ele ainda não substitui o painel acima, e só parte dele fala com o backend. O login é de
-> desenvolvimento: uma empresa fictícia, sem senha, que só existe com `ENV=development`.
+> Ele ainda não substitui o painel acima. Quase todas as páginas já falam com o backend (a
+> tabela abaixo diz quais). O login é de desenvolvimento: uma empresa fictícia, sem senha,
+> que só existe com `ENV=development`.
 
 Pré-requisitos: Python 3.11 (o backend) e Node 24 com npm 11 (testado com Node 24.16).
 
@@ -178,8 +179,10 @@ $env:CRAI_CLIENTES_DB = "$dados\clientes.db"
 python -m uvicorn crai.api.app:app --port 8000
 ```
 
-**2. A semente (ciclos fictícios).** Em outra janela, com o backend no ar. Cria uma cobrança
-Pix que falhou, da empresa fictícia `demo_dashboard`:
+**2. A semente (ciclos fictícios). Opcional.** Sem ela o dashboard abre vazio, e a página
+**Simulação do gateway** já deixa criar um cliente fictício e uma cobrança pela própria
+tela. Para ter ciclos na lista do Involuntário, em outra janela, com o backend no ar, crie
+uma cobrança Pix que falhou, da empresa fictícia `demo_dashboard`:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/simulate/pix-falhado `
@@ -190,8 +193,9 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/simulate/pix-falhado `
 Troque `AM04` (saldo insuficiente: o sistema agenda novas tentativas) por `MD01`
 (autorização revogada: vai direto às 3 mensagens) para ver um ciclo aguardando escolha, e
 use `/simulate/pix-pago` com o mesmo `id_recorrencia` para ver um ciclo recuperado. Quem
-desenvolve o projeto tem um script que cria um ciclo em cada situação de uma vez
-(`docs/interno/semear_dashboard_demo.py`); a pasta `docs/interno/` não é versionada.
+desenvolve o projeto tem um script que cria um ciclo em cada situação de uma vez, uma base
+de clientes e dois eventos de comportamento (`docs/interno/semear_dashboard_demo.py`); a
+pasta `docs/interno/` não é versionada.
 
 **3. O dashboard.** Em outra janela:
 
@@ -218,14 +222,25 @@ fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
 
 | Página | Situação |
 |---|---|
+| Visão geral (os cartões, o gráfico de 30 dias, o caminho das cobranças, o que funciona, o extrato, a atividade recente e a saúde do sistema) | Real. O cartão "Comparação com grupo de controle" é só um aviso de recurso planejado, sem número |
 | Involuntário (cartões, lista, painel do ciclo, escolher e pedir outras mensagens) | Real |
+| Voluntário (a base, os clientes recentes, o valor mantido, a comparação entre régua e modelo, o anexo da planilha) | Real |
+| Simulação do gateway | Real: o cliente, a cobrança e o relógio são fictícios, e o sistema que age sobre eles é o de verdade (diagnóstico, tentativas, mensagens, retenção). Os dados simulados ficam em arquivos separados dos reais e saem marcados com "Demonstração" |
+| Assistente | Real. Responde com os números agregados da empresa; sem a chave do modelo de linguagem configurada no backend, mostra um texto fixo de ajuda com os links das páginas |
+| API (listar, gerar e revogar as chaves de API da empresa; os exemplos de uso) | Real |
 | Configuração, seção Mensagens (modo, prazo, janela de contato, canais) | Real |
-| Visão geral, linha do relógio em "Saúde do sistema" | Real |
-| API (listar, gerar e revogar as chaves de API da empresa) | Real |
-| Visão geral (o resto), Voluntário, Assistente, Simulação do gateway | Demonstração |
+| Configuração, Dados e privacidade (exportar e anonimizar os dados de um cliente, explicar uma decisão, não contatar, o texto para a política de privacidade, os prazos) | Real. Dos prazos, o expurgo diário executa o das mensagens (90 dias), o do registro de acesso (12 meses) e o da trilha de decisões (5 anos); o dos ciclos (24 meses) e o da base depois do contrato (6 meses) estão definidos e ainda não são executados |
 | Configuração: Empresa, Equipe, Integração (webhook e teste), Notificações | Demonstração |
-| Configuração, Dados e privacidade | Os prazos de retenção são reais; exportar, anonimizar e explicar são demonstração |
-| **A tela não marca mais os blocos fictícios** | Esta tabela é o registro do que é real. A etiqueta "Demonstração" só aparece na Simulação do gateway. Para religar as etiquetas nos outros blocos, ver abaixo |
+| O nome da empresa no topo | Fixo ("Empresa de demonstração"): o login ainda é o de desenvolvimento |
+| **A tela não marca os blocos fictícios** | Esta tabela é o registro do que é real. A etiqueta "Demonstração" só aparece na Simulação do gateway e nos dados simulados que ela cria. Para religar as etiquetas nos outros blocos, ver abaixo |
+
+**A tela se atualiza sozinha.** Com o backend ligado, a Visão geral, o Involuntário e o
+Voluntário consultam o backend de novo a cada 60 segundos, e o painel de um ciclo aberto a
+cada 5. É consulta periódica, não tempo real: uma mudança pode levar esse tempo para
+aparecer. A consulta para com a aba do navegador escondida.
+
+**A barra "Mostrar".** Nas páginas com números, "Dados reais" mostra só o que é da empresa;
+"Simulação" junta o que foi criado na Simulação do gateway, marcado como demonstração.
 
 **As etiquetas "Demonstração".** A tela não marca mais os blocos que usam dado fictício: o
 que é real e o que não é está na tabela acima. O mecanismo continua no código, desligado.
@@ -240,7 +255,8 @@ ligado, como antes). Sem ela, ou com qualquer outro valor, as etiquetas não apa
 Simulação do gateway não depende dessa variável: o selo "Demo" do menu, o selo da página e
 as marcas dos dados simulados aparecem sempre.
 
-O envio das mensagens é simulado em qualquer caso: nenhum WhatsApp ou e-mail sai de verdade.
+O envio das mensagens e o gateway de pagamento são simulados em qualquer caso: nenhum
+WhatsApp ou e-mail sai de verdade, e nenhuma cobrança real é feita.
 
 Testes do dashboard, a partir de `dashboard/`: `npm run build`, `npm test` e, com o backend
 no ar, `npm run test:vivo`. O teste ao vivo usa uma segunda empresa fictícia, `demo_testes`,

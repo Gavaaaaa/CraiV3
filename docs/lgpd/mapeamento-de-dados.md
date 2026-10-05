@@ -144,6 +144,87 @@ recebe na resposta o cliente gravado, inclusive os campos de contato (`email`, `
 O contador de limite por minuto (id da chave e instantes dos usos no último minuto) vive
 só na memória do processo.
 
+## 1d. O valor mantido do voluntário e a origem da base (Rodada 3)
+
+Tabelas `retencoes_mantidas` e `base_atualizacoes`, no arquivo do ciclo de cobrança
+(`recovery_cycles.db`, env `CRAI_RECOVERY_DB`). Código: `churn_voluntary/mantido.py` e
+`churn_voluntary/origem_da_base.py`.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `retencoes_mantidas.cliente_id` | **pseudônimo** (o `customer_id_externo` que a própria empresa usa) | não | execução de contrato (é a base da fatura) | proposta: o dos ciclos, 24 meses (sem expurgo: pendência 8) | a tela da empresa (extrato) |
+| `retencoes_mantidas.offer_type`, `channel` | fraco (o que foi oferecido a esse cliente, e por onde) | não | idem | idem | idem |
+| `retencoes_mantidas.mrr`, `desconto`, `valor_base`, `fee` | fraco (valor do contrato do cliente final com a empresa) | não | idem | idem | a fee só sai em `GET /extrato` (dono e administrador) |
+| `retencoes_mantidas.aceito_em`, `cancelamento_em`, `cancelamento_no_prazo`, `valor_estornado`, `fee_estornada` | fraco (quando aceitou, quando cancelou) | não | idem | idem | idem |
+| `base_atualizacoes.tenant_id`, `origem`, `atualizada_em` | não (a empresa; `api` ou `anexo`; a hora) | não | execução de contrato | vida da conta | a tela da empresa |
+
+`retencoes_mantidas` **não** guarda nome, e-mail nem telefone. O nome que a tela mostra ao
+lado da linha é lido da base importada na hora da resposta, como na lista de ciclos.
+
+**As rotas de leitura do dashboard (Rodada 3)** não criam dado novo: leem as tabelas acima e
+as das seções 1, 1b, 2 e 3, sempre filtradas pelo tenant do token. Nenhuma devolve telefone,
+e-mail, CPF ou chave Pix; do cliente final sai só o nome (o mesmo da lista de ciclos) ou o
+id que a própria empresa usa. Há teste em cada rota, com um cliente que tem e-mail e
+telefone na base. `GET /clientes/recentes`, `GET /atividade` e `GET /extrato` entram no
+registro de acesso (seção 1b), porque mostram o nome do cliente final; o extrato, além
+disso, é a única rota que devolve a fee, e exige dono ou administrador.
+
+## 1e. A simulação do gateway (Rodada 3): dado fictício, em arquivos à parte
+
+Arquivos `*.simulacao.<empresa>.*`, ao lado dos reais (um conjunto por empresa). Código:
+`crai/ambiente.py`, `crai/simulador.py`, `api/simulacao.py`.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `simulacao_pagadores.nome`, `mensalidade`, `perfil` | **não** (nome inventado; o formulário recusa o que pareça CPF, CNPJ, e-mail, telefone ou chave Pix, e a rota recusa de novo) | não | não é tratamento de dado pessoal | até a empresa apagar (`DELETE /simulacao`); sem expurgo automático (pendência 9) | a tela da empresa |
+| `simulacao_verdade.*` (dias até o saldo, chance de pagar, revogação) | não (parâmetros inventados) | não | idem | idem | só a empresa que criou; nunca os modelos |
+| `simulacao_retencoes.nome`, `mrr`, `sinais`, `propensao` | não (inventados) | não | idem | idem | a tela da empresa (a propensão não volta em leitura nenhuma) |
+| as cópias de simulação de `ciclos_cobranca`, `ciclos_recuperacao`, `ciclos_retencao`, `decisoes_automatizadas`, do plano de retentativas e do bandit | não (tudo sobre o cliente fictício) | não | idem | idem | a tela da empresa, só com "Mostrar: Simulação" ou na página da simulação |
+
+**O que a simulação não faz.** Não lê nem grava a base de clientes da empresa; não grava
+nada nos arquivos reais (há teste byte a byte); não chama o PSP, o CRM nem envia mensagem,
+mesmo com credencial configurada (há teste com a credencial ligada); e não manda nada à
+Anthropic além do que o redator de mensagens já recebe de um ciclo real, com o nome
+inventado no lugar do nome do cliente.
+
+**O risco que sobra** é a pessoa digitar um dado real no campo de nome, de um jeito que
+os filtros não peguem (um nome e sobrenome de verdade, por exemplo). O formulário avisa que
+só entra nome inventado, e não existe campo para nenhum outro dado.
+
+## 1g. O descadastro e os direitos do titular (Rodada 3)
+
+Tabela `clientes_nao_contatar`, no mesmo destino da base importada (Postgres em produção).
+Código: `churn_voluntary/clientes_importados.py`, `api/clientes.py`, `api/titular.py`.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `clientes_nao_contatar.customer_id_externo` | **pseudônimo** (a chave que a empresa usa para o cliente) | não | cumprimento de obrigação legal (atender à oposição do titular, art. 18) | enquanto a marca existir; sem expurgo (a marca precisa durar para valer) | a cadeia de canal (leitura interna) e a exportação do titular |
+| `clientes_nao_contatar.marcado_em`, `origem` | fraco (quando e por onde o titular pediu) | não | idem | idem | idem |
+
+**O que as rotas novas fazem com dado de titular:**
+
+| rota | o que lê | o que devolve | o que apaga | registro de acesso |
+|---|---|---|---|---|
+| `POST /titular/exportar` | cadastro, ciclos, mensagens, retenção, trilha | tudo isso, **sem** o valor do e-mail e do telefone, e sem a fee | nada | sim |
+| `POST /titular/anonimizar` | idem | contagens | nome, e-mail, telefone, motivo de cancelamento e o texto das mensagens | sim |
+| `POST` e `DELETE /clientes/{id}/nao-contatar` | a linha do cliente | a marca | a marca (no `DELETE`) | sim |
+| `GET /titular/texto-para-politica` | um arquivo do repositório e os prazos da configuração | o texto | nada | não (não há dado de titular) |
+| `POST /simulate/resposta-sair` (só desenvolvimento) | a linha do cliente | a marca | nada | não |
+
+## 1f. Os eventos recebidos pela API (Rodada 3): só o hash
+
+Tabela `eventos_recebidos`, no arquivo do ciclo de cobrança. Código:
+`api/eventos_recebidos.py`. Serve para o mesmo evento reenviado contar uma vez.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `eventos_recebidos.chave` | **não** (SHA-256 do tenant com o `messageId`, ou com o conteúdo do evento; não dá para voltar ao evento a partir dele) | não | execução de contrato | 30 dias (apagado a cada evento novo) | ninguém |
+| `eventos_recebidos.tenant_id`, `recebido_em` | não | não | idem | idem | ninguém |
+
+O evento em si (`userId`, `event`, `properties`) segue o caminho do webhook do Segment: vira
+uma linha de `ciclos_retencao` (seção 2) e as decisões na trilha (com as mesmas entradas
+explícitas, nunca o `properties` inteiro).
+
 ## 2. `ciclos_retencao` — log do churn voluntário (dataset de treino)
 
 Onde: `app/data/retention_cycles.db` (SQLite local, fora do git). Origem:
@@ -257,15 +338,21 @@ o BSP; a chave Pix só existe cifrada no cofre; o e-mail só existe em
 | Segment | só **entrada** (webhook); a CRAI não envia nada ao Segment | — | `api/app.py::segment_webhook` |
 | BSP do WhatsApp | **simulado** (log com telefone mascarado) | `phone` (E.164) + texto da mensagem | `integrations/whatsapp_sender.py` |
 | Anthropic (Claude API) | **real** se `ANTHROPIC_API_KEY` estiver no ambiente; fallback sem rede | voluntário: `event`, `channel`, rótulo da oferta, criticidade — **sem identificador**. Involuntário, desde a Etapa 2 (as 3 sugestões, `montar_prompt`): causa em português, valor, tom, meio de pagamento, canal e, **só se a base tiver**, o primeiro nome e a faixa de tempo de casa real — **sem identificador nenhum** (o link vai como marcador `{link}` e é posto depois; há teste que reprova e-mail, telefone, CPF, chave Pix, id da recorrência, e2e ou sobrenome no prompt). O caminho antigo de uma mensagem só (chamada direta, sem ciclo) ainda leva o link com 8 caracteres do identificador | `churn_voluntary/voluntary_agent.py`, `dunning/dunning_engine.py` |
+| Anthropic (Claude API), pelo **assistente** do dashboard (Rodada 3) | **real** se `ANTHROPIC_API_KEY` estiver no ambiente; sem ela, texto fixo, sem rede | a documentação de produto; os **totais** da empresa do token (valores, contagens, taxas, rótulos de causa, oferta e canal, a configuração de mensagens e prazos), depois de um filtro que só deixa passar número, data e rótulo de lista fechada; e a pergunta do usuário, com e-mail, CPF, CNPJ, telefone e número longo mascarados. **Nunca:** nome, contato, id de cliente, id de recorrência, texto de mensagem, a fee. Um nome de pessoa digitado na pergunta vai como digitado. A pergunta e a resposta não são guardadas | `api/assistente.py` |
 | Supabase | conta ainda não criada | `clientes_importados` inteira; auth (`sub`, `email`, `tenant_id`) | `churn_voluntary/clientes_importados.py`, `accounts/` |
 | SMTP (provedor da CRAI) | simulado sem SMTP | `customer_id_externo`, risco, criticidade, `explicacao` dos clientes em risco → e-mail da conta autenticada | `integrations/email_sender.py` |
 
 ## 12. Pendências que este mapeamento expõe
 
-1. **O expurgo cobre só duas coisas.** Desde a Etapa 2 (Bloco 4) o relógio apaga, uma vez por dia, o texto das mensagens do involuntário (90 dias depois do desfecho) e o registro de acesso (12 meses). **Nada mais é expurgado:** a trilha do Art. 20 (5 anos; a função recebe o prazo, mas ainda não é chamada), os ciclos (24 meses), a base depois do contrato (6 meses) e as demais tabelas e arquivos continuam sem execução. Os prazos dessas linhas são propostas ou configuração ainda não executada.
+1. **O expurgo cobre três coisas.** Desde a Etapa 2 (Bloco 4) o relógio apaga, uma vez por dia, o texto das mensagens do involuntário (90 dias depois do desfecho) e o registro de acesso (12 meses). Desde a Rodada 3 (Fase 7) o mesmo expurgo diário apaga as decisões da trilha do Art. 20 com mais de 5 anos (ou do prazo da empresa, se for maior). **Nada mais é expurgado:** os ciclos (24 meses), a base depois do contrato (6 meses) e as demais tabelas e arquivos continuam sem execução. Os prazos dessas linhas são propostas ou configuração ainda não executada.
 2. **`props` brutos do Segment entram inteiros no estado** (`_run_voluntary_pipeline`): o que a empresa mandar no SDK fica em memória. Recomenda-se filtrar para a lista de campos usados antes de entrar no grafo.
 3. **A explicação SHAP não carrega identificador** (seção 7): auditável em agregado, não por pessoa.
 4. **`customer_id[:8]` vai para a Anthropic** dentro do link do portal; é um fragmento de pseudônimo, mas é envio a terceiro fora do país — cabe DPA/cláusula de transferência internacional (art. 33). Desde a Etapa 2 o prompt das 3 sugestões do involuntário não leva mais o link; o primeiro nome e a faixa de tempo de casa passam a ir quando a base os tem — continua cabendo DPA.
 5. Os CSV de `painel/exemplos/` são sintéticos (`gerar_bases_demo.py`, e-mails `@exemplo.com.br`); a `base_exemplo_clientes.csv` vem do mvp-crai com nomes de empresas fictícias — **NÃO VERIFICADO** se algum registro é real.
 6. **O registro de operações de tratamento (art. 37) não está em `docs/lgpd/`.** A OP-01 (recuperação) é citada no plano das etapas e num `relatorio-conformidade-lgpd.md` que não está no repositório; as atualizações da Etapa 2 (texto das mensagens, `id_recorrencia`, canal por cliente, `telefone` e `nome`) estão registradas neste mapeamento até o registro existir aqui.
 7. **As chaves de API não têm expurgo** (seção 1c). A chave revogada continua na tabela (sem o segredo: só o hash, o nome e as datas) e o contador diário de uso (`chaves_api_uso`) cresce uma linha por chave por dia de uso, sem prazo. Nenhuma das duas guarda dado de titular; o `nome` da chave é texto livre da empresa. Prazo a definir.
+8. **O valor mantido do voluntário não tem expurgo** (seção 1d). `retencoes_mantidas` guarda o identificador que a empresa usa para o cliente, a oferta e os valores. O prazo proposto é o dos ciclos (24 meses), ainda não executado.
+9. **A simulação do gateway não tem expurgo automático** (seção 1e). Os arquivos de simulação de uma empresa ficam até ela apagar. Não guardam dado de titular (o nome é inventado e filtrado), mas um nome real digitado à mão ficaria ali. Prazo a definir; a limpeza de um clique já existe.
+10. **O limite de contato usa o dataset de treino como memória** (seção 2): a última oferta enviada a cada cliente é lida de `ciclos_retencao`. Quando o expurgo desse dataset for executado, o prazo dele precisa ser maior que o maior intervalo permitido (365 dias), senão o limite deixa de segurar.
+11. **A anonimização deixa o pseudônimo** (seção 1g). Depois de `POST /titular/anonimizar`, o `customer_id_externo` continua nos ciclos, no dataset e na trilha: é o que mantém as métricas agregadas. A eliminação completa (art. 18, VI), inclusive do identificador, não está construída: ela conflita com a guarda da trilha do Art. 20, e é decisão jurídica.
+12. **O expurgo dos ciclos (24 meses) e o da base (contrato + 6 meses) continuam sem execução.** A tela e o texto para a política deixaram de prometê-los.
