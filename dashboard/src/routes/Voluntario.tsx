@@ -8,8 +8,8 @@ import { Card } from '../components/ui/Card'
 import { FaixaDemonstracao } from '../components/ui/Demonstracao'
 import { ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
-import { api, etiquetaDeDemonstracao } from '../data/api'
-import type { PontoSerie } from '../data/tipos'
+import { MODO_REAL, api, etiquetaDeDemonstracao } from '../data/api'
+import type { BaseClientes, PontoSerie } from '../data/tipos'
 import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
 import { useReducedMotion } from '../lib/useReducedMotion'
@@ -17,6 +17,16 @@ import { GraficoTrintaDias } from './visao/GraficoTrintaDias'
 import { QuemDecideORisco, SuaBase, TabelaClientes } from './voluntario/Blocos'
 
 type AbaVol = 'clientes' | 'mantido' | 'base' | 'decisao'
+
+const nomeDoMes = new Intl.DateTimeFormat('pt-BR', { month: 'long' })
+/** O rótulo do cartão laranja: "Mantido para você em setembro". O mês é o que o backend devolveu. */
+function rotuloDoMes(mes: string | undefined): string {
+  if (!mes) return MODO_REAL ? 'Mantido para você neste mês' : 'Mantido para você em setembro'
+  return `Mantido para você em ${nomeDoMes.format(new Date(`${mes}-15T12:00:00`))}`
+}
+
+/** "1 mês da mensalidade", "6 meses da mensalidade": o número vem do backend. */
+const mesesDaRegra = (n: number) => (n === 1 ? '1 mês' : `${n} meses`)
 const ABAS_VALIDAS: AbaVol[] = ['base', 'clientes', 'mantido', 'decisao']
 
 /** Sparkline do cartão laranja, na cor do fundo escuro. */
@@ -33,6 +43,13 @@ function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
       <circle cx={ultimo.x} cy={ultimo.y} r={4} fill="var(--color-ink)" />
     </svg>
   )
+}
+
+/** O cartão "Quem decide o risco": só afirma o que a base diz. */
+function quemDecide(base: BaseClientes | null): string {
+  if (!base || !base.total) return '—'
+  if (!base.decididos_pelo_modelo) return 'A régua decide em toda a base'
+  return `Modelo de IA em ${Math.round((base.decididos_pelo_modelo / base.total) * 100)}% da base`
 }
 
 export function Voluntario() {
@@ -52,7 +69,7 @@ export function Voluntario() {
       Promise.all([
         api.clientesRecentes({ incluirSimulados: sim, limite: 10 }),
         api.serieVoluntario({ incluirSimulados: sim }),
-        api.resumoVoluntario(),
+        api.resumoVoluntario({ incluirSimulados: sim }),
         api.baseClientes(),
         api.comparacaoReguaModelo(),
       ]),
@@ -111,12 +128,12 @@ export function Voluntario() {
           tone="orange"
           hero
           demo={etiquetaDeDemonstracao('resumoVoluntario')}
-          rotulo="Mantido para você em setembro"
+          rotulo={rotuloDoMes(resumo?.mes)}
           valor={resumo ? fmt.brlInteiro(resumo.valor_liquido_mantido) : '—'}
           apoio={
             <div className="flex flex-col gap-2">
               <span>
-                Já descontada a taxa da CRAI. {resumo ? `${resumo.clientes_mantidos} clientes que ficaram${resumo.estornos ? `, ${resumo.estornos} estorno` : ''}.` : ''}
+                Já descontada a taxa da CRAI. {resumo ? `${resumo.clientes_mantidos} ${resumo.clientes_mantidos === 1 ? 'cliente que ficou' : 'clientes que ficaram'}${resumo.estornos ? `, ${resumo.estornos} ${resumo.estornos === 1 ? 'estorno' : 'estornos'}` : ''}.` : ''}
               </span>
               {serie ? <Sparkline pontos={serie} /> : null}
             </div>
@@ -134,8 +151,8 @@ export function Voluntario() {
         <StatTile
           demo={etiquetaDeDemonstracao('baseClientes')}
           rotulo="Quem decide o risco"
-          valor={<span className="t-h3 text-paper">{base ? `Modelo de IA em ${Math.round((base.com_dados_comportamento / base.total) * 100)}% da base` : '—'}</span>}
-          apoio="No resto, a régua. Detalhes na aba ao lado."
+          valor={<span className="t-h3 text-paper">{quemDecide(base)}</span>}
+          apoio={base && base.decididos_pelo_modelo > 0 ? 'No resto, a régua. Detalhes na aba ao lado.' : 'Detalhes na aba ao lado.'}
           icone={<IconSpark width={17} height={17} />}
         />
       </section>
@@ -175,12 +192,12 @@ export function Voluntario() {
                   <div className="min-h-[420px] animate-pulse rounded-[12px] bg-paper/[0.04]" aria-busy="true" />
                 )}
                 <p className="mt-4 rounded-[12px] border border-line bg-ink/25 px-4 py-3 text-apoio leading-[1.5] text-silver">
-                  <span className="font-[600] text-paper">Como o valor é contado:</span> 1 mês da mensalidade do cliente que aceitou a oferta, menos o desconto dado, líquido da taxa da CRAI, no dia do aceite. Se o cliente cancelar em até 30 dias, o valor é estornado.
+                  <span className="font-[600] text-paper">Como o valor é contado:</span> {mesesDaRegra(resumo?.meses_de_mrr ?? 1)} da mensalidade do cliente que aceitou a oferta, menos o desconto dado, líquido da taxa da CRAI, no dia do aceite. Se o cliente cancelar em até {resumo?.prazo_estorno_dias ?? 30} dias, o valor é estornado.
                 </p>
               </Card>
             ) : aba === 'base' ? (
               <Card className="p-5 md:p-6">
-                <SuaBase base={base} />
+                <SuaBase base={base} aoImportar={carga.recarregar} />
               </Card>
             ) : (
               <Card className="p-5 md:p-6">

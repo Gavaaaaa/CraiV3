@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { IconRefresh, IconSend } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
+import { MODO_REAL } from '../../data/api'
 import type { ClienteFicticio, PerfilPagador } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 
@@ -99,6 +100,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
               </button>
             ))}
           </div>
+          {MODO_REAL ? <p className="t-label mt-1.5 text-muted">O sistema não recebe o perfil: ele estima o dia de saldo sozinho.</p> : null}
         </div>
       </div>
 

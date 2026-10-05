@@ -43,28 +43,70 @@ import {
 import {
   CANAIS_DO_BACKEND,
   abordagemParaApi,
+  adaptarAnonimizacao,
+  adaptarAssistente,
+  adaptarAtividade,
+  adaptarBase,
   adaptarChave,
   adaptarChaves,
   adaptarCiclo,
+  adaptarClienteRecente,
+  adaptarComparacao,
   adaptarConfiguracao,
   adaptarDetalhe,
+  adaptarExplicacao,
+  adaptarExportacao,
+  adaptarExtrato,
+  adaptarFunil,
+  adaptarImportacao,
   adaptarMensagem,
   adaptarMetricas,
+  adaptarNaoContatar,
+  adaptarOQueFunciona,
+  adaptarResumoVoluntario,
+  adaptarRetencaoSimulada,
   adaptarSaude,
   adaptarSerie,
+  adaptarSerieDupla,
+  adaptarSerieVoluntario,
+  adaptarSimulacao,
+  adaptarVisaoGeral,
   configuracaoParaApi,
   statusParaApi,
+  type AnonimizacaoApi,
+  type AnonimizacaoTitular,
+  type AssistenteApi,
+  type AtividadeApi,
+  type BaseApi,
   type ChaveCriadaApi,
   type ChaveRevogadaApi,
   type CicloDetalheApi,
+  type ClientesRecentesApi,
   type ConfiguracaoApi,
+  type ExplicacaoApi,
+  type ExportacaoApi,
+  type ExportacaoTitular,
+  type ExtratoApi,
+  type FunilApi,
+  type ImportacaoApi,
   type ListaDeChavesApi,
   type ListaDeCiclosApi,
   type MensagemApi,
+  type MesVoluntarioApi,
+  type MarcaNaoContatar,
   type MetricasMesApi,
+  type NaoContatarApi,
+  type OQueFuncionaApi,
+  type ReguaXModeloApi,
   type RespostaConfiguracaoApi,
+  type RetencaoSimuladaApi,
   type SaudeApi,
   type SerieApi,
+  type SerieDuplaApi,
+  type SerieVoluntarioApi,
+  type SimulacaoApi,
+  type TextoPoliticaApi,
+  type VisaoGeralApi,
 } from './adaptadores'
 import { responder } from './assistente'
 import { ErroApi } from './erros'
@@ -129,6 +171,37 @@ export const ROTAS_REAIS = {
   chaves: true, // GET /integracao/chaves
   criarChave: true, // POST /integracao/chaves
   revogarChave: true, // DELETE /integracao/chaves/{id}
+  // Rodada 3, Fase 1: a página do voluntário
+  clientesRecentes: true, // GET /clientes/recentes
+  baseClientes: true, // GET /clientes/base
+  resumoVoluntario: true, // GET /metrics/voluntario/mes
+  serieVoluntario: true, // GET /metrics/voluntario/serie
+  comparacaoReguaModelo: true, // GET /metrics/voluntario/regua-x-modelo
+  importarBase: true, // POST /clientes/importar
+  // Rodada 3, Fase 2: a visão geral
+  resumoVisaoGeral: true, // GET /metrics/visao-geral
+  serieDupla: true, // GET /metrics/serie
+  funil: true, // GET /metrics/involuntario/funil
+  oQueFunciona: true, // GET /metrics/o-que-funciona
+  atividade: true, // GET /atividade
+  extrato: true, // GET /extrato
+  // Rodada 3, Fase 3: a simulação do gateway (o cliente é fictício; o sistema que age é o de verdade)
+  simulacao: true, // GET /simulacao
+  simularCobranca: true, // POST /simulacao/cliente + POST /simulacao/cobrar
+  simulacaoAvancar: true, // POST /simulacao/avancar {dias}
+  simulacaoAvancarAteProximaAcao: true, // POST /simulacao/avancar {ate_proxima_acao}
+  simulacaoEscolherMensagem: true, // POST /ciclos/{id}/mensagens/escolher, no ciclo simulado
+  simulacaoLimpar: true, // DELETE /simulacao
+  simularRetencao: true, // POST /simulacao/retencao
+  // Rodada 3, Fase 4: o assistente
+  assistente: true, // POST /assistente
+  // Rodada 3, Fase 6: direitos do titular e descadastro
+  exportarTitular: true, // POST /titular/exportar
+  anonimizarTitular: true, // POST /titular/anonimizar
+  explicacaoDecisao: true, // GET /titular/explicacao/{id}
+  naoContatar: true, // POST /clientes/{id}/nao-contatar
+  voltarAContatar: true, // DELETE /clientes/{id}/nao-contatar
+  textoParaPolitica: true, // GET /titular/texto-para-politica
 } as const
 
 type RotaReal = keyof typeof ROTAS_REAIS
@@ -215,6 +288,9 @@ export interface FiltroCiclos {
 /** Quantos ciclos uma chamada traz. A paginação por cursor do backend ainda não é usada pela tela. */
 const LIMITE_DE_CICLOS = 200
 
+/** O parâmetro da barra "Mostrar": só vai na URL quando a pessoa pediu os dados de simulação. */
+const simulados = (incluir: boolean | undefined, separador: '?' | '&'): string => (incluir ? `${separador}incluir_simulados=true` : '')
+
 function filtrarPorBusca(lista: CicloResumo[], busca: string | undefined): CicloResumo[] {
   const q = (busca ?? '').trim().toLowerCase()
   if (!q) return lista
@@ -260,6 +336,8 @@ export const api = {
     if (real('ciclos')) {
       const parametros = new URLSearchParams({ limite: String(LIMITE_DE_CICLOS) })
       if (filtro.status && filtro.status !== 'todos') parametros.set('status', statusParaApi(filtro.status))
+      // A barra "Mostrar: Simulação" junta os ciclos da simulação do gateway desta empresa.
+      if (filtro.incluirSimulados) parametros.set('incluir_simulados', 'true')
       const r = await chamar<ListaDeCiclosApi>('GET', `/ciclos?${parametros}`)
       // A busca por nome é feita aqui: o backend busca só pelo id da recorrência.
       return filtrarPorBusca(r.ciclos.map(adaptarCiclo), filtro.busca)
@@ -370,12 +448,12 @@ export const api = {
   },
 
   /** GET /metrics/involuntario/mes */
-  async metricasMes(): Promise<MetricasMes> {
+  async metricasMes(opcoes: { incluirSimulados?: boolean } = {}): Promise<MetricasMes> {
     if (real('metricasMes')) {
       // "Ciclos ativos" é de agora, não do mês: conta os ciclos em análise ou em processo.
       const [mes, ativos] = await Promise.all([
-        chamar<MetricasMesApi>('GET', '/metrics/involuntario/mes'),
-        chamar<ListaDeCiclosApi>('GET', `/ciclos?status=em_analise,em_processo&limite=${LIMITE_DE_CICLOS}`),
+        chamar<MetricasMesApi>('GET', `/metrics/involuntario/mes${simulados(opcoes.incluirSimulados, '?')}`),
+        chamar<ListaDeCiclosApi>('GET', `/ciclos?status=em_analise,em_processo&limite=${LIMITE_DE_CICLOS}${simulados(opcoes.incluirSimulados, '&')}`),
       ])
       return adaptarMetricas(mes, ativos.ciclos.length)
     }
@@ -385,8 +463,8 @@ export const api = {
   },
 
   /** GET /metrics/involuntario/serie?dias=30 */
-  async serie(): Promise<PontoSerie[]> {
-    if (real('serie')) return adaptarSerie(await chamar<SerieApi>('GET', '/metrics/involuntario/serie?dias=30'))
+  async serie(opcoes: { incluirSimulados?: boolean } = {}): Promise<PontoSerie[]> {
+    if (real('serie')) return adaptarSerie(await chamar<SerieApi>('GET', `/metrics/involuntario/serie?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
     await espera(120)
     if (vazio) return serie30.map((p) => ({ ...p, valor: 0 }))
     return serie30
@@ -394,8 +472,11 @@ export const api = {
 
   /* ---------------- Visão geral ---------------- */
 
-  /** GET /metrics/visao-geral?dias=30 (rota nova, ver a lista no HANDOFF) */
+  /** GET /metrics/visao-geral?dias=30 */
   async resumoVisaoGeral(opcoes: { incluirSimulados?: boolean } = {}): Promise<ResumoVisaoGeral> {
+    if (real('resumoVisaoGeral')) {
+      return adaptarVisaoGeral(await chamar<VisaoGeralApi>('GET', `/metrics/visao-geral?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
+    }
     await espera(140)
     const sim = opcoes.incluirSimulados ?? false
     const linhas = vazio ? [] : extrato.filter((l) => sim || !l.simulado)
@@ -418,19 +499,26 @@ export const api = {
 
   /** GET /metrics/serie?dias=30 — involuntário (Etapa 2) e voluntário (Etapa 3) juntos */
   async serieDupla(opcoes: { incluirSimulados?: boolean } = {}): Promise<PontoSerieDupla[]> {
+    if (real('serieDupla')) {
+      return adaptarSerieDupla(await chamar<SerieDuplaApi>('GET', `/metrics/serie?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
+    }
     await espera(160)
     return serieDupla(opcoes.incluirSimulados ?? false).map((p) => (vazio ? { ...p, involuntario: 0, voluntario: 0 } : p))
   },
 
-  /** GET /metrics/involuntario/funil?mes= */
-  async funil(): Promise<Funil> {
+  /** GET /metrics/involuntario/funil?mes= (sem o mês: o corrente) */
+  async funil(opcoes: { incluirSimulados?: boolean } = {}): Promise<Funil> {
+    if (real('funil')) return adaptarFunil(await chamar<FunilApi>('GET', `/metrics/involuntario/funil${simulados(opcoes.incluirSimulados, '?')}`))
     await espera(180)
     if (vazio) return { ...funil, etapas: funil.etapas.map((e) => ({ ...e, chegaram: 0, valor: 0, recuperados_aqui: 0, valor_recuperado_aqui: 0 })), desfecho: { recuperados: 0, encerrados: 0, em_andamento: 0 } }
     return funil
   },
 
   /** GET /metrics/o-que-funciona?dias=30 */
-  async oQueFunciona(): Promise<OQueFunciona> {
+  async oQueFunciona(opcoes: { incluirSimulados?: boolean } = {}): Promise<OQueFunciona> {
+    if (real('oQueFunciona')) {
+      return adaptarOQueFunciona(await chamar<OQueFuncionaApi>('GET', `/metrics/o-que-funciona?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
+    }
     await espera(200)
     if (vazio) return { causas: [], ofertas: [], canais: [] }
     return oQueFunciona
@@ -438,21 +526,29 @@ export const api = {
 
   /** GET /atividade?limite= */
   async atividade(opcoes: { incluirSimulados?: boolean; limite?: number } = {}): Promise<Atividade[]> {
+    if (real('atividade')) {
+      return adaptarAtividade(await chamar<AtividadeApi>('GET', `/atividade?limite=${opcoes.limite ?? 7}${simulados(opcoes.incluirSimulados, '&')}`))
+    }
     await espera(150)
     if (vazio) return []
     return atividades.filter((a) => opcoes.incluirSimulados || !a.simulado).slice(0, opcoes.limite ?? 7)
   },
 
-  /** GET /health: o relógio é real; modelos, redator e base ainda são de demonstração */
+  /** GET /health: o relógio, os modelos, o redator e, por ir com o token, a base da empresa */
   async saude(): Promise<SaudeSistema> {
-    if (real('saude')) return adaptarSaude(await chamar<SaudeApi>('GET', '/health', undefined, { semToken: true }), saude)
+    if (real('saude')) return adaptarSaude(await chamar<SaudeApi>('GET', '/health'), saude)
     await espera(90)
     if (vazio) return { ...saude, base: null }
     return saude
   },
 
-  /** GET /extrato?mes= (o CSV é montado na tela, a partir das mesmas linhas) */
+  /**
+   * GET /extrato?mes= (o CSV é montado na tela, a partir das mesmas linhas). É a única rota
+   * que traz a taxa da CRAI, e o backend só a atende para dono e administrador: para o
+   * membro a chamada falha com `sem_permissao`, e a tela diz isso no lugar da tabela.
+   */
   async extrato(opcoes: { incluirSimulados?: boolean } = {}): Promise<LinhaExtrato[]> {
+    if (real('extrato')) return adaptarExtrato(await chamar<ExtratoApi>('GET', `/extrato${simulados(opcoes.incluirSimulados, '?')}`))
     await espera(200)
     if (vazio) return []
     return extrato.filter((l) => opcoes.incluirSimulados || !l.simulado)
@@ -463,12 +559,23 @@ export const api = {
 
   /** GET /simulacao */
   async simulacao(): Promise<EstadoSimulacao> {
+    if (real('simulacao')) return adaptarSimulacao(await chamar<SimulacaoApi>('GET', '/simulacao'))
     await espera(60)
     return simulacaoAtual
   },
 
   /** POST /simulacao/cliente + POST /simulacao/cobrar — cria o cliente fictício e dispara a cobrança */
   async simularCobranca(cliente: ClienteFicticio): Promise<EstadoSimulacao> {
+    if (real('simularCobranca')) {
+      // O corpo leva só o que o formulário tem: nome inventado, mensalidade, perfil e a verdade escondida.
+      await chamar<SimulacaoApi>('POST', '/simulacao/cliente', {
+        nome: cliente.nome,
+        mensalidade: cliente.mensalidade,
+        perfil: cliente.perfil,
+        verdade: { dias_ate_saldo: cliente.verdade.dias_ate_saldo, chance_pagar: cliente.verdade.chance_pagar, vai_revogar: cliente.verdade.vai_revogar },
+      })
+      return adaptarSimulacao(await chamar<SimulacaoApi>('POST', '/simulacao/cobrar'))
+    }
     await espera(200)
     simulacaoAtual = iniciar(cliente)
     return simulacaoAtual
@@ -476,6 +583,7 @@ export const api = {
 
   /** POST /simulacao/avancar {dias} — relógio simulado da empresa */
   async simulacaoAvancar(dias: number): Promise<EstadoSimulacao> {
+    if (real('simulacaoAvancar')) return adaptarSimulacao(await chamar<SimulacaoApi>('POST', '/simulacao/avancar', { dias }))
     await espera(180)
     simulacaoAtual = avancar(simulacaoAtual, dias)
     return simulacaoAtual
@@ -483,6 +591,7 @@ export const api = {
 
   /** POST /simulacao/avancar {ate_proxima_acao: true} */
   async simulacaoAvancarAteProximaAcao(): Promise<EstadoSimulacao> {
+    if (real('simulacaoAvancarAteProximaAcao')) return adaptarSimulacao(await chamar<SimulacaoApi>('POST', '/simulacao/avancar', { ate_proxima_acao: true }))
     await espera(180)
     simulacaoAtual = avancar(simulacaoAtual, diasAteProximaAcao(simulacaoAtual))
     return simulacaoAtual
@@ -490,6 +599,15 @@ export const api = {
 
   /** POST /ciclos/{id}/mensagens/escolher (a mesma rota da Etapa 2, no ciclo simulado) */
   async simulacaoEscolherMensagem(abordagem: Abordagem): Promise<EstadoSimulacao> {
+    if (real('simulacaoEscolherMensagem')) {
+      // A escolha vale para o ciclo simulado que o backend tem AGORA, na última rodada de sugestões.
+      const atual = await chamar<SimulacaoApi>('GET', '/simulacao')
+      const id = atual.ciclo?.ciclo.id
+      if (!id) throw new ErroApi('conflito', 'Esta simulação não tem mensagem esperando escolha. Atualize a página.')
+      const rodada = Math.max(1, ...atual.ciclo!.mensagens.map((m) => m.rodada))
+      await chamar('POST', `/ciclos/${id}/mensagens/escolher`, { rodada, abordagem: abordagemParaApi(abordagem) })
+      return adaptarSimulacao(await chamar<SimulacaoApi>('GET', '/simulacao'))
+    }
     await espera(250)
     simulacaoAtual = escolherMensagem(simulacaoAtual, abordagem, 'owner')
     return simulacaoAtual
@@ -497,6 +615,7 @@ export const api = {
 
   /** DELETE /simulacao — limpa os dados fictícios da empresa */
   async simulacaoLimpar(): Promise<EstadoSimulacao> {
+    if (real('simulacaoLimpar')) return adaptarSimulacao(await chamar<SimulacaoApi>('DELETE', '/simulacao'))
     await espera(80)
     simulacaoAtual = estadoVazio()
     return simulacaoAtual
@@ -504,14 +623,20 @@ export const api = {
 
   /** POST /simulacao/retencao — cliente fictício em risco; o aceite vem da propensão escondida */
   async simularRetencao(cliente: ClienteRiscoFicticio): Promise<ResultadoRetencaoSimulada> {
+    if (real('simularRetencao')) {
+      return adaptarRetencaoSimulada(
+        await chamar<RetencaoSimuladaApi>('POST', '/simulacao/retencao', { nome: cliente.nome, mrr: cliente.mrr, sinais: cliente.sinais, propensao: cliente.propensao }),
+      )
+    }
     await espera(500)
     return simularRetencao(cliente)
   },
 
   /* ---------------- Voluntário ---------------- */
 
-  /** GET /clientes/base (resumo da base importada) */
+  /** GET /clientes/base (resumo da base importada); null quando a empresa não tem cliente nenhum */
   async baseClientes(): Promise<BaseClientes | null> {
+    if (real('baseClientes')) return adaptarBase(await chamar<BaseApi>('GET', '/clientes/base'))
     await espera(80)
     if (vazio) return null
     return baseClientes
@@ -519,13 +644,20 @@ export const api = {
 
   /** GET /clientes/recentes?limite=10 */
   async clientesRecentes(opcoes: { incluirSimulados?: boolean; limite?: number } = {}): Promise<ClienteRisco[]> {
+    if (real('clientesRecentes')) {
+      const r = await chamar<ClientesRecentesApi>('GET', `/clientes/recentes?limite=${opcoes.limite ?? 10}${simulados(opcoes.incluirSimulados, '&')}`)
+      return r.clientes.map(adaptarClienteRecente)
+    }
     await espera(200)
     if (vazio) return []
     return clientesRisco.filter((c) => opcoes.incluirSimulados || !c.simulado).slice(0, opcoes.limite ?? 10)
   },
 
   /** GET /metrics/voluntario/mes */
-  async resumoVoluntario(): Promise<ResumoVoluntario> {
+  async resumoVoluntario(opcoes: { incluirSimulados?: boolean } = {}): Promise<ResumoVoluntario> {
+    if (real('resumoVoluntario')) {
+      return adaptarResumoVoluntario(await chamar<MesVoluntarioApi>('GET', `/metrics/voluntario/mes${simulados(opcoes.incluirSimulados, '?')}`))
+    }
     await espera(120)
     if (vazio) return { ...resumoVoluntario, valor_liquido_mantido: 0, clientes_mantidos: 0, estornos: 0, grave: 0, preocupante: 0, ofertas_enviadas: 0, ofertas_aceitas: 0 }
     return resumoVoluntario
@@ -533,28 +665,41 @@ export const api = {
 
   /** GET /metrics/voluntario/serie?dias=30 (só o voluntário) */
   async serieVoluntario(opcoes: { incluirSimulados?: boolean } = {}): Promise<PontoSerie[]> {
+    if (real('serieVoluntario')) {
+      return adaptarSerieVoluntario(await chamar<SerieVoluntarioApi>('GET', `/metrics/voluntario/serie?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
+    }
     await espera(160)
     return serieDupla(opcoes.incluirSimulados ?? false).map((p) => ({ dia: p.dia, valor: vazio ? 0 : p.voluntario }))
   },
 
-  /** GET /metrics/voluntario/regua-x-modelo?dias=30 */
+  /** GET /metrics/voluntario/regua-x-modelo?dias=30; null quando não há desfecho suficiente para comparar */
   async comparacaoReguaModelo(): Promise<ComparacaoReguaModelo | null> {
+    if (real('comparacaoReguaModelo')) return adaptarComparacao(await chamar<ReguaXModeloApi>('GET', '/metrics/voluntario/regua-x-modelo?dias=30'))
     await espera(150)
     if (vazio) return null
     return comparacaoReguaModelo
   },
 
-  /** POST /clientes/importar (multipart). Aqui só lê o nome e o tamanho; nada sobe. */
+  /** POST /clientes/importar (multipart). Na demonstração só lê o nome e o tamanho; nada sobe. */
   async importarBase(arquivo: File): Promise<ResultadoImportacao> {
+    if (real('importarBase')) {
+      const corpo = new FormData()
+      corpo.append('arquivo', arquivo, arquivo.name)
+      return adaptarImportacao(arquivo.name, await chamar<ImportacaoApi>('POST', '/clientes/importar', corpo))
+    }
     await espera(1400)
     const linhas = Math.max(12, Math.round(arquivo.size / 96))
     return {
       arquivo: arquivo.name,
       linhas,
+      importados: linhas,
+      rejeitados: 0,
       novos: Math.round(linhas * 0.04),
       atualizados: Math.round(linhas * 0.31),
       sem_id_recorrencia: Math.round(linhas * 0.02),
+      sem_comportamento: null,
       avisos: ['3 linhas sem e-mail nem telefone: ficam com "Sem canal disponível".'],
+      demonstracao: true,
     }
   },
 
@@ -562,6 +707,8 @@ export const api = {
 
   /** POST /assistente {pergunta}. As conversas não são guardadas: cada pergunta vai sozinha. */
   async assistente(pergunta: string): Promise<RespostaAssistente> {
+    // Vai só a pergunta: o backend não recebe a conversa, e não a guarda.
+    if (real('assistente')) return adaptarAssistente(await chamar<AssistenteApi>('POST', '/assistente', { pergunta }))
     await espera(700 + Math.min(900, pergunta.length * 12))
     return responder(pergunta)
   },
@@ -661,20 +808,59 @@ export const api = {
     }
   },
 
-  /** POST /titular/exportar {id_cliente} — art. 18 */
-  async exportarTitular(idCliente: string): Promise<{ arquivo: string; linhas: number }> {
+  /** POST /titular/exportar {customer_id_externo} — art. 18 */
+  async exportarTitular(idCliente: string): Promise<ExportacaoTitular> {
+    if (real('exportarTitular')) return adaptarExportacao(await chamar<ExportacaoApi>('POST', '/titular/exportar', { customer_id_externo: idCliente }))
     await espera(900)
     return { arquivo: `crai-titular-${idCliente}.json`, linhas: 14 }
   },
 
-  /** POST /titular/anonimizar {id_cliente} — art. 18; mantém os agregados */
-  async anonimizarTitular(idCliente: string): Promise<{ ok: true; ciclos_anonimizados: number; mensagens_apagadas: number }> {
+  /** POST /titular/anonimizar {customer_id_externo} — art. 18; mantém os agregados */
+  async anonimizarTitular(idCliente: string): Promise<AnonimizacaoTitular> {
+    if (real('anonimizarTitular')) return adaptarAnonimizacao(await chamar<AnonimizacaoApi>('POST', '/titular/anonimizar', { customer_id_externo: idCliente }))
     await espera(1100)
     return { ok: true, ciclos_anonimizados: idCliente.length % 3, mensagens_apagadas: idCliente.length % 4 }
   },
 
-  /** GET /titular/explicacao?id_cliente= — art. 20 (rota já existe no backend) */
+  /** POST /clientes/{id}/nao-contatar — nenhuma mensagem sai mais para este cliente */
+  async naoContatar(idCliente: string): Promise<MarcaNaoContatar> {
+    if (real('naoContatar')) return adaptarNaoContatar(await chamar<NaoContatarApi>('POST', `/clientes/${encodeURIComponent(idCliente)}/nao-contatar`))
+    await espera(500)
+    return { marcado: true, ja_estava: false, desde: new Date(AGORA_MS).toISOString() }
+  },
+
+  /** DELETE /clientes/{id}/nao-contatar — a volta */
+  async voltarAContatar(idCliente: string): Promise<MarcaNaoContatar> {
+    if (real('voltarAContatar')) return adaptarNaoContatar(await chamar<NaoContatarApi>('DELETE', `/clientes/${encodeURIComponent(idCliente)}/nao-contatar`))
+    await espera(500)
+    return { marcado: false, ja_estava: true, desde: null }
+  },
+
+  /** GET /titular/texto-para-politica — o texto pronto, com os prazos da empresa. null na demonstração (a tela usa o de exemplo). */
+  async textoParaPolitica(): Promise<{ titulo: string; texto: string } | null> {
+    if (real('textoParaPolitica')) {
+      const r = await chamar<TextoPoliticaApi>('GET', '/titular/texto-para-politica')
+      return { titulo: r.titulo, texto: r.texto }
+    }
+    await espera(60)
+    return null
+  },
+
+  /** GET /titular/explicacao/{id} — art. 20. O identificador pode ser o do cliente ou o da cobrança. */
   async explicacaoDecisao(idCliente: string): Promise<ExplicacaoDecisao | null> {
+    if (real('explicacaoDecisao')) {
+      // A trilha guarda a cobrança pelo id da recorrência e o cliente como `user:<id>`: a tela
+      // aceita os dois, e tenta nas duas formas. 404 nas duas: não há decisão registrada.
+      for (const sujeito of [idCliente, `user:${idCliente}`]) {
+        try {
+          const achada = adaptarExplicacao(await chamar<ExplicacaoApi>('GET', `/titular/explicacao/${encodeURIComponent(sujeito)}?limite=1`))
+          if (achada) return achada
+        } catch (e) {
+          if (!(e instanceof ErroApi) || e.status !== 404) throw e
+        }
+      }
+      return null
+    }
     await espera(700)
     if (!idCliente.trim()) return null
     return {

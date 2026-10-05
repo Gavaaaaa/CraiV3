@@ -3,9 +3,7 @@ import { IconCheck, IconDownload, IconSpark, IconTable } from '../../components/
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Vazio } from '../../components/ui/Estados'
-import { api } from '../../data/api'
-import { AGORA } from '../../data/mock'
-import { OFERTA } from '../../data/simulador'
+import { ErroApi, agoraDaTela, api } from '../../data/api'
 import type { BaseClientes, ClienteRisco, ComparacaoReguaModelo, FaixaRisco, ResultadoImportacao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
@@ -31,7 +29,6 @@ export function FaixaPill({ faixa, className }: { faixa: FaixaRisco; className?:
   )
 }
 
-const CANAL: Record<string, string> = { whatsapp: 'WhatsApp', email: 'E-mail', sms: 'SMS', sem_canal: 'Sem canal disponível' }
 const STATUS_OFERTA = {
   aguardando: { rotulo: 'A enviar', classe: 'text-silver' },
   enviada: { rotulo: 'Enviada', classe: 'text-amber' },
@@ -60,7 +57,7 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
-          <h3 className="t-h3 text-paper">Últimos 10 clientes avaliados</h3>
+          <h3 className="t-h3 text-paper">Últimos 10 clientes atualizados</h3>
           <p className="t-apoio mt-0.5 text-silver">Do mais recente ao mais antigo. O motivo é o que pesou na avaliação; a abordagem é o que o sistema fez.</p>
           <p className="t-label mt-1 text-muted">Grave é o topo 10% da base pelo risco; Preocupante, os 20% seguintes. Sempre com um sinal real de abandono.</p>
         </div>
@@ -122,17 +119,17 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
                       <span className="font-[560] text-paper">{c.nome}</span>
                       {c.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
                     </div>
-                    <div className="t-label text-muted">Avaliado {fmt.relativo(c.atualizado_em, AGORA)}</div>
+                    {c.atualizado_em ? <div className="t-label text-muted">Atualizado {fmt.relativo(c.atualizado_em, agoraDaTela())}</div> : null}
                   </td>
-                  <td className="tabular px-3 py-3.5 font-[560] whitespace-nowrap text-paper">{fmt.brl(c.mrr)}</td>
+                  <td className="tabular px-3 py-3.5 font-[560] whitespace-nowrap text-paper">{c.mrr === null ? '—' : fmt.brl(c.mrr)}</td>
                   <td className="px-3 py-3.5"><FaixaPill faixa={c.faixa} /></td>
                   <td className="max-w-[300px] px-3 py-3.5 text-apoio leading-[1.45] text-silver">{c.motivo}</td>
                   <td className="px-3 py-3.5">
                     {c.abordagem ? (
                       <>
-                        <div className="text-apoio text-paper">{OFERTA[c.abordagem.oferta]}</div>
+                        <div className="text-apoio text-paper">{c.abordagem.oferta}</div>
                         <div className="t-label text-silver">
-                          {CANAL[c.abordagem.canal]} · <span className={STATUS_OFERTA[c.abordagem.status].classe}>{STATUS_OFERTA[c.abordagem.status].rotulo}</span>
+                          {c.abordagem.canal} · <span className={STATUS_OFERTA[c.abordagem.status].classe}>{STATUS_OFERTA[c.abordagem.status].rotulo}</span>
                         </div>
                       </>
                     ) : (
@@ -140,11 +137,17 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
                     )}
                   </td>
                   <td className="px-5 py-3.5">
-                    <QuemDecidiu por={c.risco_decidido_por} />
-                    <div className="t-label mt-1 text-silver">
-                      {c.risco_decidido_por === 'modelo' ? 'Pelo comportamento' : 'Por regras fixas'}
-                      {c.posicao_na_base !== null && total ? ` · ${c.posicao_na_base}º de ${fmt.numero(total)} pelo risco` : ''}
-                    </div>
+                    {c.risco_decidido_por ? (
+                      <>
+                        <QuemDecidiu por={c.risco_decidido_por} />
+                        <div className="t-label mt-1 text-silver">
+                          {c.risco_decidido_por === 'modelo' ? 'Pelo comportamento' : 'Por regras fixas'}
+                          {c.posicao_na_base !== null && total ? ` · ${c.posicao_na_base}º de ${fmt.numero(total)} pelo risco` : ''}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="t-label text-muted">{c.faixa === 'sem_dado' ? 'Sem avaliação' : 'Não registrado'}</span>
+                    )}
                   </td>
                 </tr>
               ))
@@ -172,7 +175,9 @@ export function QuemDecidiu({ por }: { por: 'modelo' | 'regua' }) {
 /* Sua base                                                            */
 /* ------------------------------------------------------------------ */
 
-export function SuaBase({ base }: { base: BaseClientes | null }) {
+const ORIGEM_DA_BASE = { api: 'Pela API', anexo: 'Por anexo' }
+
+export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImportar?: () => void }) {
   const [arrastando, setArrastando] = useState(false)
   const [enviando, setEnviando] = useState(false)
   const [resultado, setResultado] = useState<ResultadoImportacao | null>(null)
@@ -184,9 +189,18 @@ export function SuaBase({ base }: { base: BaseClientes | null }) {
     if (!/\.(csv|xlsx)$/i.test(arquivo.name)) return setErro('Só CSV ou XLSX. Outros formatos não são lidos.')
     if (arquivo.size > 25 * 1024 * 1024) return setErro('O arquivo passa de 25 MB. Divida em duas partes.')
     setErro(null)
+    setResultado(null)
     setEnviando(true)
-    setResultado(await api.importarBase(arquivo))
-    setEnviando(false)
+    try {
+      const r = await api.importarBase(arquivo)
+      setResultado(r)
+      // A base mudou: a página lê de novo os totais e a lista.
+      if (!r.demonstracao && r.importados > 0) aoImportar?.()
+    } catch (e) {
+      setErro(e instanceof ErroApi ? e.message : 'Não foi possível enviar o arquivo. Tente de novo.')
+    } finally {
+      setEnviando(false)
+    }
   }
   function soltar(e: DragEvent) {
     e.preventDefault()
@@ -203,8 +217,8 @@ export function SuaBase({ base }: { base: BaseClientes | null }) {
         </p>
         <dl className="mt-5 grid grid-cols-2 gap-3">
           <Dado rotulo="Clientes na base" valor={base ? fmt.numero(base.total) : '—'} />
-          <Dado rotulo="Com dados de comportamento" valor={base ? fmt.numero(base.com_dados_comportamento) : '—'} apoio={base ? `${Math.round((base.com_dados_comportamento / base.total) * 100)}% da base; o modelo de IA decide para estes` : ''} />
-          <Dado rotulo="Última atualização" valor={base ? fmt.relativo(base.atualizada_em, AGORA).replace(/^./, (c) => c.toUpperCase()) : '—'} apoio={base ? (base.origem === 'api' ? 'Pela API' : 'Por anexo') : ''} />
+          <Dado rotulo="Com dados de comportamento" valor={base ? fmt.numero(base.com_dados_comportamento) : '—'} apoio={base && base.total ? `${Math.round((base.com_dados_comportamento / base.total) * 100)}% da base; o risco é avaliado para estes` : ''} />
+          <Dado rotulo="Última atualização" valor={base ? fmt.relativo(base.atualizada_em, agoraDaTela()).replace(/^./, (c) => c.toUpperCase()) : '—'} apoio={base ? (base.origem ? ORIGEM_DA_BASE[base.origem] : 'Origem não registrada') : ''} />
           <Dado rotulo="O que a base precisa ter" valor="Id do cliente e mensalidade" apoio="Opcional: id da recorrência (liga ao involuntário), e-mail, telefone, uso, chamados" pequeno />
         </dl>
         <a href="#" onClick={(e) => e.preventDefault()} className="t-label mt-4 inline-flex items-center gap-1.5 text-silver hover:text-paper">
@@ -246,14 +260,21 @@ export function SuaBase({ base }: { base: BaseClientes | null }) {
             </div>
             <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-apoio text-paper sm:grid-cols-4">
               <li><span className="tabular font-[640]">{fmt.numero(resultado.linhas)}</span> <span className="text-silver">linhas</span></li>
-              <li><span className="tabular font-[640]">{resultado.novos}</span> <span className="text-silver">novos</span></li>
-              <li><span className="tabular font-[640]">{resultado.atualizados}</span> <span className="text-silver">corrigidos</span></li>
-              <li><span className="tabular font-[640]">{resultado.sem_id_recorrencia}</span> <span className="text-silver">sem id da recorrência</span></li>
+              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.importados)}</span> <span className="text-silver">na base</span></li>}
+              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.rejeitados)}</span> <span className="text-silver">recusadas</span></li>}
+              {resultado.novos !== null ? <li><span className="tabular font-[640]">{resultado.novos}</span> <span className="text-silver">novos</span></li> : null}
+              {resultado.atualizados !== null ? <li><span className="tabular font-[640]">{resultado.atualizados}</span> <span className="text-silver">corrigidos</span></li> : null}
+              {resultado.sem_id_recorrencia !== null ? <li><span className="tabular font-[640]">{resultado.sem_id_recorrencia}</span> <span className="text-silver">sem id da recorrência</span></li> : null}
+              {resultado.sem_comportamento !== null ? <li><span className="tabular font-[640]">{fmt.numero(resultado.sem_comportamento)}</span> <span className="text-silver">sem dado de comportamento</span></li> : null}
             </ul>
             {resultado.avisos.map((a) => (
               <p key={a} className="t-label mt-2 text-silver">{a}</p>
             ))}
-            <p className="t-label mt-2 text-muted">Demonstração: o arquivo não sai do seu navegador. Na versão final, a base é enviada e a avaliação de risco roda em seguida.</p>
+            {resultado.demonstracao ? (
+              <p className="t-label mt-2 text-muted">Demonstração: o arquivo não sai do seu navegador. Na versão final, a base é enviada e a avaliação de risco roda em seguida.</p>
+            ) : (
+              <p className="t-label mt-2 text-muted">A avaliação de risco já usa a base nova.</p>
+            )}
           </div>
         ) : null}
       </div>
@@ -276,7 +297,7 @@ function Dado({ rotulo, valor, apoio, pequeno }: { rotulo: string; valor: string
 /* ------------------------------------------------------------------ */
 
 export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | null; comparacao: ComparacaoReguaModelo | null }) {
-  const pct = base ? Math.round((base.com_dados_comportamento / base.total) * 100) : null
+  const pct = base && base.total ? Math.round((base.decididos_pelo_modelo / base.total) * 100) : null
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
       <div>
@@ -289,7 +310,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
               <span className="t-label text-silver">{pct !== null ? `${pct}% da base` : ''}</span>
             </div>
             <p className="mt-2 text-apoio leading-[1.5] text-paper">
-              Um modelo de IA (versão 3, sendo promovido agora) aprende com o comportamento: uso, chamados, atrasos, tempo de casa. Decide quando o cliente tem esses dados.
+              Um modelo de IA aprende com o comportamento: uso, chamados, atrasos, tempo de casa. Decide quando o cliente tem esses dados.
             </p>
           </li>
           <li className="rounded-[14px] border border-line bg-ink/25 p-4">
@@ -319,7 +340,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
         </p>
         {!comparacao ? (
           <p className="mt-5 rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-silver">
-            A comparação aparece depois que o modelo de IA estiver avaliando a sua base por 30 dias. Até lá, a régua decide e a tabela mostra isso.
+            A comparação aparece quando o modelo de IA estiver avaliando a sua base e houver cancelamentos suficientes no período para comparar. Até lá, a tabela mostra quem decidiu o risco de cada cliente.
           </p>
         ) : null}
         {comparacao ? (
@@ -340,7 +361,7 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
               max={Math.max(comparacao.regua.marcou_grave, comparacao.modelo.marcou_grave)}
             />
             <p className="rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-paper">
-              O modelo avisou {comparacao.modelo.avisou_antes} dos {comparacao.cancelamentos} cancelamentos, marcando menos da metade dos clientes que a régua marcou. Menos alarme falso, mais aviso certo.
+              O modelo tinha marcado {comparacao.modelo.avisou_antes} dos {comparacao.cancelamentos} cancelamentos, com {fmt.numero(comparacao.modelo.marcou_grave)} clientes como graves. A régua tinha marcado {comparacao.regua.avisou_antes}, com {fmt.numero(comparacao.regua.marcou_grave)} como graves. As duas avaliam a mesma base, com os últimos dados de cada cliente.
             </p>
           </div>
         ) : null}

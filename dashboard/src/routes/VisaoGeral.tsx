@@ -8,7 +8,7 @@ import { Card } from '../components/ui/Card'
 import { FaixaDemonstracao } from '../components/ui/Demonstracao'
 import { Carregando, ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
-import { api, etiquetaDeDemonstracao } from '../data/api'
+import { ErroApi, agoraDaTela, api, etiquetaDeDemonstracao } from '../data/api'
 import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
 import { useReducedMotion } from '../lib/useReducedMotion'
@@ -74,9 +74,14 @@ export function VisaoGeral() {
         api.resumoVisaoGeral({ incluirSimulados: sim }),
         api.serieDupla({ incluirSimulados: sim }),
         api.atividade({ incluirSimulados: sim, limite: 12 }),
-        api.extrato({ incluirSimulados: sim }),
-        api.funil(),
-        api.oQueFunciona(),
+        // O extrato traz a taxa da CRAI: o backend só o entrega ao dono e aos administradores.
+        // Para o membro, o resto da página abre normalmente e a aba diz por que está vazia.
+        api.extrato({ incluirSimulados: sim }).catch((e: unknown) => {
+          if (e instanceof ErroApi && e.codigo === 'sem_permissao') return 'sem_permissao' as const
+          throw e
+        }),
+        api.funil({ incluirSimulados: sim }),
+        api.oQueFunciona({ incluirSimulados: sim }),
         api.saude(),
       ]),
     [sim],
@@ -111,6 +116,8 @@ export function VisaoGeral() {
   ]
 
   const mantido = resumo ? resumo.recuperado_involuntario + (resumo.retido_voluntario ?? 0) : null
+  // O mês do extrato e do funil é o corrente (o backend usa o mesmo quando a tela não pede outro).
+  const mesAtual = fmt.mesDe(agoraDaTela())
   // Os cartões do topo ainda vêm de uma rota que o backend não tem (Etapa 3).
   const demo = etiquetaDeDemonstracao('resumoVisaoGeral')
   const fonteDaAba: Record<AbaVisao, string[]> = {
@@ -162,7 +169,7 @@ export function VisaoGeral() {
           demo={demo}
           rotulo="Recuperado do involuntário"
           valor={resumo ? fmt.brlInteiro(resumo.recuperado_involuntario) : '—'}
-          apoio={resumo ? `${resumo.cobrancas_recuperadas} cobranças Pix que voltaram` : ''}
+          apoio={resumo ? `${resumo.cobrancas_recuperadas} ${resumo.cobrancas_recuperadas === 1 ? 'cobrança Pix que voltou' : 'cobranças Pix que voltaram'}` : ''}
           icone={<IconRefresh width={17} height={17} />}
         />
         <StatTile
@@ -172,7 +179,7 @@ export function VisaoGeral() {
           apoio={
             resumo
               ? resumo.retido_voluntario !== null
-                ? `${resumo.clientes_mantidos} clientes que ficaram`
+                ? `${resumo.clientes_mantidos ?? 0} ${resumo.clientes_mantidos === 1 ? 'cliente que ficou' : 'clientes que ficaram'}`
                 : 'Disponível no plano premium'
               : ''
           }
@@ -198,14 +205,20 @@ export function VisaoGeral() {
           demo={demo}
           rotulo="Clientes em risco grave"
           valor={premium ? (resumo?.clientes_risco_grave ?? '—') : '—'}
-          apoio={premium ? (resumo ? `${resumo.risco_grave_com_oferta} já receberam uma oferta` : '') : 'Disponível no plano premium'}
+          apoio={premium ? (resumo && resumo.risco_grave_com_oferta !== null ? `${resumo.risco_grave_com_oferta} já ${resumo.risco_grave_com_oferta === 1 ? 'recebeu' : 'receberam'} uma oferta` : '') : 'Disponível no plano premium'}
           icone={<IconAlert width={17} height={17} />}
         />
         <StatTile
           demo={demo}
           rotulo="Taxa de recuperação"
-          valor={resumo ? fmt.pontos(resumo.taxa_recuperacao * 100) : '—'}
-          apoio={resumo ? `Das ${resumo.ciclos_com_desfecho} cobranças que já tiveram desfecho` : ''}
+          valor={resumo && resumo.taxa_recuperacao !== null ? fmt.pontos(resumo.taxa_recuperacao * 100) : '—'}
+          apoio={
+            resumo
+              ? resumo.taxa_recuperacao === null
+                ? 'Nenhuma cobrança teve desfecho no período'
+                : `Das ${resumo.ciclos_com_desfecho} cobranças que já tiveram desfecho`
+              : ''
+          }
         />
         <div className="min-h-[150px] sm:col-span-2 lg:col-span-3 xl:col-span-3">
           <GrupoDeControle />
@@ -252,7 +265,7 @@ export function VisaoGeral() {
               <Card className="p-5 md:p-6">
                 {funil ? (
                   funil.etapas[0]?.chegaram === 0 ? (
-                    <Vazio titulo="Nenhuma cobrança falhou em setembro" texto="Quando uma cobrança Pix falhar, o caminho dela aparece aqui: tentativas, mensagem e desfecho." />
+                    <Vazio titulo={`Nenhuma cobrança falhou em ${fmt.mesPorExtenso(funil.mes)}`} texto="Quando uma cobrança Pix falhar, o caminho dela aparece aqui: tentativas, mensagem e desfecho." />
                   ) : (
                     <FunilInvoluntario funil={funil} />
                   )
@@ -266,8 +279,15 @@ export function VisaoGeral() {
               </Card>
             ) : aba === 'extrato' ? (
               <Card className="p-0">
-                {extrato ? (
-                  <ExtratoDoMes linhas={extrato} mes="2026-09" />
+                {extrato === 'sem_permissao' ? (
+                  <div className="p-5">
+                    <Vazio
+                      titulo="O extrato é só para o dono e os administradores"
+                      texto="Ele traz a taxa da CRAI de cada valor recuperado ou mantido. Peça a um administrador da sua empresa para abrir esta aba."
+                    />
+                  </div>
+                ) : extrato ? (
+                  <ExtratoDoMes linhas={extrato} mes={mesAtual} />
                 ) : (
                   <div className="p-5">
                     <Carregando altura={320} />

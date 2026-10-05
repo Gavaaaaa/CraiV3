@@ -7,15 +7,15 @@ import { Abas, type Aba } from '../components/ui/Abas'
 import { Badge } from '../components/ui/Badge'
 import { ErroCarregar } from '../components/ui/Estados'
 import { ErroApi, api } from '../data/api'
-import { CAUSA } from '../data/simulador'
-import type { Abordagem, ClienteFicticio, Configuracao, EstadoSimulacao } from '../data/tipos'
+import { CAUSA, estadoVazio } from '../data/simulador'
+import type { Abordagem, ClienteFicticio, EstadoSimulacao } from '../data/tipos'
 import { cx } from '../lib/cx'
 import { fmt } from '../lib/format'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { CartaoPix, type Brilho } from './simulacao/CartaoPix'
 import { Etapas } from './simulacao/Etapas'
 import { FormularioCliente } from './simulacao/FormularioCliente'
-import { MensagensSimuladas, PainelSistema } from './simulacao/PainelSistema'
+import { CANAL_DA_MENSAGEM, MensagensSimuladas, PainelSistema } from './simulacao/PainelSistema'
 import { RetencaoSimulada } from './simulacao/RetencaoSimulada'
 
 type AbaSim = 'cobranca' | 'retencao'
@@ -36,7 +36,8 @@ export function Simulacao() {
   const irPara = (v: AbaSim) => setParams(v === 'cobranca' ? {} : { aba: v }, { replace: true })
 
   const [estado, setEstado] = useState<EstadoSimulacao | null>(null)
-  const [config, setConfig] = useState<Configuracao | null>(null)
+  /** "Outro cliente": a tela volta ao formulário sem apagar o que já foi simulado. */
+  const [novoCliente, setNovoCliente] = useState(false)
   const [virado, setVirado] = useState(false)
   const [rascunho, setRascunho] = useState<ClienteFicticio | null>(null)
   const [processando, setProcessando] = useState(false)
@@ -48,11 +49,10 @@ export function Simulacao() {
   useEffect(() => {
     let vivo = true
     setErro(null)
-    Promise.all([api.simulacao(), api.configuracao()])
-      .then(([e, c]) => {
-        if (!vivo) return
-        setEstado(e)
-        setConfig(c)
+    api
+      .simulacao()
+      .then((e) => {
+        if (vivo) setEstado(e)
       })
       .catch((e: unknown) => vivo && setErro(e instanceof ErroApi ? e.message : 'Algo deu errado ao carregar a simulação.'))
     return () => {
@@ -90,7 +90,18 @@ export function Simulacao() {
     }
   }
 
-  const simular = (cliente: ClienteFicticio) => acao(async () => aplicar(await api.simularCobranca(cliente), estado))
+  /** O que a tela mostra: o estado do backend, ou o formulário em branco depois de "Outro cliente". */
+  const mostrado: EstadoSimulacao | null =
+    estado && novoCliente
+      ? { ...estadoVazio(), hoje: estado.hoje, inicio: estado.hoje, modo_mensagem: estado.modo_mensagem, prazo_escolha_horas: estado.prazo_escolha_horas }
+      : estado
+
+  const simular = (cliente: ClienteFicticio) =>
+    acao(async () => {
+      const novo = await api.simularCobranca(cliente)
+      setNovoCliente(false)
+      aplicar(novo, mostrado)
+    })
   const avancar = (dias: number) => acao(async () => aplicar(await api.simulacaoAvancar(dias), estado))
   const avancarAteAcao = () => acao(async () => aplicar(await api.simulacaoAvancarAteProximaAcao(), estado))
   const escolher = (abordagem: Abordagem) =>
@@ -98,10 +109,16 @@ export function Simulacao() {
       setEstado(await api.simulacaoEscolherMensagem(abordagem))
       setOcupado(false)
     })
-  const recomecar = () =>
+  const recomecar = () => {
+    setVirado(false)
+    setErro(null)
+    setNovoCliente(true)
+  }
+  const limpar = () =>
     acao(async () => {
       setVirado(false)
       setEstado(await api.simulacaoLimpar())
+      setNovoCliente(false)
       setOcupado(false)
     })
 
@@ -134,9 +151,9 @@ export function Simulacao() {
             <p className="t-apoio mx-auto mt-2 max-w-md text-silver">No premium, a CRAI também acompanha os sinais de risco dos seus clientes e faz ofertas antes do cancelamento.</p>
           </div>
         )
-      ) : erro && estado === null ? (
+      ) : erro && mostrado === null ? (
         <ErroCarregar mensagem={erro} onTentar={() => setTentativaCarga((t) => t + 1)} />
-      ) : estado === null ? (
+      ) : mostrado === null ? (
         <div className="card-glass min-h-[420px] rounded-[18px]" aria-busy="true" />
       ) : (
         <>
@@ -146,9 +163,9 @@ export function Simulacao() {
           </div>
         ) : null}
         <SimulacaoCobranca
-          estado={estado}
+          estado={mostrado}
           empresa={empresa?.nome ?? 'Sua empresa'}
-          modoEscolha={config?.modo_mensagem_involuntario === 'escolha'}
+          modoEscolha={mostrado.modo_mensagem === 'escolha'}
           rascunho={rascunho}
           onRascunho={setRascunho}
           virado={virado}
@@ -160,6 +177,7 @@ export function Simulacao() {
           onAvancarAteAcao={avancarAteAcao}
           onEscolher={escolher}
           onRecomecar={recomecar}
+          onLimpar={limpar}
         />
         </>
       )}
@@ -182,6 +200,7 @@ interface PropsCobranca {
   onAvancarAteAcao: () => void
   onEscolher: (a: Abordagem) => void
   onRecomecar: () => void
+  onLimpar: () => void
 }
 
 function SimulacaoCobranca(p: PropsCobranca) {
@@ -216,7 +235,7 @@ function SimulacaoCobranca(p: PropsCobranca) {
             <AnimatePresence mode="wait" initial={false}>
               {mostrandoMensagens ? (
                 <motion.div key="mensagens" initial={reduzido ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="w-full">
-                  <MensagensSimuladas sugestoes={estado.sugestoes} modoEscolha={p.modoEscolha} ocupado={p.ocupado} onEscolher={p.onEscolher} />
+                  <MensagensSimuladas sugestoes={estado.sugestoes} modoEscolha={p.modoEscolha} prazoHoras={estado.prazo_escolha_horas} ocupado={p.ocupado} onEscolher={p.onEscolher} />
                 </motion.div>
               ) : (
                 <motion.div key="cartao" layout initial={false} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full flex-col items-center gap-3">
@@ -250,7 +269,7 @@ function SimulacaoCobranca(p: PropsCobranca) {
             {!processando ? (
               <motion.div key={comecou ? 'painel' : 'form'} initial={reduzido ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.15 } }} className="min-w-0">
                 {comecou ? (
-                  <PainelSistema estado={estado} ocupado={p.ocupado} onAvancar={p.onAvancar} onAvancarAteAcao={p.onAvancarAteAcao} onRecomecar={p.onRecomecar} />
+                  <PainelSistema estado={estado} ocupado={p.ocupado} onAvancar={p.onAvancar} onAvancarAteAcao={p.onAvancarAteAcao} onRecomecar={p.onRecomecar} onLimpar={p.onLimpar} />
                 ) : (
                   <FormularioCliente onSimular={p.onSimular} onRascunho={p.onRascunho} ocupado={p.ocupado} />
                 )}
@@ -286,8 +305,8 @@ function FaixaStatus({ estado, processando, ultima }: { estado: EstadoSimulacao;
     case 'mensagem_enviada':
       return (
         <Faixa tom="amber" icone={<IconSend width={15} height={15} />}>
-          Mensagem enviada por WhatsApp
-          <span className="t-label ml-2 text-silver">Aguardando resposta por 2 dias</span>
+          Mensagem enviada{estado.mensagem_enviada ? ` por ${CANAL_DA_MENSAGEM[estado.mensagem_enviada.canal]}` : ''}
+          <span className="t-label ml-2 text-silver">{estado.proxima_acao ? `${estado.proxima_acao.descricao} em ${fmt.dataCurta(estado.proxima_acao.quando)}` : 'Aguardando a resposta do cliente'}</span>
         </Faixa>
       )
     case 'recuperada':

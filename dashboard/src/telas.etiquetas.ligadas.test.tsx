@@ -35,45 +35,70 @@ describe('com a variável, e o modo real ligado', () => {
   it('a variável liga as etiquetas só dos blocos fictícios', () => {
     expect(MODO_REAL).toBe(true)
     expect(MOSTRAR_DEMONSTRACAO).toBe(true)
-    expect(etiquetaDeDemonstracao('resumoVisaoGeral')).toBe(true)
+    // A seção Equipe da configuração depende do site e continua fictícia.
+    expect(etiquetaDeDemonstracao('membros')).toBe(true)
     expect(etiquetaDeDemonstracao('ciclos', 'configuracao', 'chaves')).toBe(false)
   })
 
-  it('visão geral: os cartões do topo e a aba aberta', async () => {
-    abrir('/')
-    expect(await screen.findByText('Mantido para você nos últimos 30 dias', {}, ESPERA)).toBeTruthy()
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(7), ESPERA)
-  })
-
-  it('saúde do sistema: o relógio é de verdade, e as outras três linhas ficam marcadas', async () => {
-    abrir('/?aba=saude')
-    expect(await screen.findByText('Relógio das tentativas', {}, ESPERA)).toBeTruthy()
-    const item = (rotulo: string) => screen.getByText(rotulo).closest('li') as HTMLElement
-    expect(within(item('Relógio das tentativas')).queryByText('Demonstração')).toBeNull()
-    for (const rotulo of ['Decisões automáticas', 'Redator de mensagens', 'Base de clientes']) {
-      expect(within(item(rotulo)).getByText('Demonstração'), rotulo).toBeTruthy()
+  it('visão geral: já é de verdade, e nenhum cartão nem aba ganha etiqueta', async () => {
+    // Rodada 3, Fase 2: a visão geral passou a ler o backend.
+    expect(etiquetaDeDemonstracao('resumoVisaoGeral', 'serieDupla', 'funil', 'oQueFunciona', 'atividade', 'extrato')).toBe(false)
+    for (const caminho of ['/', '/?aba=caminho', '/?aba=funciona', '/?aba=extrato', '/?aba=atividade']) {
+      abrir(caminho)
+      expect(await screen.findByText('Mantido para você nos últimos 30 dias', {}, ESPERA)).toBeTruthy()
+      await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
+      expect(etiquetas(), caminho).toHaveLength(0)
+      cleanup()
     }
   })
 
-  it('voluntário e assistente', async () => {
-    abrir('/voluntario')
-    expect(await screen.findByText('Mantido para você em setembro', {}, ESPERA)).toBeTruthy()
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(6), ESPERA)
-    cleanup()
-    abrir('/assistente')
-    await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(1), ESPERA)
+  it('saúde do sistema: as quatro linhas são de verdade, e nenhuma fica marcada', async () => {
+    abrir('/?aba=saude')
+    expect(await screen.findByText('Relógio das tentativas', {}, ESPERA)).toBeTruthy()
+    const item = (rotulo: string) => screen.getByText(rotulo).closest('li') as HTMLElement
+    for (const rotulo of ['Relógio das tentativas', 'Decisões automáticas', 'Redator de mensagens', 'Base de clientes']) {
+      expect(within(item(rotulo)).queryByText('Demonstração'), rotulo).toBeNull()
+    }
+    // O que a tela diz é o que o backend de mentira respondeu.
+    expect(item('Decisões automáticas').textContent).toContain('4 de 4 modelos carregados.')
+    expect(item('Base de clientes').textContent).toContain('Nenhuma base enviada ainda.')
   })
 
-  it('configuração: mensagens é de verdade; as outras cinco seções ficam marcadas', async () => {
+  it('o voluntário e o assistente já são de verdade: nenhuma etiqueta', async () => {
+    // Rodada 3, Fase 1: a página do voluntário passou a ler o backend. Mesmo com a variável
+    // ligada, nenhum bloco dela é fictício.
+    abrir('/voluntario')
+    expect(await screen.findByText(/^Mantido para você em /, {}, ESPERA)).toBeTruthy()
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
+    expect(etiquetaDeDemonstracao('clientesRecentes', 'serieVoluntario', 'resumoVoluntario', 'baseClientes', 'comparacaoReguaModelo')).toBe(false)
+    expect(etiquetas()).toHaveLength(0)
+    cleanup()
+    // Rodada 3, Fase 4: o assistente passou a perguntar ao backend.
+    abrir('/assistente')
+    expect(await screen.findByText('O que o assistente vê', {}, ESPERA)).toBeTruthy()
+    expect(etiquetaDeDemonstracao('assistente')).toBe(false)
+    expect(etiquetas()).toHaveLength(0)
+  })
+
+  it('configuração: mensagens e dados e privacidade são de verdade; as outras quatro seções ficam marcadas', async () => {
+    // Rodada 3, Fase 6: a seção Dados e privacidade passou a falar com o backend. Ficam
+    // de demonstração Empresa, Equipe, Integração e Notificações (dependem do site).
     abrir('/configuracao')
     expect(await screen.findByText('Quem escolhe a mensagem', {}, ESPERA)).toBeTruthy()
-    expect(etiquetas()).toHaveLength(5)
+    expect(etiquetas()).toHaveLength(4)
+    expect(etiquetaDeDemonstracao('exportarTitular', 'anonimizarTitular', 'explicacaoDecisao', 'naoContatar', 'voltarAContatar', 'textoParaPolitica')).toBe(false)
     cleanup()
     // Numa seção fictícia aberta, a faixa do bloco soma mais uma.
     abrir('/configuracao?secao=equipe')
     expect(await screen.findByText('Membros', {}, ESPERA)).toBeTruthy()
-    expect(etiquetas()).toHaveLength(6)
+    expect(etiquetas()).toHaveLength(5)
     expect(screen.getByText('Este bloco ainda usa dados fictícios')).toBeTruthy()
+    cleanup()
+    // Na seção Dados e privacidade aberta, nenhuma faixa: só as quatro do menu.
+    abrir('/configuracao?secao=dados')
+    expect(await screen.findByText('Por quanto tempo a CRAI guarda', {}, ESPERA)).toBeTruthy()
+    expect(etiquetas()).toHaveLength(4)
+    expect(screen.queryByText('Este bloco ainda usa dados fictícios')).toBeNull()
   })
 
   it('o que já é de verdade continua sem etiqueta: involuntário e a aba API', async () => {

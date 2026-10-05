@@ -187,6 +187,37 @@ describe('aba API em demonstração: a página, de cima para baixo', () => {
     expect(document.querySelector('pre')).toBeNull()
   })
 
+  it('o exemplo tem uma segunda chamada: avisar um evento, pelo servidor, com o marcador no lugar da chave', async () => {
+    abrir('/api')
+    fireEvent.click(await screen.findByRole('button', { name: /^Exemplo de uso/ }, ESPERA))
+    const blocos = [...document.querySelectorAll('pre')].map((p) => p.textContent ?? '')
+    expect(blocos).toHaveLength(2)
+    const [cadastro, evento] = blocos
+    expect(cadastro).toContain('https://api.exemplo-crai.com.br/clientes')
+    expect(evento).toContain('curl -X POST "https://api.exemplo-crai.com.br/eventos"')
+    expect(evento).toContain(`Authorization: Bearer ${MARCADOR_DA_CHAVE}`)
+    expect(evento).toContain('"event": "Cancellation Page Viewed"')
+    expect(evento).toContain('"userId": "c-001"')
+    expect(evento).toContain('"messageId"')
+    expect(evento).not.toMatch(/crai_live_/)
+    expect(screen.getByText('Avisar um evento')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copiar exemplo do evento' })).toBeTruthy()
+    // A chave é secreta e só sai do servidor da empresa (S8).
+    expect(screen.getByText(/Esta chamada sai do servidor da sua empresa\. A chave é secreta/)).toBeTruthy()
+  })
+
+  it('o painel "O que a API faz" diz o que a API passou a fazer, e o que ela não faz', () => {
+    const [oQueFaz, , , naoFaz] = O_QUE_A_API_FAZ.blocos
+    expect(oQueFaz.titulo).toBe('O que o seu sistema passa a fazer')
+    expect(oQueFaz.itens).toContain('Avisar o que o cliente fez, como abrir a página de cancelamento.')
+    expect(naoFaz.titulo).toBe('O que a chave não faz')
+    expect(naoFaz.itens).toContain(
+      'Não envia mensagens por conta própria. Ela só avisa a CRAI do que aconteceu; quem decide se e quando falar com o cliente é a CRAI, pelas regras da sua configuração.',
+    )
+    const tudo = O_QUE_A_API_FAZ.blocos.flatMap((b) => [...b.itens]).join(' ')
+    expect(tudo).not.toContain('Não envia mensagens nem faz cobranças.')
+  })
+
   it('o botão "O que a API faz" abre o painel com o texto, e ele fecha com Esc, clique fora e botão', async () => {
     abrir('/api')
     const botao = await screen.findByRole('button', { name: 'O que a API faz' }, ESPERA)

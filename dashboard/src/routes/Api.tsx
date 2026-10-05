@@ -26,6 +26,16 @@ function exemploDeChamada(endereco: string): string {
   ].join('\n')
 }
 
+/** O segundo exemplo (Rodada 3): avisar um evento de comportamento do cliente final. */
+function exemploDeEvento(endereco: string): string {
+  return [
+    `curl -X POST "${endereco}/eventos" \\`,
+    `  -H "Authorization: Bearer ${MARCADOR_DA_CHAVE}" \\`,
+    '  -H "Content-Type: application/json" \\',
+    `  -d '{"userId": "c-001", "event": "Cancellation Page Viewed", "messageId": "evento-0001"}'`,
+  ].join('\n')
+}
+
 /** Um botão "Copiar" que confirma por alguns segundos. O texto copiado não é guardado aqui. */
 function Copiar({ texto, rotulo = 'Copiar' }: { texto: string; rotulo?: string }) {
   const [copiado, setCopiado] = useState(false)
@@ -118,6 +128,7 @@ export function PaginaApi() {
   const revogadas = dados ? dados.chaves.filter((c) => c.revogada_em) : []
   const noLimite = dados ? ativas.length >= dados.limite_ativas : false
   const exemplo = exemploDeChamada(ENDERECO_DA_API)
+  const exemploEvento = exemploDeEvento(ENDERECO_DA_API)
 
   return (
     <div className="flex flex-col gap-5">
@@ -258,6 +269,18 @@ export function PaginaApi() {
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <Copiar texto={exemplo} rotulo="Copiar exemplo" />
               <span className="t-label text-muted">Troque {MARCADOR_DA_CHAVE} pela sua chave.</span>
+            </div>
+
+            <h4 className="t-label mt-5 font-[600] text-paper">Avisar um evento</h4>
+            <p className="t-label mt-1 text-silver">
+              O cliente c-001 abriu a página de cancelamento. Use em userId o mesmo identificador do cadastro. O messageId evita que um reenvio conte duas vezes.
+            </p>
+            <pre data-exemplo="evento" className="scroll-fino mt-2 overflow-x-auto rounded-[12px] border border-line bg-ink/60 p-4 text-rotulo leading-[1.6] text-paper/90">
+              <code>{exemploEvento}</code>
+            </pre>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <Copiar texto={exemploEvento} rotulo="Copiar exemplo do evento" />
+              <span className="t-label text-muted">Esta chamada sai do servidor da sua empresa. A chave é secreta: não a coloque em página nem em aplicativo.</span>
             </div>
           </div>
         ) : null}

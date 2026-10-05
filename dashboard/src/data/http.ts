@@ -118,10 +118,45 @@ const CONFLITOS: Record<string, string> = {
   prazo_de_escolha_vencido: 'O prazo de escolha acabou. A mensagem recomendada é enviada pelo sistema.',
   modo_automatico: 'A empresa está no modo automático: a mensagem sai sem esperar escolha.',
   limite_de_chaves: 'A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.',
+  // A simulação do gateway (Rodada 3)
+  sem_cliente_ficticio: 'Crie o cliente fictício antes de cobrar.',
+  cliente_ja_cobrado: 'Este cliente fictício já foi cobrado. Avance o relógio ou comece outra simulação.',
+  sem_simulacao: 'Não há simulação em andamento. Crie um cliente fictício para começar.',
+  simulacao_em_uso: 'A simulação está sendo usada por outra ação. Tente de novo em instantes.',
+  // Direitos do titular (Rodada 3)
+  marca_da_anonimizacao: 'Este cliente foi anonimizado: os contatos dele foram apagados, e não dá para voltar a contatá-lo.',
+}
+
+/** O que não foi encontrado (404), quando o backend diz o quê. */
+const NAO_ENCONTRADO: Record<string, string> = {
+  titular_nao_encontrado: 'Não há dado deste identificador na sua empresa. Confira o identificador que a sua base usa.',
+  cliente_nao_encontrado: 'Não encontramos este cliente na sua base. Confira o identificador.',
 }
 
 const SEM_PERMISSAO: Record<string, string> = {
   plano_sem_api: 'Gerar chave faz parte do plano Premium.',
+}
+
+/** Os limites de uso (429). */
+const LIMITES: Record<string, string> = {
+  limite_do_assistente: 'A sua empresa chegou ao limite de perguntas ao assistente nesta hora. Tente de novo mais tarde.',
+}
+
+/** O que o formulário da simulação do gateway recusa (`POST /simulacao/cliente` e `/simulacao/retencao`). */
+const SIMULACAO_RECUSADA: Record<string, string> = {
+  dado_que_parece_real: 'O nome parece um dado real (CPF, e-mail, telefone ou chave Pix). Aqui só entra um nome inventado.',
+  campo_desconhecido: 'A simulação só aceita os campos do formulário. Nenhum outro dado é enviado.',
+}
+
+/** O arquivo da base recusado inteiro (`POST /clientes/importar`). */
+const ARQUIVO_RECUSADO: Record<string, string> = {
+  extensao_nao_suportada: 'Só CSV ou XLSX. Outros formatos não são lidos.',
+  arquivo_vazio: 'O arquivo está vazio.',
+  arquivo_grande_demais: 'O arquivo é grande demais. Divida em duas partes.',
+  linhas_demais: 'O arquivo tem linhas demais para uma importação. Divida em duas partes.',
+  arquivo_ilegivel: 'Não foi possível ler o arquivo. Confira se ele abre na sua planilha.',
+  sem_linhas: 'O arquivo só tem o cabeçalho, sem nenhuma linha de cliente.',
+  encoding_desconhecido: 'Não foi possível ler o texto do arquivo. Salve como CSV UTF-8 e tente de novo.',
 }
 
 async function erroDaResposta(r: Response): Promise<ErroApi> {
@@ -142,7 +177,7 @@ async function erroDaResposta(r: Response): Promise<ErroApi> {
     case 403:
       return new ErroApi('sem_permissao', (motivo && SEM_PERMISSAO[motivo]) || 'Seu papel não permite esta ação.', 403, motivo)
     case 404:
-      return new ErroApi('nao_encontrado', 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, motivo)
+      return new ErroApi('nao_encontrado', (motivo && NAO_ENCONTRADO[motivo]) || 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, motivo)
     case 409:
       return new ErroApi(
         'conflito',
@@ -150,8 +185,18 @@ async function erroDaResposta(r: Response): Promise<ErroApi> {
         409,
         motivo,
       )
+    case 413:
+    case 415:
+      return new ErroApi('invalido', (motivo && ARQUIVO_RECUSADO[motivo]) || 'O servidor recusou o arquivo enviado.', r.status, motivo)
     case 422:
-      return new ErroApi('invalido', 'O servidor recusou os dados enviados. Confira os campos e tente de novo.', 422, motivo)
+      return new ErroApi(
+        'invalido',
+        (motivo && (ARQUIVO_RECUSADO[motivo] || SIMULACAO_RECUSADA[motivo])) || 'O servidor recusou os dados enviados. Confira os campos e tente de novo.',
+        422,
+        motivo,
+      )
+    case 429:
+      return new ErroApi('servidor', (motivo && LIMITES[motivo]) || 'Muitas chamadas em pouco tempo. Tente de novo em instantes.', 429, motivo)
     default:
       return new ErroApi('servidor', 'O servidor da CRAI respondeu com erro. Tente de novo em instantes.', r.status, motivo)
   }
@@ -172,11 +217,15 @@ export async function chamar<T>(
   corpo?: unknown,
   opcoes: OpcoesDeChamada = {},
 ): Promise<T> {
+  // Um `FormData` (o anexo da base) vai como está: quem escreve o Content-Type, com o limite
+  // entre as partes, é o próprio `fetch`.
+  const arquivo = typeof FormData !== 'undefined' && corpo instanceof FormData
   const enviar = async (): Promise<Response> => {
     const headers: Record<string, string> = {}
-    if (corpo !== undefined) headers['Content-Type'] = 'application/json'
+    if (corpo !== undefined && !arquivo) headers['Content-Type'] = 'application/json'
     if (!opcoes.semToken) headers.Authorization = `Bearer ${await obterToken()}`
-    return requisitar(caminho, { method: metodo, headers, body: corpo !== undefined ? JSON.stringify(corpo) : undefined })
+    const body = corpo === undefined ? undefined : arquivo ? (corpo as FormData) : JSON.stringify(corpo)
+    return requisitar(caminho, { method: metodo, headers, body })
   }
   let resposta = await enviar()
   if (resposta.status === 401 && !opcoes.semToken) {

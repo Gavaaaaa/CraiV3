@@ -57,9 +57,10 @@ export function Involuntario() {
   const [busca, setBusca] = useState('')
   const [aberto, setAberto] = useState<number | null>(null)
 
-  const topo = useCarregar(() => Promise.all([api.metricasMes(), api.serie()]), [])
+  const sim = modo === 'simulacao'
+  const topo = useCarregar(() => Promise.all([api.metricasMes({ incluirSimulados: sim }), api.serie({ incluirSimulados: sim })]), [sim])
   const [metricas, serie] = topo.dados ?? [null, []]
-  const lista = useCarregar(() => api.ciclos({ status: filtro, busca, incluirSimulados: modo === 'simulacao' }), [filtro, busca, modo])
+  const lista = useCarregar(() => api.ciclos({ status: filtro, busca, incluirSimulados: sim }), [filtro, busca, modo])
   const ciclos = lista.dados
   const semFiltro = filtro === 'todos' && !busca.trim()
 
@@ -159,7 +160,10 @@ export function Involuntario() {
           />
         </div>
 
-        <div className="scroll-fino overflow-x-auto">
+        {/* `relative`: o rótulo invisível "Abrir" (sr-only, posição absoluta) fica preso a esta área
+            rolável. Sem isso ele se prendia ao cartão, escapava do corte e alargava a página inteira
+            na janela estreita. */}
+        <div className="scroll-fino relative overflow-x-auto" data-rolagem="tabela-de-ciclos">
           <table className="w-full min-w-[820px] text-left">
             <thead>
               <tr className="t-label text-silver">

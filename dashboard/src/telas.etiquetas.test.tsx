@@ -35,11 +35,14 @@ describe('sem a variável, com o modo real ligado', () => {
   it('o modo real está ligado, a variável não, e o registro do que é fictício continua existindo', () => {
     expect(MODO_REAL).toBe(true)
     expect(MOSTRAR_DEMONSTRACAO).toBe(false)
-    // O mecanismo não foi apagado: o painel ainda sabe o que é fictício...
-    expect(emDemonstracao('resumoVisaoGeral')).toBe(true)
+    // O mecanismo não foi apagado: o painel ainda sabe o que é fictício (a seção Equipe da
+    // configuração depende do site e continua de demonstração)...
+    expect(emDemonstracao('membros')).toBe(true)
     expect(emDemonstracao('ciclos', 'chaves')).toBe(false)
     // ...só não mostra a etiqueta.
-    expect(etiquetaDeDemonstracao('resumoVisaoGeral')).toBe(false)
+    expect(etiquetaDeDemonstracao('membros')).toBe(false)
+    // Rodada 3, Fase 2: a visão geral deixou de ser fictícia.
+    expect(emDemonstracao('resumoVisaoGeral', 'serieDupla', 'funil', 'oQueFunciona', 'atividade', 'extrato', 'saude')).toBe(false)
   })
 
   it.each(PAGINAS)('nenhuma etiqueta "Demonstração" em $caminho', async ({ caminho, ancora }) => {

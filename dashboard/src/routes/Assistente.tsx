@@ -7,7 +7,7 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Demonstracao } from '../components/ui/Demonstracao'
-import { ErroApi, api } from '../data/api'
+import { ErroApi, MODO_REAL, api } from '../data/api'
 import { PERGUNTAS_PRONTAS } from '../data/assistente'
 import type { RespostaAssistente } from '../data/tipos'
 import { cx } from '../lib/cx'
@@ -257,6 +257,7 @@ export function Assistente() {
               <Item ok>Os mesmos números que o painel mostra: valores, contagens, faixas de risco, funil.</Item>
               <Item ok>Como o sistema funciona: tentativas, mensagens, ofertas, taxa, prazos.</Item>
               <Item>E-mail, telefone, CPF ou chave Pix dos seus clientes. Nunca.</Item>
+              {MODO_REAL ? <Item>O nome ou o identificador de qualquer cliente: ele lê só os totais.</Item> : null}
               <Item>O texto das mensagens enviadas.</Item>
               <Item>Esta conversa depois que você sair: nada é guardado.</Item>
             </ul>

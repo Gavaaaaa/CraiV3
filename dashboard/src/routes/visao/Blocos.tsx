@@ -16,7 +16,6 @@ import {
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { MOSTRAR_DEMONSTRACAO, agoraDaTela } from '../../data/api'
-import { AGORA } from '../../data/mock'
 import type { Atividade, Funil, ItemDesempenho, LinhaExtrato, OQueFunciona, SaudeSistema, TipoAtividade } from '../../data/tipos'
 import { baixarCsv } from '../../lib/csv'
 import { cx } from '../../lib/cx'
@@ -47,7 +46,7 @@ export function FunilInvoluntario({ funil }: { funil: Funil }) {
   return (
     <div>
       <CabecalhoCartao
-        titulo="Funil de recuperação em setembro"
+        titulo={`Funil de recuperação em ${fmt.mesPorExtenso(funil.mes)}`}
         apoio="Quantas cobranças chegaram a cada etapa e quanto voltou em cada uma. O valor é o total das cobranças naquela etapa."
       />
       <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_280px]">
@@ -121,6 +120,9 @@ export function OQueMaisFunciona({ dados, comVoluntario }: { dados: OQueFunciona
         titulo="O que mais funciona"
         apoio="Últimos 30 dias. Com poucos casos, a porcentagem ainda muda muito; o selo avisa."
       />
+      {dados.causas.length + dados.ofertas.length + dados.canais.length === 0 ? (
+        <p className="t-apoio mt-8 text-center text-silver">Ainda não há cobranças nem ofertas com desfecho nos últimos 30 dias.</p>
+      ) : null}
       <div className={cx('mt-5 grid gap-6', comVoluntario ? 'md:grid-cols-3' : 'md:grid-cols-2')}>
         <Bloco
           titulo="Causas de falha"
@@ -237,7 +239,7 @@ export function AtividadeRecente({ itens }: { itens: Atividade[] }) {
                     {a.texto}
                   </p>
                   <div className="t-label mt-0.5 flex items-center gap-2 text-silver">
-                    <span>{fmt.relativo(a.em, AGORA).replace(/^./, (c) => c.toUpperCase())}</span>
+                    <span>{fmt.relativo(a.em, agoraDaTela()).replace(/^./, (c) => c.toUpperCase())}</span>
                     {a.valor ? (
                       <>
                         <span className="text-muted">·</span>
@@ -302,7 +304,7 @@ export function SaudeDoSistema({ saude }: { saude: SaudeSistema | null }) {
           ok: saude.base !== null,
           rotulo: 'Base de clientes',
           detalhe: saude.base
-            ? `Atualizada ${saude.base.origem === 'api' ? 'pela API' : 'por anexo'} ${fmt.relativo(saude.base.atualizada_em, AGORA)}.`
+            ? `Atualizada ${saude.base.origem === 'api' ? 'pela API ' : saude.base.origem === 'anexo' ? 'por anexo ' : ''}${fmt.relativo(saude.base.atualizada_em, agoraDaTela())}.`
             : 'Nenhuma base enviada ainda.',
           demo: demo.includes('base'),
         },
@@ -389,10 +391,14 @@ const ORIGEM = {
 export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: string }) {
   const [todas, setTodas] = useState(false)
   const visiveis = todas ? linhas : linhas.slice(0, 6)
+  // Na demonstração o estorno é a própria linha, zerada. No backend é uma linha à parte, com
+  // os valores negativos, no mês em que aconteceu: o total é a soma simples das linhas.
+  const zerada = (l: LinhaExtrato) => l.estornado && l.tipo === undefined
   const total = linhas.reduce(
-    (t, l) => ({ base: t.base + (l.estornado ? 0 : l.valor_base), taxa: t.taxa + l.taxa, liquido: t.liquido + l.liquido }),
+    (t, l) => ({ base: t.base + (zerada(l) ? 0 : l.valor_base), taxa: t.taxa + l.taxa, liquido: t.liquido + l.liquido }),
     { base: 0, taxa: 0, liquido: 0 },
   )
+  const situacao = (l: LinhaExtrato) => (l.tipo === 'estorno' ? 'Estorno' : l.estornado ? 'Estornado' : 'Confirmado')
 
   function exportar() {
     baixarCsv(
@@ -416,7 +422,7 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
         l.valor_base,
         l.taxa,
         l.liquido,
-        l.estornado ? 'Estornado' : 'Confirmado',
+        situacao(l),
         l.simulado ? 'Sim' : 'Não',
       ]),
     )
@@ -426,7 +432,7 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
     <div>
       <div className="px-5 pt-5">
         <CabecalhoCartao
-          titulo="Extrato de setembro"
+          titulo={`Extrato de ${fmt.mesPorExtenso(mes)}`}
           apoio="Cada valor recuperado ou mantido, com a taxa da CRAI. É a memória de cálculo da sua fatura."
           direita={
             <Button variant="ghost" size="sm" onClick={exportar} disabled={linhas.length === 0}>
@@ -473,14 +479,18 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
                     </div>
                   </td>
                   <td className="px-3 py-3 text-silver">
-                    {l.estornado ? <Badge className="mr-2">Estornado</Badge> : null}
+                    {l.estornado ? <Badge className="mr-2">{situacao(l)}</Badge> : null}
                     {l.descricao}
                   </td>
-                  <td className={cx('tabular px-3 py-3 text-right', l.estornado ? 'text-muted line-through' : 'text-paper')}>
-                    {fmt.brl(l.valor_base)}
+                  <td className={cx('tabular px-3 py-3 text-right whitespace-nowrap', zerada(l) ? 'text-muted line-through' : 'text-paper')}>
+                    {l.valor_base < 0 ? `− ${fmt.brl(-l.valor_base)}` : fmt.brl(l.valor_base)}
                   </td>
-                  <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">{l.taxa ? `− ${fmt.brl(l.taxa)}` : '—'}</td>
-                  <td className="tabular px-5 py-3 text-right font-[600] text-paper">{fmt.brl(l.liquido)}</td>
+                  <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">
+                    {l.taxa > 0 ? `− ${fmt.brl(l.taxa)}` : l.taxa < 0 ? `+ ${fmt.brl(-l.taxa)}` : '—'}
+                  </td>
+                  <td className="tabular px-5 py-3 text-right font-[600] whitespace-nowrap text-paper">
+                    {l.liquido < 0 ? `− ${fmt.brl(-l.liquido)}` : fmt.brl(l.liquido)}
+                  </td>
                 </tr>
               ))
             )}
@@ -496,16 +506,16 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
                   ) : null}
                 </td>
                 <td className="tabular px-3 py-3 text-right text-silver">{fmt.brl(total.base)}</td>
-                <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">− {fmt.brl(total.taxa)}</td>
-                <td className="tabular px-5 py-3 text-right font-[680] text-paper">{fmt.brl(total.liquido)}</td>
+                <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">{total.taxa < 0 ? `+ ${fmt.brl(-total.taxa)}` : `− ${fmt.brl(total.taxa)}`}</td>
+                <td className="tabular px-5 py-3 text-right font-[680] whitespace-nowrap text-paper">{total.liquido < 0 ? `− ${fmt.brl(-total.liquido)}` : fmt.brl(total.liquido)}</td>
               </tr>
             </tfoot>
           ) : null}
         </table>
       </div>
       <p className="t-label px-5 pt-1 pb-5 text-muted">
-        Voluntário: conta 1 mês da mensalidade de quem aceitou a oferta, menos o desconto dado. Se o cliente cancelar em até 30 dias, o
-        valor é estornado.
+        Voluntário: conta a mensalidade de quem aceitou a oferta, menos o desconto dado. Se o cliente cancelar dentro do prazo, o valor é
+        estornado no mês do cancelamento.
       </p>
     </div>
   )

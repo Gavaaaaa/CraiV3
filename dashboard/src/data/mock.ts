@@ -330,9 +330,18 @@ export const detalhes: Record<number, CicloDetalhe> = {
 export const baseClientes: BaseClientes = {
   total: 1240,
   com_dados_comportamento: 812,
+  decididos_pelo_modelo: 812,
   atualizada_em: new Date(AGORA.getTime() - 2 * 3_600_000).toISOString(),
   origem: 'api',
 }
+
+/** As ofertas e os canais da demonstração, já no texto que a tabela mostra. */
+const OFERTA_DEMO = {
+  desconto: 'Desconto de 20% por 3 meses',
+  suporte: 'Suporte dedicado por 30 dias',
+  plano_leve: 'Plano mais leve, sem multa',
+}
+const CANAL_DEMO = { whatsapp: 'WhatsApp', email: 'E-mail', sms: 'SMS' }
 
 const cr = (
   id: string,
@@ -342,10 +351,21 @@ const cr = (
   motivo: string,
   risco_decidido_por: 'modelo' | 'regua',
   horasAtras: number,
-  abordagem: ClienteRisco['abordagem'] = null,
+  abordagem: { oferta: keyof typeof OFERTA_DEMO; canal: keyof typeof CANAL_DEMO; status: NonNullable<ClienteRisco['abordagem']>['status'] } | null = null,
   simulado = false,
   posicao_na_base: number | null = null,
-): ClienteRisco => ({ id, nome, mrr, faixa, motivo, risco_decidido_por, posicao_na_base, abordagem, atualizado_em: new Date(AGORA.getTime() - horasAtras * 3_600_000).toISOString(), simulado })
+): ClienteRisco => ({
+  id,
+  nome,
+  mrr,
+  faixa,
+  motivo,
+  risco_decidido_por,
+  posicao_na_base,
+  abordagem: abordagem ? { oferta: OFERTA_DEMO[abordagem.oferta], canal: CANAL_DEMO[abordagem.canal], status: abordagem.status } : null,
+  atualizado_em: new Date(AGORA.getTime() - horasAtras * 3_600_000).toISOString(),
+  simulado,
+})
 
 export const clientesRisco: ClienteRisco[] = [
   cr('c-101', 'Loja Ponto Certo', 1200, 'grave', 'O uso caiu pela metade em 2 semanas e o pagamento atrasou 2 vezes.', 'modelo', 1, { oferta: 'desconto', canal: 'whatsapp', status: 'enviada' }, false, 7),
@@ -370,6 +390,8 @@ export const resumoVoluntario: ResumoVoluntario = {
   preocupante: 7,
   ofertas_enviadas: 26,
   ofertas_aceitas: 9,
+  meses_de_mrr: 1,
+  prazo_estorno_dias: 30,
 }
 
 export const comparacaoReguaModelo: ComparacaoReguaModelo = {

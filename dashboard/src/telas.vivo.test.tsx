@@ -107,9 +107,10 @@ describe('telas em modo real', () => {
     // O backend não aceita SMS no involuntário: a opção não é oferecida no modo real.
     expect(screen.queryByText('SMS')).toBeNull()
     expect(screen.queryByText('Ligar SMS')).toBeNull()
-    // Cinco seções ainda são de demonstração: Empresa, Equipe, Integração, Dados e Notificações.
+    // Quatro seções ainda são de demonstração: Empresa, Equipe, Integração e Notificações
+    // (Dados e privacidade passou a ser de verdade na Rodada 3, Fase 6).
     // A etiqueta delas só aparece com VITE_CRAI_MOSTRAR_DEMONSTRACAO=1.
-    expect(etiquetas()).toHaveLength(MOSTRAR_DEMONSTRACAO ? 5 : 0)
+    expect(etiquetas()).toHaveLength(MOSTRAR_DEMONSTRACAO ? 4 : 0)
   })
 
   it('o seletor de papel de desenvolvimento troca o que a pessoa pode fazer', async () => {
@@ -123,28 +124,24 @@ describe('telas em modo real', () => {
     expect(screen.getByText('Membro (só leitura)')).toBeTruthy()
   })
 
-  it('visão geral, voluntário e assistente continuam em demonstração; a etiqueta obedece à variável', async () => {
-    /** Com a variável: pelo menos `minimo` etiquetas, como na Etapa 4A. Sem ela: nenhuma. */
-    const conferir = async (minimo: number) => {
-      if (MOSTRAR_DEMONSTRACAO) {
-        await waitFor(() => expect(etiquetas().length).toBeGreaterThanOrEqual(minimo), ESPERA)
-      } else {
-        await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
-        expect(etiquetas()).toHaveLength(0)
-      }
-    }
+  it('a visão geral, o voluntário e o assistente já são de verdade: nenhuma etiqueta, com ou sem a variável', async () => {
     abrir('/')
     expect(await screen.findByText('Olá, Empresa de demonstração', {}, ESPERA)).toBeTruthy()
     expect(await screen.findByText('Mantido para você nos últimos 30 dias', {}, ESPERA)).toBeTruthy()
-    await conferir(7)
+    // Rodada 3, Fase 2: a visão geral lê o backend. Nenhuma etiqueta, com ou sem a variável.
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
+    expect(etiquetas()).toHaveLength(0)
     cleanup()
+    // Rodada 3, Fase 1: o voluntário lê o backend. Nenhuma etiqueta, com ou sem a variável.
     abrir('/voluntario')
-    expect(await screen.findByText('Mantido para você em setembro', {}, ESPERA)).toBeTruthy()
-    await conferir(6)
+    expect(await screen.findByText(/^Mantido para você em /, {}, ESPERA)).toBeTruthy()
+    await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeNull(), ESPERA)
+    expect(etiquetas()).toHaveLength(0)
     cleanup()
+    // Rodada 3, Fase 4: o assistente pergunta ao backend. Nenhuma etiqueta.
     abrir('/assistente')
     expect(await screen.findByText('O que o assistente vê', { exact: false }, ESPERA)).toBeTruthy()
-    await conferir(1)
+    expect(etiquetas()).toHaveLength(0)
   })
 
   it('a Simulação do gateway mantém o selo dela, com ou sem a variável', async () => {
@@ -217,15 +214,15 @@ describe('telas em modo real', () => {
     expect(barra()).toBeNull()
   })
 
-  it('saúde do sistema: o relógio é o de verdade; o resto só é marcado com a variável ligada', async () => {
+  it('saúde do sistema: as quatro linhas são de verdade, com ou sem a variável', async () => {
     abrir('/?aba=saude')
     expect(await screen.findByText('Relógio das tentativas', {}, ESPERA)).toBeTruthy()
     expect(screen.getByText(/^Ativo\. /)).toBeTruthy()
     const item = (rotulo: string) => screen.getByText(rotulo).closest('li')!
-    expect(within(item('Relógio das tentativas')).queryByText('Demonstração')).toBeNull()
-    for (const rotulo of ['Decisões automáticas', 'Redator de mensagens', 'Base de clientes']) {
-      if (MOSTRAR_DEMONSTRACAO) expect(within(item(rotulo)).getByText('Demonstração'), rotulo).toBeTruthy()
-      else expect(within(item(rotulo)).queryByText('Demonstração'), rotulo).toBeNull()
+    // Rodada 3, Fase 2: o backend informa modelos, redator e base. Nenhuma linha é marcada.
+    for (const rotulo of ['Relógio das tentativas', 'Decisões automáticas', 'Redator de mensagens', 'Base de clientes']) {
+      expect(within(item(rotulo)).queryByText('Demonstração'), rotulo).toBeNull()
     }
+    expect(item('Decisões automáticas').textContent).toMatch(/\d de 4 modelos carregados\./)
   })
 })

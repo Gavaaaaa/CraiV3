@@ -38,8 +38,9 @@ describe('a variável das etiquetas', () => {
 
   it('com a variável e o modo real: etiqueta só no que ainda é fictício', async () => {
     const api = await carregarApi('http://backend.teste', '1')
-    expect(api.etiquetaDeDemonstracao('resumoVisaoGeral')).toBe(true)
-    expect(api.etiquetaDeDemonstracao('ciclos', 'funil')).toBe(true)
+    // A seção Equipe da configuração (`membros`) depende do site e continua fictícia.
+    expect(api.etiquetaDeDemonstracao('membros')).toBe(true)
+    expect(api.etiquetaDeDemonstracao('ciclos', 'membros')).toBe(true)
     for (const real of Object.keys(api.ROTAS_REAIS)) expect(api.etiquetaDeDemonstracao(real), real).toBe(false)
   })
 
@@ -54,7 +55,7 @@ describe('a variável das etiquetas', () => {
     const semVariavel = await carregarApi('http://backend.teste', undefined)
     const comVariavel = await carregarApi('http://backend.teste', '1')
     for (const api of [semVariavel, comVariavel]) {
-      expect(api.emDemonstracao('resumoVisaoGeral')).toBe(true)
+      expect(api.emDemonstracao('membros')).toBe(true)
       expect(api.emDemonstracao('ciclos')).toBe(false)
     }
   })

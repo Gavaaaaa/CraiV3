@@ -14,6 +14,7 @@ export const O_QUE_A_API_FAZ = {
         'Cadastrar e atualizar clientes, um por vez ou vários de uma vez.',
         'Avisar quando um cliente muda de plano ou de valor.',
         'Avisar quando um cliente cancela.',
+        'Avisar o que o cliente fez, como abrir a página de cancelamento.',
       ],
     },
     {
@@ -35,7 +36,7 @@ export const O_QUE_A_API_FAZ = {
       titulo: 'O que a chave não faz',
       itens: [
         'Não dá acesso a este painel.',
-        'Não envia mensagens nem faz cobranças.',
+        'Não envia mensagens por conta própria. Ela só avisa a CRAI do que aconteceu; quem decide se e quando falar com o cliente é a CRAI, pelas regras da sua configuração.',
         'Não mostra dados de outras empresas.',
       ],
     },

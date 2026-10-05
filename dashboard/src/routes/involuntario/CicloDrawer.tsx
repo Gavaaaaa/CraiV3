@@ -1,15 +1,16 @@
 import { motion } from 'framer-motion'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { IconCheck, IconClose, IconRefresh } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { ErroCarregar } from '../../components/ui/Estados'
 import { StatusPill } from '../../components/ui/StatusPill'
-import { ErroApi, agoraDaTela, api } from '../../data/api'
+import { ErroApi, MODO_REAL, agoraDaTela, api } from '../../data/api'
 import { CAUSA_LEGIVEL } from '../../data/mock'
 import type { Abordagem, CicloDetalhe, Configuracao, EventoLinhaDoTempo, Sugestao, SugestaoDoCiclo } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { ATUALIZAR_CICLO_ABERTO_MS, mesmoConteudo, useAtualizarACada } from '../../lib/useAtualizarACada'
 import { useReducedMotion } from '../../lib/useReducedMotion'
 
 export const ABORDAGEM: Record<Abordagem, string> = {
@@ -61,9 +62,13 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
   const ocupado = regerando || enviando
 
   const [erro, setErro] = useState<string | null>(null)
+  // A consulta da vez: a resposta de uma consulta silenciosa que chega depois de outra carga
+  // (a de "Enviar esta", por exemplo) é descartada, para não pôr na tela um estado mais velho.
+  const consulta = useRef(0)
   const carregar = useCallback(
-    () =>
-      api
+    () => {
+      consulta.current += 1
+      return api
         .ciclo(id)
         .then((c) => {
           if (c === null) {
@@ -73,13 +78,34 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
           setCiclo(c)
           setSugestoes(c.sugestoes)
         })
-        .catch((e: unknown) => setErro(e instanceof ErroApi ? e.message : 'Não deu para abrir este ciclo.')),
+        .catch((e: unknown) => setErro(e instanceof ErroApi ? e.message : 'Não deu para abrir este ciclo.'))
+    },
     [id],
   )
   useEffect(() => {
     void carregar()
     api.configuracao().then(setConfig).catch(() => setConfig(null))
   }, [carregar])
+
+  // Com o painel aberto, o ciclo é consultado de novo a cada 5 segundos, em silêncio: sem
+  // "Carregando", sem redesenhar se nada mudou, e sem trocar a tela por erro se a consulta
+  // falhar. Enquanto a pessoa envia ou pede outras mensagens, a consulta espera.
+  const ocupadoAgora = useRef(false)
+  ocupadoAgora.current = regerando || enviando
+  useAtualizarACada(
+    () => {
+      if (ocupadoAgora.current || erro !== null || ciclo === null) return
+      const pedida = (consulta.current += 1)
+      return api.ciclo(id).then((c) => {
+        if (c === null || pedida !== consulta.current || ocupadoAgora.current) return
+        // Resposta igual não mexe no estado: nada é redesenhado.
+        if (!mesmoConteudo(ciclo, c)) setCiclo(c)
+        if (!mesmoConteudo(sugestoes, c.sugestoes)) setSugestoes(c.sugestoes)
+      })
+    },
+    ATUALIZAR_CICLO_ABERTO_MS,
+    MODO_REAL,
+  )
 
   async function regerar() {
     setRegerando(true)

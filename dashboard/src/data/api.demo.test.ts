@@ -145,6 +145,37 @@ describe('o mapa único', () => {
         'salvarConfiguracao',
         'saude',
         'serie',
+        // Rodada 3, Fase 1: a página do voluntário
+        'baseClientes',
+        'clientesRecentes',
+        'comparacaoReguaModelo',
+        'importarBase',
+        'resumoVoluntario',
+        'serieVoluntario',
+        // Rodada 3, Fase 2: a visão geral
+        'atividade',
+        'extrato',
+        'funil',
+        'oQueFunciona',
+        'resumoVisaoGeral',
+        'serieDupla',
+        // Rodada 3, Fase 3: a simulação do gateway
+        'simulacao',
+        'simulacaoAvancar',
+        'simulacaoAvancarAteProximaAcao',
+        'simulacaoEscolherMensagem',
+        'simulacaoLimpar',
+        'simularCobranca',
+        'simularRetencao',
+        // Rodada 3, Fase 4: o assistente
+        'assistente',
+        // Rodada 3, Fase 6: direitos do titular e descadastro
+        'anonimizarTitular',
+        'explicacaoDecisao',
+        'exportarTitular',
+        'naoContatar',
+        'textoParaPolitica',
+        'voltarAContatar',
       ].sort(),
     )
     for (const nome of Object.keys(ROTAS_REAIS)) {

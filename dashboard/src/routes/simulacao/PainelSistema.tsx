@@ -4,7 +4,7 @@ import { IconArrowRight, IconCheck, IconClock, IconRefresh, IconUndo } from '../
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { ABORDAGEM } from '../../data/simulador'
-import type { EstadoSimulacao, EventoLinhaDoTempo, Sugestao } from '../../data/tipos'
+import type { Canal, EstadoSimulacao, EventoLinhaDoTempo, Sugestao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
 import { useReducedMotion } from '../../lib/useReducedMotion'
@@ -21,16 +21,22 @@ const diaSimulado = (iso: string, inicio: string) => {
   return `${fmt.dataCurta(iso)} · dia ${dias}`
 }
 
+/** O nome do canal como a tela escreve. */
+export const CANAL_DA_MENSAGEM: Record<Canal, string> = { whatsapp: 'WhatsApp', email: 'E-mail', sms: 'SMS', sem_canal: 'Sem canal' }
+
 interface Props {
   estado: EstadoSimulacao
   ocupado: boolean
   onAvancar: (dias: number) => void
   onAvancarAteAcao: () => void
+  /** Volta ao formulário para criar outro cliente fictício. Não apaga o que já foi simulado. */
   onRecomecar: () => void
+  /** Apaga tudo o que é fictício da empresa. */
+  onLimpar: () => void
 }
 
 /** O lado direito depois de a cobrança começar: relógio, o que o sistema pensa, sem × com a CRAI, linha do tempo. */
-export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, onRecomecar }: Props) {
+export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, onRecomecar, onLimpar }: Props) {
   const acabou = !!estado.desfecho
   return (
     <div className="flex flex-col gap-4">
@@ -65,12 +71,20 @@ export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, on
                 Avançar 1 dia
               </Button>
               <Button size="sm" variant="quiet" onClick={onRecomecar} disabled={ocupado} className="ml-auto">
-                Recomeçar
+                Outro cliente
               </Button>
             </>
           )}
         </div>
-        <p className="t-label mt-3 text-muted">O relógio simulado só vale para este cliente fictício. Os dados reais continuam no relógio de verdade.</p>
+        <p className="t-label mt-3 text-muted">O relógio simulado só vale para os clientes fictícios da sua empresa. Os dados reais continuam no relógio de verdade.</p>
+        <button
+          type="button"
+          onClick={onLimpar}
+          disabled={ocupado}
+          className="t-label mt-2 rounded-[8px] py-1 font-[560] text-silver underline-offset-4 hover:text-paper hover:underline disabled:opacity-50"
+        >
+          Apagar todos os dados da simulação
+        </button>
       </section>
 
       <Pensando linhas={estado.pensando} chance={estado.chance_recuperar} contribuicoes={estado.contribuicoes} />
@@ -140,12 +154,9 @@ function Pensando({ linhas, chance, contribuicoes }: { linhas: string[]; chance:
                   <div className="t-label mb-2 text-silver">Por que essa chance</div>
                   <ul className="flex flex-col gap-1">
                     {contribuicoes.map((c) => (
-                      <li key={c.fator} className="flex items-center justify-between gap-3 text-rotulo">
+                      <li key={c.fator} className="flex items-baseline justify-between gap-3 text-rotulo">
                         <span className="text-paper">{c.fator}</span>
-                        <span className={cx('tabular shrink-0 font-[560]', c.pontos >= 0 ? 'text-ok' : 'text-[#f08a80]')}>
-                          {c.pontos >= 0 ? '+' : ''}
-                          {c.pontos} pts
-                        </span>
+                        {c.efeito ? <span className={cx('shrink-0 text-right font-[560]', /^Reduziu/.test(c.efeito) ? 'text-[#f08a80]' : 'text-ok')}>{c.efeito}</span> : null}
                       </li>
                     ))}
                   </ul>
@@ -214,12 +225,24 @@ function Coluna({ titulo, tom, children }: { titulo: string; tom: 'ok' | 'danger
 }
 
 /** As 3 mensagens no lugar do cartão, quando as 3 tentativas falharam. */
-export function MensagensSimuladas({ sugestoes, modoEscolha, ocupado, onEscolher }: { sugestoes: Sugestao[]; modoEscolha: boolean; ocupado: boolean; onEscolher: (a: Sugestao['abordagem']) => void }) {
+export function MensagensSimuladas({
+  sugestoes,
+  modoEscolha,
+  prazoHoras,
+  ocupado,
+  onEscolher,
+}: {
+  sugestoes: Sugestao[]
+  modoEscolha: boolean
+  prazoHoras: number
+  ocupado: boolean
+  onEscolher: (a: Sugestao['abordagem']) => void
+}) {
   return (
     <div className="w-full max-w-[560px]">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="t-h3 text-paper">3 mensagens sugeridas</h3>
-        <span className="t-label text-warn">Sem escolha em 8 h, a recomendada é enviada</span>
+        {modoEscolha ? <span className="t-label text-warn">Sem escolha em {prazoHoras} h, a recomendada é enviada</span> : null}
       </div>
       <p className="t-apoio mt-1 text-silver">
         {modoEscolha ? 'Escritas para este cliente, uma por abordagem. Escolha uma ou avance o relógio.' : 'A recomendada será enviada automaticamente (modo automático na configuração).'}
@@ -230,7 +253,7 @@ export function MensagensSimuladas({ sugestoes, modoEscolha, ocupado, onEscolher
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-[600] text-paper">{ABORDAGEM[s.abordagem]}</span>
               {s.recomendada ? <Badge tone="orange">Recomendada</Badge> : null}
-              <Badge className="ml-auto">WhatsApp</Badge>
+              <Badge className="ml-auto">{CANAL_DA_MENSAGEM[s.canal]}</Badge>
             </div>
             <p className="t-apoio mt-2 text-paper/90">{s.texto}</p>
             <div className="mt-3 flex items-center justify-between gap-3">

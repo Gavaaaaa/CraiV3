@@ -73,11 +73,17 @@ describe('dashboard em modo real contra o backend local', () => {
   it('o modo real está ligado e o backend responde', async () => {
     expect(MODO_REAL).toBe(true)
     expect(emDemonstracao('ciclos', 'ciclo', 'metricasMes')).toBe(false)
-    expect(emDemonstracao('resumoVisaoGeral')).toBe(true)
+    // Rodada 3, Fase 2: a visão geral é de verdade; a seção Equipe continua fictícia.
+    expect(emDemonstracao('resumoVisaoGeral')).toBe(false)
+    expect(emDemonstracao('membros')).toBe(true)
     const saude = await api.saude()
     expect(typeof saude.relogio.ativo).toBe('boolean')
-    expect(saude.demonstracao).toEqual(['modelos', 'redator', 'base'])
-    console.log(`[vivo] relógio ativo: ${saude.relogio.ativo}`)
+    // O backend informa as quatro linhas: nenhuma fica de demonstração.
+    expect(saude.demonstracao).toBeUndefined()
+    expect(saude.modelos.total).toBe(4)
+    expect(saude.modelos.carregados).toBeLessThanOrEqual(4)
+    expect(typeof saude.redator.disponivel).toBe('boolean')
+    console.log(`[vivo] relógio ativo: ${saude.relogio.ativo}; modelos ${saude.modelos.carregados} de ${saude.modelos.total}; redator ${saude.redator.disponivel}`)
   })
 
   it('pede o token de desenvolvimento e lista os ciclos da empresa fictícia', async () => {
@@ -340,7 +346,388 @@ describe('dashboard em modo real contra o backend local', () => {
     }
   })
 
+  it('voluntário: a base, os clientes recentes, o mês, a série e a comparação vêm do backend', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const { chave, inteira } = await api.criarChave(NOME_DA_CHAVE)
+    const usar = (metodo: string, caminho: string, corpo?: unknown) =>
+      fetch(`${ENDERECO_DA_API}${caminho}`, {
+        method: metodo,
+        headers: { Authorization: `Bearer ${inteira}`, 'Content-Type': 'application/json' },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+      })
+    const sufixo = Date.now().toString(36)
+    const ids = [`vol-vivo-${sufixo}-a`, `vol-vivo-${sufixo}-b`, `vol-vivo-${sufixo}-c`]
+    try {
+      const lote = await usar('POST', '/clientes/lote', {
+        clientes: [
+          { customer_id_externo: ids[0], mrr: 410, billing_profile: 'PJ', days_since_last: 62, features_used_30d: 0, nome: 'Cliente de teste A' },
+          { customer_id_externo: ids[1], mrr: 220, billing_profile: 'CLT', days_since_last: 0, features_used_30d: 9 },
+          { customer_id_externo: ids[2], mrr: 150, billing_profile: 'PJ' },
+        ],
+      })
+      expect(lote.status).toBe(200)
+
+      const base = await api.baseClientes()
+      expect(base).not.toBeNull()
+      expect(base!.origem).toBe('api')
+      expect(base!.total).toBeGreaterThanOrEqual(3)
+      expect(base!.com_dados_comportamento).toBeLessThanOrEqual(base!.total)
+      expect(base!.decididos_pelo_modelo).toBeLessThanOrEqual(base!.total)
+      expect(base!.atualizada_em).toMatch(COM_FUSO)
+
+      const recentes = await api.clientesRecentes({ limite: 10 })
+      const porId = new Map(recentes.map((c) => [c.id, c]))
+      for (const id of ids) expect(porId.has(id), id).toBe(true)
+      expect(porId.get(ids[0])!.nome).toBe('Cliente de teste A')
+      expect(porId.get(ids[1])!.nome).toBe(ids[1]) // sem nome na base: o id
+      expect(porId.get(ids[2])!.faixa).toBe('sem_dado')
+      expect(porId.get(ids[2])!.risco_decidido_por).toBeNull()
+      expect(['grave', 'preocupante', 'sem_risco']).toContain(porId.get(ids[0])!.faixa)
+      expect(porId.get(ids[0])!.motivo.length).toBeGreaterThan(0)
+      for (const c of recentes) {
+        expect(c.atualizado_em === null || COM_FUSO.test(c.atualizado_em)).toBe(true)
+        expect(c.motivo.charAt(0)).toBe(c.motivo.charAt(0).toUpperCase())
+      }
+      for (const proibida of ['fee', 'email', 'telefone', 'cpf', 'chave_pix']) expect(temChave(recentes, proibida), proibida).toBe(false)
+
+      const mes = await api.resumoVoluntario()
+      expect(mes.mes).toMatch(/^\d{4}-\d{2}$/)
+      expect(mes.meses_de_mrr).toBeGreaterThanOrEqual(1)
+      expect(mes.prazo_estorno_dias).toBeGreaterThanOrEqual(1)
+      expect(mes.ofertas_aceitas).toBeLessThanOrEqual(Math.max(mes.ofertas_aceitas, mes.ofertas_enviadas))
+      expect(temChave(mes, 'fee')).toBe(false)
+
+      const serie = await api.serieVoluntario()
+      expect(serie).toHaveLength(30)
+      expect(serie.every((p) => /^\d{4}-\d{2}-\d{2}$/.test(p.dia) && typeof p.valor === 'number')).toBe(true)
+
+      // Sem cancelamentos suficientes (ou sem modelo ativo), a comparação vem vazia: null.
+      const comparacao = await api.comparacaoReguaModelo()
+      if (comparacao !== null) expect(comparacao.cancelamentos).toBeGreaterThanOrEqual(5)
+
+      // O anexo, de verdade: sobe um CSV e a origem da base passa a ser "anexo".
+      const csv = `customer_id_externo,mrr,billing_profile\n${ids[2]},175,PJ\nlinha-ruim,,PJ\n`
+      const importado = await api.importarBase(new File([csv], 'base-do-teste.csv', { type: 'text/csv' }))
+      expect([importado.importados, importado.rejeitados, importado.demonstracao]).toEqual([1, 1, false])
+      expect([importado.novos, importado.atualizados, importado.sem_id_recorrencia]).toEqual([null, null, null])
+      expect((await api.baseClientes())!.origem).toBe('anexo')
+      const recusado = await erroDe(api.importarBase(new File(['x'], 'base.txt', { type: 'text/plain' })))
+      expect([recusado.status, recusado.message]).toEqual([415, 'Só CSV ou XLSX. Outros formatos não são lidos.'])
+
+      console.log(`[vivo] voluntário: base ${base!.total} clientes (origem api, depois anexo), ${recentes.length} recentes, comparação ${comparacao === null ? 'vazia' : 'presente'}`)
+    } finally {
+      // Os clientes do teste saem da base ativa, e a chave é revogada.
+      for (const id of ids) await usar('DELETE', `/clientes/${id}`)
+      await api.revogarChave(chave.id)
+    }
+    const depois = await api.clientesRecentes({ limite: 10 })
+    for (const id of ids) expect(depois.some((c) => c.id === id)).toBe(false)
+  })
+
+  it('visão geral: os cartões, a série, o funil, o que funciona, a atividade e o extrato vêm do backend', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const [resumo, serie, funil, funciona, atividade, extrato, mesInv] = await Promise.all([
+      api.resumoVisaoGeral(),
+      api.serieDupla(),
+      api.funil(),
+      api.oQueFunciona(),
+      api.atividade({ limite: 50 }),
+      api.extrato(),
+      api.metricasMes(),
+    ])
+    // A semente recupera uma cobrança: os cartões e o extrato contam a mesma história.
+    expect(resumo.cobrancas_recuperadas).toBeGreaterThanOrEqual(1)
+    expect(resumo.recuperado_involuntario).toBeGreaterThan(0)
+    expect(resumo.retido_voluntario).not.toBeNull()
+    expect(resumo.ciclos_ativos).toBeGreaterThanOrEqual(1)
+    expect(resumo.taxa_recuperacao).not.toBeNull()
+    expect(resumo.periodo.ate >= resumo.periodo.de).toBe(true)
+    expect(serie).toHaveLength(30)
+    const somaDaSerie = serie.reduce((t, p) => t + p.involuntario, 0)
+    expect(Math.abs(somaDaSerie - resumo.recuperado_involuntario)).toBeLessThan(0.01)
+
+    expect(funil.etapas.map((e) => e.etapa)).toEqual(['falhas', 'tentativa_1', 'tentativa_2', 'tentativa_3', 'mensagem'])
+    expect(funil.etapas[0].chegaram).toBeGreaterThanOrEqual(funil.desfecho.recuperados)
+    expect(funil.mes).toBe(mesInv.mes)
+    expect(funciona.causas.length).toBeGreaterThanOrEqual(1)
+    for (const c of funciona.causas) expect(c.taxa >= 0 && c.taxa <= 1).toBe(true)
+
+    expect(atividade.length).toBeGreaterThanOrEqual(3)
+    expect(atividade.some((a) => a.tipo === 'recuperado' && (a.valor ?? 0) > 0)).toBe(true)
+    for (const a of atividade) {
+      expect(a.em).toMatch(COM_FUSO)
+      expect(a.texto.charAt(0)).toBe(a.texto.charAt(0).toUpperCase())
+      expect(a.simulado).toBe(false)
+    }
+    // Nenhuma rota da página traz a taxa, fora o extrato.
+    for (const semTaxa of [resumo, serie, funil, atividade]) expect(temChave(semTaxa, 'fee')).toBe(false)
+
+    const recuperacoes = extrato.filter((l) => l.tipo === 'recuperacao')
+    expect(recuperacoes.length).toBeGreaterThanOrEqual(1)
+    for (const l of extrato) {
+      expect(Math.abs(l.valor_base - l.taxa - l.liquido)).toBeLessThan(0.011)
+      expect(l.data).toMatch(COM_FUSO)
+    }
+    expect(recuperacoes.every((l) => l.taxa > 0 && l.liquido < l.valor_base)).toBe(true)
+
+    // O extrato é só do dono e do administrador: para o membro, erro de permissão em português.
+    trocarPapelDeDesenvolvimento('membro')
+    const negado = await erroDe(api.extrato())
+    expect([negado.codigo, negado.status, negado.message]).toEqual(['sem_permissao', 403, 'Seu papel não permite esta ação.'])
+    expect((await api.resumoVisaoGeral()).cobrancas_recuperadas).toBe(resumo.cobrancas_recuperadas)
+    trocarPapelDeDesenvolvimento('owner')
+
+    // Fora do plano premium, o voluntário vem vazio (null), não zero.
+    trocarPlanoDeDesenvolvimento('essencial')
+    const essencial = await api.resumoVisaoGeral()
+    expect([essencial.retido_voluntario, essencial.clientes_risco_grave]).toEqual([null, null])
+    expect(essencial.recuperado_involuntario).toBe(resumo.recuperado_involuntario)
+    trocarPlanoDeDesenvolvimento('premium')
+    console.log(`[vivo] visão geral: ${resumo.cobrancas_recuperadas} recuperada(s), ${atividade.length} eventos, ${extrato.length} linha(s) de extrato; membro ${negado.status} no extrato`)
+  })
+
+  it('saúde do sistema: com o token, o backend diz também a base da empresa', async () => {
+    const saude = await api.saude()
+    expect(saude.demonstracao).toBeUndefined()
+    // A semente cadastrou clientes pela API: a base existe, com a origem registrada.
+    expect(saude.base).not.toBeNull()
+    expect(saude.base!.atualizada_em).toMatch(COM_FUSO)
+    expect(['api', 'anexo']).toContain(saude.base!.origem)
+    // Sem token o /health continua público, e não fala de empresa nenhuma.
+    const publico = (await (await fetch(`${ENDERECO_DA_API}/health`)).json()) as Record<string, unknown>
+    expect(publico.status).toBe('ok')
+    expect('base' in publico).toBe(false)
+  })
+
+  it('simulação do gateway: o ciclo inteiro pelas rotas, e nada do simulado entra nos números reais', async () => {
+    await api.simulacaoLimpar()
+    const antes = await api.resumoVisaoGeral()
+    const reaisAntes = await api.ciclos({})
+    expect((await api.simulacao()).fase).toBe('formulario')
+
+    // O dinheiro só entra no 8º dia: depois da janela de 7 dias das tentativas. Com saldo, paga sempre.
+    let e = await api.simularCobranca({ nome: 'Ana Souza', mensalidade: 300, perfil: 'clt', verdade: { dias_ate_saldo: 8, chance_pagar: 1, vai_revogar: false } })
+    expect(e.fase).toBe('recusada')
+    expect(e.causa).toBe('insufficient_funds')
+    expect(e.id_ciclo).toBeGreaterThan(9_000_000_000_000)
+    expect(e.tentativas.map((t) => t.resultado)).toEqual(['agendada', 'agendada', 'agendada'])
+    expect(e.chance_recuperar).toBeGreaterThan(0)
+    expect(e.contribuicoes.length).toBeGreaterThan(0)
+    expect(e.pensando.length).toBeGreaterThanOrEqual(3)
+    expect(e.sem_crai?.resultado).toBe('perdido')
+    expect(e.hoje).toMatch(COM_FUSO)
+    const inicio = e.hoje
+
+    // O relógio simulado anda; as três tentativas falham (ainda não há saldo) e nascem as mensagens.
+    const fases: string[] = [e.fase]
+    let escolheu = false
+    for (let passo = 0; passo < 12 && e.fase !== 'recuperada' && e.fase !== 'encerrada'; passo++) {
+      if (e.fase === 'mensagens' && e.modo_mensagem === 'escolha' && !escolheu) {
+        expect(e.tentativas.map((t) => t.resultado)).toEqual(['falhou', 'falhou', 'falhou'])
+        expect(e.sugestoes).toHaveLength(3)
+        for (const s of e.sugestoes) expect(s.texto.length).toBeGreaterThan(20)
+        // A escolha vai pela rota de sempre do ciclo, com o id do ciclo simulado.
+        e = await api.simulacaoEscolherMensagem('facilitacao')
+        escolheu = true
+      } else {
+        e = await api.simulacaoAvancarAteProximaAcao()
+      }
+      fases.push(e.fase)
+    }
+    expect(e.fase, fases.join(' > ')).toBe('recuperada')
+    expect(e.desfecho).toMatchObject({ tipo: 'recuperado', via: 'mensagem', tentativa: null })
+    expect(e.desfecho!.valor_liquido).toBeGreaterThan(0)
+    expect(e.desfecho!.valor_liquido).toBeLessThan(300)
+    expect(e.mensagem_enviada).not.toBeNull()
+    expect(new Date(e.hoje).getTime()).toBeGreaterThan(new Date(inicio).getTime() + 7 * 86_400_000)
+    expect(temChave(e, 'fee')).toBe(false)
+
+    // Nada do simulado entrou no que é real...
+    const depois = await api.resumoVisaoGeral()
+    expect([depois.cobrancas_recuperadas, depois.recuperado_involuntario, depois.ciclos_ativos]).toEqual([antes.cobrancas_recuperadas, antes.recuperado_involuntario, antes.ciclos_ativos])
+    const reaisDepois = await api.ciclos({})
+    expect(reaisDepois.map((c) => c.id).sort()).toEqual(reaisAntes.map((c) => c.id).sort())
+    expect(reaisDepois.some((c) => c.simulado)).toBe(false)
+    // ...e com a barra "Mostrar: Simulação" ele aparece, marcado.
+    const comSimulados = await api.ciclos({ incluirSimulados: true })
+    const simulados = comSimulados.filter((c) => c.simulado)
+    expect(simulados).toHaveLength(1)
+    expect(simulados[0]).toMatchObject({ id: e.id_ciclo, cliente: 'Ana Souza', status: 'recuperado' })
+    expect(comSimulados).toHaveLength(reaisAntes.length + 1)
+    const comSim = await api.resumoVisaoGeral({ incluirSimulados: true })
+    expect(comSim.cobrancas_recuperadas).toBe(antes.cobrancas_recuperadas + 1)
+    expect(Math.abs(comSim.recuperado_involuntario - antes.recuperado_involuntario - e.desfecho!.valor_liquido)).toBeLessThan(0.011)
+    const detalhe = await api.ciclo(e.id_ciclo!)
+    expect(detalhe?.simulado).toBe(true)
+
+    // O cliente fictício em risco: a oferta é do sistema; o aceite, da propensão escondida.
+    const aceitaTudo = { desconto_10: 1, desconto_20: 1, pausa_1_mes: 1, pix_boleto_flash: 1 }
+    // Quem abre a página de cancelamento, sem dado de uso: a régua dá risco alto, e há oferta.
+    const retencao = await api.simularRetencao({
+      nome: 'Loja Ponto Certo',
+      mrr: 1200,
+      sinais: { abriu_cancelamento: true, uso_caiu: false, tickets: false, atraso: false },
+      propensao: aceitaTudo,
+    })
+    expect([retencao.faixa, retencao.decidido_por, retencao.risco]).toEqual(['grave', 'regua', 0.9])
+    expect(retencao.oferta).not.toBeNull()
+    expect(retencao.aceitou).toBe(true)
+    // Com dado de uso, decide o modelo de IA (se estiver ativo) ou a régua. Nos dois casos a
+    // regra é a mesma: só há oferta com o risco no corte de intervenção ou acima dele.
+    const comUso = await api.simularRetencao({
+      nome: 'Café Aroma',
+      mrr: 1200,
+      sinais: { abriu_cancelamento: false, uso_caiu: true, tickets: false, atraso: false },
+      propensao: aceitaTudo,
+    })
+    expect(comUso.risco).not.toBeNull()
+    expect(comUso.oferta !== null).toBe(comUso.risco! >= comUso.corte_de_intervencao)
+    expect(comUso.aceitou).toBe(comUso.oferta === null ? null : true)
+    if (comUso.decidido_por === 'regua') expect(comUso.faixa).toBe('preocupante')
+    expect((await api.clientesRecentes({ limite: 50 })).some((c) => c.simulado)).toBe(false)
+    expect((await api.clientesRecentes({ limite: 50, incluirSimulados: true })).filter((c) => c.simulado).map((c) => c.nome).sort()).toEqual(['Café Aroma', 'Loja Ponto Certo'])
+
+    // O membro lê a simulação, e não avança nem apaga.
+    trocarPapelDeDesenvolvimento('membro')
+    expect((await api.simulacao()).fase).toBe('recuperada')
+    const negado = await erroDe(api.simulacaoAvancar(1))
+    expect([negado.codigo, negado.status]).toEqual(['sem_permissao', 403])
+    expect((await erroDe(api.simulacaoLimpar())).status).toBe(403)
+    trocarPapelDeDesenvolvimento('owner')
+
+    // Apagar tira tudo o que é fictício, e só isso.
+    expect((await api.simulacaoLimpar()).fase).toBe('formulario')
+    expect((await api.ciclos({ incluirSimulados: true })).some((c) => c.simulado)).toBe(false)
+    expect((await api.clientesRecentes({ limite: 50, incluirSimulados: true })).some((c) => c.simulado)).toBe(false)
+    expect((await api.ciclos({})).length).toBe(reaisAntes.length)
+    console.log(`[vivo] simulação: ${fases.join(' > ')}; líquido simulado ${e.desfecho!.valor_liquido > 0 ? 'positivo' : 'zero'}; retenção ${retencao.faixa} (${retencao.decidido_por}), com dado de uso ${comUso.faixa} (${comUso.decidido_por}, risco ${comUso.risco}); membro ${negado.status}`)
+  })
+
+  it('assistente: a pergunta vai ao backend, e a resposta volta na forma da tela', async () => {
+    const r = await api.assistente('Quanto recuperei este mês?')
+    expect(['assistente', 'texto_fixo']).toContain(r.origem)
+    expect(r.texto.length).toBeGreaterThan(20)
+    expect(r.texto.charAt(0)).toBe(r.texto.charAt(0).toUpperCase())
+    // Todo link é uma página do próprio painel.
+    for (const l of r.links) expect(l.para.startsWith('/') && !l.para.startsWith('//')).toBe(true)
+    expect(temChave(r, 'fee')).toBe(false)
+    // Corpo fora do contrato: o backend recusa, e o erro chega em português.
+    const longa = await erroDe(api.assistente('x'.repeat(501)))
+    expect([longa.codigo, longa.status, longa.motivo]).toEqual(['invalido', 422, 'pergunta_invalida'])
+    // O membro também pergunta: o assistente só lê.
+    trocarPapelDeDesenvolvimento('membro')
+    expect((await api.assistente('O que acontece depois da 3ª tentativa?')).texto.length).toBeGreaterThan(20)
+    trocarPapelDeDesenvolvimento('owner')
+    console.log(`[vivo] assistente: origem ${r.origem}, ${r.links.length} link(s)`)
+  })
+
+  it('eventos pela chave de API: o servidor da empresa avisa, o reenvio conta uma vez, e a chave revogada para na hora', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const { chave, inteira } = await api.criarChave(NOME_DA_CHAVE)
+    const avisar = (corpo: unknown, credencial = inteira) =>
+      fetch(`${ENDERECO_DA_API}/eventos`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${credencial}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(corpo),
+      })
+    // Um evento sem risco (uma sessão comum): o sistema recebe, avalia e não oferta nada.
+    const evento = { userId: 'cliente-do-teste-de-eventos', event: 'Session Started', messageId: `vivo-${Date.now()}` }
+    const primeiro = await avisar(evento)
+    expect(primeiro.status).toBe(200)
+    expect(await primeiro.json()).toEqual({ status: 'ok', duplicado: false })
+    const reenvio = await avisar(evento)
+    expect(reenvio.status).toBe(200)
+    expect(await reenvio.json()).toEqual({ status: 'ok', duplicado: true })
+    // O mesmo corpo do webhook do Segment, com a mesma validação.
+    const semIdentidade = await avisar({ event: 'Session Started' })
+    expect(semIdentidade.status).toBe(422)
+    const idTorto = await avisar({ ...evento, messageId: 7 })
+    expect(idTorto.status).toBe(422)
+    // Sem a chave, e com uma chave inventada: 401.
+    expect((await fetch(`${ENDERECO_DA_API}/eventos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evento) })).status).toBe(401)
+    expect((await avisar(evento, `crai_live_${'A'.repeat(43)}`)).status).toBe(401)
+    // O uso do evento conta na chave.
+    expect((await api.chaves()).chaves.find((c) => c.id === chave.id)?.ultimo_uso).toMatch(COM_FUSO)
+    await api.revogarChave(chave.id)
+    const depois = await avisar({ ...evento, messageId: `vivo-depois-${Date.now()}` })
+    expect(depois.status).toBe(401)
+    console.log(`[vivo] eventos: primeiro ${primeiro.status}, reenvio duplicado, sem identidade ${semIdentidade.status}, depois de revogar ${depois.status}`)
+  })
+
+  it('direitos do titular e descadastro: exportar, não contatar, anonimizar, e o texto da política', async () => {
+    trocarPapelDeDesenvolvimento('owner')
+    trocarPlanoDeDesenvolvimento('premium')
+    const { chave, inteira } = await api.criarChave(NOME_DA_CHAVE)
+    const id = `titular-do-teste-${Date.now()}`
+    try {
+      // Um cliente com contato, cadastrado pela API da empresa.
+      const cadastro = await fetch(`${ENDERECO_DA_API}/clientes`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${inteira}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_id_externo: id, mrr: 200, billing_profile: 'PJ', nome: 'Cliente de teste do titular', email: 'titular.teste@exemplo.com.br', telefone: '+5511900000099' }),
+      })
+      expect(cadastro.status).toBe(200)
+
+      // Exportar: o arquivo diz que há contato guardado, sem repetir o valor.
+      const exportado = await api.exportarTitular(id)
+      expect(exportado.arquivo).toBe(`crai-titular-${id}.json`)
+      const conteudo = JSON.parse(exportado.conteudo!) as { cadastro: { nome: string }; contatos_guardados: Record<string, boolean>; nao_contatar: unknown }
+      expect(conteudo.cadastro.nome).toBe('Cliente de teste do titular')
+      expect(conteudo.contatos_guardados).toEqual({ email: true, telefone: true })
+      expect(exportado.conteudo).not.toContain('titular.teste@exemplo.com.br')
+      expect(exportado.conteudo).not.toContain('5511900000099')
+      expect(temChave(conteudo, 'fee')).toBe(false)
+
+      // Não contatar, e a volta.
+      expect(await api.naoContatar(id)).toMatchObject({ marcado: true, ja_estava: false })
+      expect(await api.naoContatar(id)).toMatchObject({ marcado: true, ja_estava: true })
+      expect(await api.voltarAContatar(id)).toEqual({ marcado: false, ja_estava: true, desde: null })
+
+      // O membro não exporta, não marca e não anonimiza.
+      trocarPapelDeDesenvolvimento('membro')
+      // Uma chamada de cada vez: três promessas soltas juntas deixam uma recusa sem dono por um instante.
+      for (const negada of [() => api.exportarTitular(id), () => api.naoContatar(id), () => api.anonimizarTitular(id)]) expect((await erroDe(negada())).status).toBe(403)
+      trocarPapelDeDesenvolvimento('owner')
+
+      // Anonimizar: os contatos saem, e a marca de não contatar fica (e não sai mais).
+      const anonimizado = await api.anonimizarTitular(id)
+      expect(anonimizado.contatos_apagados).toBe(3)
+      const depois = JSON.parse((await api.exportarTitular(id)).conteudo!) as { cadastro: { nome: string | null }; contatos_guardados: Record<string, boolean>; nao_contatar: { origem: string } }
+      expect(depois.cadastro.nome).toBeNull()
+      expect(depois.contatos_guardados).toEqual({ email: false, telefone: false })
+      expect(depois.nao_contatar.origem).toBe('anonimizacao')
+      const volta = await erroDe(api.voltarAContatar(id))
+      expect([volta.status, volta.motivo]).toEqual([409, 'marca_da_anonimizacao'])
+
+      // Titular que não existe: a frase em português.
+      const inexistente = await erroDe(api.exportarTitular('nao-existe-na-base'))
+      expect([inexistente.status, inexistente.motivo]).toEqual([404, 'titular_nao_encontrado'])
+      expect(await api.explicacaoDecisao('nao-existe-na-base')).toBeNull()
+    } finally {
+      await fetch(`${ENDERECO_DA_API}/clientes/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${inteira}` } })
+      await api.revogarChave(chave.id)
+    }
+
+    // O texto para a política vem com os prazos da empresa, sem marcador sobrando.
+    const politica = await api.textoParaPolitica()
+    expect(politica!.titulo).toBe('O que a CRAI faz com os dados dos nossos clientes')
+    expect(politica!.texto).toContain('responda SAIR')
+    expect(politica!.texto).not.toContain('{{')
+    // A explicação de uma decisão de verdade: a de um ciclo da semente.
+    const comDecisao = (await api.ciclos({})).find((c) => c.id_recorrencia)
+    const explicacao = await api.explicacaoDecisao(comDecisao!.id_recorrencia)
+    expect(explicacao).not.toBeNull()
+    expect(explicacao!.decisao.length).toBeGreaterThan(30)
+    expect(explicacao!.quando).toMatch(COM_FUSO)
+    console.log(`[vivo] titular: exportado sem o valor dos contatos, não contatar ida e volta, anonimizado, texto da política com ${politica!.texto.length} caracteres`)
+  })
+
   it('o mapa de rotas reais é o desta etapa', () => {
-    expect(Object.keys(ROTAS_REAIS)).toHaveLength(12)
+    // 12 da Rodada 2, mais 6 da página do voluntário (Fase 1), 6 da visão geral (Fase 2), 7 da
+    // simulação do gateway (Fase 3), o assistente (Fase 4) e 6 dos direitos do titular (Fase 6).
+    expect(Object.keys(ROTAS_REAIS)).toHaveLength(38)
   })
 })

@@ -15,6 +15,7 @@ const dataHora = new Intl.DateTimeFormat(locale, {
   minute: '2-digit',
 })
 const dataLonga = new Intl.DateTimeFormat(locale, { weekday: 'long', day: 'numeric', month: 'long' })
+const nomeDoMes = new Intl.DateTimeFormat(locale, { month: 'long' })
 
 export const fmt = {
   brl: (v: number) => brl.format(v),
@@ -27,6 +28,10 @@ export const fmt = {
     const s = dataLonga.format(d)
     return s.charAt(0).toUpperCase() + s.slice(1)
   },
+  /** "2026-09" vira "setembro". */
+  mesPorExtenso: (mes: string) => nomeDoMes.format(new Date(`${mes}-15T12:00:00`)),
+  /** "2026-09": o mês de uma data, no fuso do navegador. */
+  mesDe: (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
   /** "em 2 dias", "hoje", "há 3 h" — relativo ao agora. */
   relativo: (iso: string, agora = new Date()) => {
     const diff = new Date(iso).getTime() - agora.getTime()

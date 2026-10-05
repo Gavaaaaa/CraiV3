@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { IconArrowRight, IconCheck, IconClose, IconDownload, IconRefresh, IconShield, IconTable } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
-import { CANAIS_DISPONIVEIS, MODO_REAL, api } from '../../data/api'
+import type { AnonimizacaoTitular, ExportacaoTitular, MarcaNaoContatar } from '../../data/adaptadores'
+import { CANAIS_DISPONIVEIS, ErroApi, MODO_REAL, api } from '../../data/api'
 import { AGORA } from '../../data/mock'
 import type { Canal, Configuracao, EmpresaDetalhe, ExplicacaoDecisao, Integracao, Membro, Papel, ResultadoTesteIntegracao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
@@ -366,36 +367,95 @@ const TEXTO_POLITICA = `Usamos a CRAI, um serviço de recuperação de cobrança
 export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeEditar: boolean }) {
   const [idExport, setIdExport] = useState('')
   const [exportando, setExportando] = useState(false)
-  const [exportado, setExportado] = useState<{ arquivo: string; linhas: number } | null>(null)
+  const [exportado, setExportado] = useState<ExportacaoTitular | null>(null)
   const [confirmar, setConfirmar] = useState(false)
   const [anonimizando, setAnonimizando] = useState(false)
-  const [anonimizado, setAnonimizado] = useState<{ ciclos_anonimizados: number; mensagens_apagadas: number } | null>(null)
+  const [anonimizado, setAnonimizado] = useState<AnonimizacaoTitular | null>(null)
+  const [marcando, setMarcando] = useState(false)
+  const [marca, setMarca] = useState<MarcaNaoContatar | null>(null)
+  const [erroDireitos, setErroDireitos] = useState<string | null>(null)
   const [idExpl, setIdExpl] = useState('')
   const [explicando, setExplicando] = useState(false)
   const [explicacao, setExplicacao] = useState<ExplicacaoDecisao | null>(null)
+  const [semExplicacao, setSemExplicacao] = useState(false)
+  const [erroExpl, setErroExpl] = useState<string | null>(null)
   const [copiado, setCopiado] = useState(false)
+  // O texto da política vem do backend, com os prazos da empresa. Na demonstração, o de exemplo.
+  const [politica, setPolitica] = useState<string | null>(MODO_REAL ? null : TEXTO_POLITICA)
+  const [erroPolitica, setErroPolitica] = useState<string | null>(null)
+
+  useEffect(() => {
+    let vivo = true
+    api
+      .textoParaPolitica()
+      .then((t) => vivo && setPolitica(t ? t.texto : TEXTO_POLITICA))
+      .catch((e: unknown) => vivo && setErroPolitica(e instanceof ErroApi ? e.message : 'Não deu para carregar o texto.'))
+    return () => {
+      vivo = false
+    }
+  }, [])
+
+  const frase = (e: unknown) => (e instanceof ErroApi ? e.message : 'Algo deu errado. Tente de novo.')
+  function limpar() {
+    setExportado(null)
+    setAnonimizado(null)
+    setMarca(null)
+    setErroDireitos(null)
+    setConfirmar(false)
+  }
 
   async function exportar() {
     if (!idExport.trim()) return
+    limpar()
     setExportando(true)
-    setExportado(await api.exportarTitular(idExport.trim()))
+    try {
+      setExportado(await api.exportarTitular(idExport.trim()))
+    } catch (e) {
+      setErroDireitos(frase(e))
+    }
     setExportando(false)
   }
   async function anonimizar() {
     setAnonimizando(true)
-    setAnonimizado(await api.anonimizarTitular(idExport.trim()))
+    setErroDireitos(null)
+    try {
+      setAnonimizado(await api.anonimizarTitular(idExport.trim()))
+    } catch (e) {
+      setErroDireitos(frase(e))
+    }
     setAnonimizando(false)
     setConfirmar(false)
+  }
+  async function contato(voltar: boolean) {
+    if (!idExport.trim()) return
+    limpar()
+    setMarcando(true)
+    try {
+      setMarca(voltar ? await api.voltarAContatar(idExport.trim()) : await api.naoContatar(idExport.trim()))
+    } catch (e) {
+      setErroDireitos(frase(e))
+    }
+    setMarcando(false)
   }
   async function explicar() {
     if (!idExpl.trim()) return
     setExplicando(true)
-    setExplicacao(await api.explicacaoDecisao(idExpl.trim()))
+    setErroExpl(null)
+    setSemExplicacao(false)
+    setExplicacao(null)
+    try {
+      const achada = await api.explicacaoDecisao(idExpl.trim())
+      setExplicacao(achada)
+      setSemExplicacao(achada === null)
+    } catch (e) {
+      setErroExpl(frase(e))
+    }
     setExplicando(false)
   }
   async function copiarPolitica() {
+    if (!politica) return
     try {
-      await navigator.clipboard.writeText(TEXTO_POLITICA)
+      await navigator.clipboard.writeText(politica)
       setCopiado(true)
       setTimeout(() => setCopiado(false), 2500)
     } catch {
@@ -411,7 +471,7 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
         <Bloco titulo="Direitos do cliente final (art. 18)" apoio="Quando um cliente seu pede os dados dele ou pede para apagar, use o identificador que a sua empresa usa para ele.">
           <label className="block">
             <Rotulo>Identificador do cliente na sua base</Rotulo>
-            <input value={idExport} onChange={(e) => { setIdExport(e.target.value); setExportado(null); setAnonimizado(null); setConfirmar(false) }} placeholder="Ex.: cliente_10482" className={campo} disabled={!podeEditar} />
+            <input value={idExport} onChange={(e) => { setIdExport(e.target.value); limpar() }} placeholder="Ex.: cliente_10482" className={campo} disabled={!podeEditar} />
           </label>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" variant="ghost" disabled={!podeEditar || !idExport.trim() || exportando} onClick={exportar}>
@@ -427,17 +487,56 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
               </Button>
             )}
           </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" disabled={!podeEditar || !idExport.trim() || marcando} onClick={() => contato(false)}>
+              Não contatar
+            </Button>
+            <Button size="sm" variant="quiet" disabled={!podeEditar || !idExport.trim() || marcando} onClick={() => contato(true)}>
+              Voltar a contatar
+            </Button>
+          </div>
+          <p className="t-label mt-2 text-muted">Com "Não contatar", nenhuma mensagem sai mais para este cliente. As tentativas de cobrança continuam.</p>
+          {erroDireitos ? (
+            <div className="mt-3">
+              <Aviso tom="danger">{erroDireitos}</Aviso>
+            </div>
+          ) : null}
           {exportado ? (
             <div className="mt-3">
               <Aviso tom="ok">
-                Arquivo pronto: <span className="tabular">{exportado.arquivo}</span> ({exportado.linhas} registros). Demonstração: na versão final, o download começa aqui.
+                Arquivo pronto: <span className="tabular">{exportado.arquivo}</span> ({exportado.linhas} registros).{' '}
+                {exportado.conteudo ? (
+                  <>
+                    <a href={`data:application/json;charset=utf-8,${encodeURIComponent(exportado.conteudo)}`} download={exportado.arquivo} className="font-[600] text-amber underline underline-offset-4">
+                      Baixar o arquivo
+                    </a>
+                    . Ele diz quais contatos estão guardados, sem repetir o e-mail e o telefone.
+                  </>
+                ) : (
+                  'Demonstração: na versão final, o download começa aqui.'
+                )}
               </Aviso>
             </div>
           ) : null}
           {anonimizado ? (
             <div className="mt-3">
               <Aviso tom="ok">
-                Pronto. {anonimizado.ciclos_anonimizados} ciclos anonimizados e {anonimizado.mensagens_apagadas} mensagens apagadas. Os totais do painel não mudam; o cliente deixa de ser identificável.
+                {anonimizado.contatos_apagados === undefined
+                  ? `Pronto. ${anonimizado.ciclos_anonimizados} ciclos anonimizados e ${anonimizado.mensagens_apagadas} mensagens apagadas. Os totais do painel não mudam; o cliente deixa de ser identificável.`
+                  : `Pronto. ${anonimizado.contatos_apagados} ${anonimizado.contatos_apagados === 1 ? 'contato apagado' : 'contatos apagados'} e ${anonimizado.mensagens_apagadas} ${anonimizado.mensagens_apagadas === 1 ? 'mensagem apagada' : 'mensagens apagadas'}. Os totais do painel não mudam, e nenhuma mensagem sai mais para este cliente.`}
+              </Aviso>
+            </div>
+          ) : null}
+          {marca ? (
+            <div className="mt-3">
+              <Aviso tom="ok">
+                {marca.marcado
+                  ? marca.ja_estava
+                    ? 'Este cliente já estava marcado: nenhuma mensagem sai para ele.'
+                    : 'Pronto. Nenhuma mensagem sai mais para este cliente.'
+                  : marca.ja_estava
+                    ? 'Pronto. Este cliente volta a receber mensagens.'
+                    : 'Este cliente não estava marcado: ele já recebe mensagens.'}
               </Aviso>
             </div>
           ) : null}
@@ -454,6 +553,16 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
               </Button>
             </div>
           </label>
+          {erroExpl ? (
+            <div className="mt-3">
+              <Aviso tom="danger">{erroExpl}</Aviso>
+            </div>
+          ) : null}
+          {semExplicacao ? (
+            <div className="mt-3">
+              <Aviso>Não há decisão registrada para este identificador na sua empresa.</Aviso>
+            </div>
+          ) : null}
           {explicacao ? (
             <div className="mt-4 rounded-[12px] border border-line bg-slate/40 p-4">
               <div className="t-label text-silver">Decisão de {fmt.dataCurta(explicacao.quando)}</div>
@@ -471,27 +580,42 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
                   <IconShield width={13} height={13} className="mt-[3px] shrink-0" /> {explicacao.revisao_humana}
                 </p>
               ) : null}
-              <p className="t-label mt-2 text-muted">Este texto pode ser repassado ao cliente como está. Não há nome de algoritmo nem dado técnico.</p>
+              <p className="t-label mt-2 text-muted">
+                {MODO_REAL
+                  ? 'É a decisão mais recente, como o sistema a registrou na hora. Revise o texto antes de repassar ao cliente.'
+                  : 'Este texto pode ser repassado ao cliente como está. Não há nome de algoritmo nem dado técnico.'}
+              </p>
             </div>
           ) : null}
         </Bloco>
       </div>
 
-      <Bloco titulo="Por quanto tempo a CRAI guarda" apoio="Prazos padrão até revisão jurídica. Depois do prazo, o dado é apagado ou anonimizado numa passagem diária.">
+      <Bloco
+        titulo="Por quanto tempo a CRAI guarda"
+        apoio="Prazos padrão até revisão jurídica. O texto das mensagens e a trilha de decisões são apagados numa passagem diária. Os outros dois prazos estão definidos, e a execução automática deles ainda não está ligada."
+      >
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Prazo rotulo="Texto das mensagens" valor={`${r.mensagens} dias`} apoio="Depois do desfecho; fica só a abordagem" />
-          <Prazo rotulo="Ciclos de cobrança" valor={`${r.ciclos_meses} meses`} apoio="Depois, anonimizados" />
-          <Prazo rotulo="Base de clientes" valor={`Contrato + ${r.base_meses_apos_contrato} meses`} apoio="Apagada ao fim" />
-          <Prazo rotulo="Trilha de decisões" valor={`${r.trilha_anos} anos`} apoio="Sem dado pessoal; só códigos" />
+          <Prazo rotulo="Ciclos de cobrança" valor={`${r.ciclos_meses} meses`} apoio="Prazo definido; ainda não executado" />
+          <Prazo rotulo="Base de clientes" valor={`Contrato + ${r.base_meses_apos_contrato} meses`} apoio="Prazo definido; ainda não executado" />
+          <Prazo rotulo="Trilha de decisões" valor={`${r.trilha_anos} anos`} apoio="Sem dado de contato; apagada depois do prazo" />
         </dl>
       </Bloco>
 
       <Bloco titulo="Texto pronto para a sua política de privacidade" apoio="A lei pede que o seu cliente saiba que a CRAI existe e o que ela faz. Cole este parágrafo na sua política.">
         <div className="relative">
-          <textarea readOnly value={TEXTO_POLITICA} rows={8} className="scroll-fino w-full resize-none rounded-[12px] border border-line bg-ink/40 p-4 pr-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none" aria-label="Texto para a política de privacidade" />
+          {erroPolitica ? <Aviso tom="danger">{erroPolitica}</Aviso> : null}
+          <textarea
+            readOnly
+            value={politica ?? ''}
+            rows={MODO_REAL ? 14 : 8}
+            aria-busy={politica === null && !erroPolitica}
+            className="scroll-fino w-full resize-none rounded-[12px] border border-line bg-ink/40 p-4 pr-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none"
+            aria-label="Texto para a política de privacidade"
+          />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button size="sm" variant="ghost" onClick={copiarPolitica}>
+          <Button size="sm" variant="ghost" onClick={copiarPolitica} disabled={!politica}>
             {copiado ? <IconCheck width={15} height={15} /> : <IconTable width={15} height={15} />} {copiado ? 'Copiado' : 'Copiar texto'}
           </Button>
           <span className="t-label text-muted">Revise com quem cuida do jurídico da sua empresa antes de publicar.</span>

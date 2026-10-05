@@ -21,7 +21,7 @@ const SECOES: { id: SecaoId; rotulo: string; apoio: string; Icone: typeof IconGe
   { id: 'empresa', rotulo: 'Empresa', apoio: 'Como aparece para o cliente', Icone: IconGear, de: ['empresaDetalhe'] },
   { id: 'equipe', rotulo: 'Equipe', apoio: 'Pessoas e papéis', Icone: IconUsers, de: ['membros', 'mudarPapel'] },
   { id: 'integracao', rotulo: 'Integração', apoio: 'Chaves de API e webhook', Icone: IconTable, premium: true, de: ['integracao'] },
-  { id: 'dados', rotulo: 'Dados e privacidade', apoio: 'Direitos do cliente, prazos', Icone: IconShield, de: ['exportarTitular', 'anonimizarTitular', 'explicacaoDecisao'] },
+  { id: 'dados', rotulo: 'Dados e privacidade', apoio: 'Direitos do cliente, prazos', Icone: IconShield, de: ['exportarTitular', 'anonimizarTitular', 'explicacaoDecisao', 'naoContatar', 'voltarAContatar', 'textoParaPolitica'] },
   { id: 'notificacoes', rotulo: 'Notificações', apoio: 'Avisos para a equipe', Icone: IconBell, de: ['notificacoes'] },
 ]
 

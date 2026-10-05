@@ -228,12 +228,12 @@ export interface ResumoVisaoGeral {
   recuperado_involuntario: number // líquido
   cobrancas_recuperadas: number
   retido_voluntario: number | null // líquido; null quando a empresa não é premium
-  clientes_mantidos: number
+  clientes_mantidos: number | null // null quando a empresa não é premium
   ciclos_ativos: number
   aguardando_escolha: number
-  clientes_risco_grave: number
-  risco_grave_com_oferta: number
-  taxa_recuperacao: number // 0..1, sobre ciclos com desfecho
+  clientes_risco_grave: number | null // null quando a empresa não é premium
+  risco_grave_com_oferta: number | null
+  taxa_recuperacao: number | null // 0..1, sobre ciclos com desfecho; null quando ainda não há desfecho
   ciclos_com_desfecho: number
 }
 
@@ -268,7 +268,7 @@ export interface OQueFunciona {
 export type TipoAtividade = 'recuperado' | 'tentativa_falhou' | 'oferta_aceita' | 'mensagem_enviada' | 'risco_grave' | 'estorno' | 'escolha'
 
 export interface Atividade {
-  id: number
+  id: number | string
   em: string
   tipo: TipoAtividade
   texto: string
@@ -280,8 +280,9 @@ export interface SaudeSistema {
   relogio: { ativo: boolean; ultima_passagem: string | null }
   modelos: { carregados: number; total: number }
   redator: { disponivel: boolean }
-  base: { origem: 'api' | 'anexo'; atualizada_em: string } | null
-  /** Em modo real, as linhas que o backend ainda não informa e continuam de demonstração. */
+  /** `origem` null: a base é anterior ao registro de origem, e a tela não adivinha. */
+  base: { origem: 'api' | 'anexo' | null; atualizada_em: string } | null
+  /** Em modo real, as linhas que um backend antigo não informa e continuam de demonstração. */
   demonstracao?: ('modelos' | 'redator' | 'base')[]
 }
 
@@ -290,6 +291,12 @@ export interface LinhaExtrato {
   data: string
   cliente: string
   origem: 'involuntario' | 'voluntario'
+  /**
+   * O backend manda uma linha por fato: a recuperação ou o cliente mantido (valores
+   * positivos) e, à parte, o estorno (valores negativos, no mês em que aconteceu). Ausente
+   * na demonstração, onde o estorno é a própria linha zerada.
+   */
+  tipo?: 'recuperacao' | 'mantido' | 'estorno'
   descricao: string
   valor_base: number // cobrança recuperada, ou MRR menos o desconto
   taxa: number
@@ -350,23 +357,29 @@ export interface EstadoSimulacao {
   causa: CausaFalha | null
   chance_recuperar: number | null
   dia_provavel_saldo: string | null
-  contribuicoes: Contribuicao[]
+  /** O fator e o efeito, em texto, como o diagnóstico de um ciclo de verdade. */
+  contribuicoes: ContribuicaoTexto[]
   tentativas: TentativaSimulada[]
   proxima_acao: { quando: string; descricao: string } | null
   sugestoes: Sugestao[]
-  mensagem_enviada: { abordagem: Abordagem; canal: Canal; em: string; escolhida_por: 'owner' | 'admin' | 'automatico' } | null
+  mensagem_enviada: { abordagem: Abordagem; canal: Canal; em: string; escolhida_por: 'owner' | 'admin' | 'prazo' | 'automatico' } | null
   desfecho: { tipo: 'recuperado' | 'encerrado'; via: 'tentativa' | 'mensagem'; tentativa: number | null; valor_liquido: number; em: string } | null
   pensando: string[] // "O que o sistema está pensando", em frases
   sem_crai: { resultado: 'recuperado' | 'perdido'; explicacao: string } | null
   linha_do_tempo: EventoLinhaDoTempo[]
+  /** A configuração da empresa que vale para a mensagem do ciclo simulado. */
+  modo_mensagem: 'automatico' | 'escolha'
+  prazo_escolha_horas: number
 }
 
-export type OfertaRetencao = 'desconto' | 'suporte' | 'plano_leve'
+/** As quatro ofertas que o sistema faz de verdade (as mesmas do backend). */
+export type OfertaRetencao = 'desconto_10' | 'desconto_20' | 'pausa_1_mes' | 'pix_boleto_flash'
 
 export interface ClienteRiscoFicticio {
   nome: string
   mrr: number
-  sinais: { uso_caiu: boolean; tickets: boolean; atraso: boolean }
+  /** Cada sinal marcado vira um dado que o sistema recebe; o não marcado não vira nada. */
+  sinais: { uso_caiu: boolean; tickets: boolean; atraso: boolean; abriu_cancelamento: boolean }
   /** Propensão escondida a aceitar cada oferta (0..1). O sistema não vê. */
   propensao: Record<OfertaRetencao, number>
 }
@@ -374,12 +387,23 @@ export interface ClienteRiscoFicticio {
 export interface ResultadoRetencaoSimulada {
   faixa: 'grave' | 'preocupante' | 'sem_risco'
   motivo: string
-  oferta: OfertaRetencao
-  canal: Canal
-  porque: string
-  aceitou: boolean
+  /** Quem decidiu a faixa: o modelo de IA ou a régua. */
+  decidido_por: 'modelo' | 'regua'
+  /** O risco que o sistema calculou (0 a 1) e o corte abaixo do qual ele não intervém. */
+  risco: number | null
+  corte_de_intervencao: number
+  /** null: sem risco, o sistema não faz oferta. */
+  oferta: OfertaRetencao | null
+  oferta_legivel: string | null
+  canal_legivel: string | null
+  porque: string | null
+  /** null quando não houve oferta. */
+  aceitou: boolean | null
   valor_mantido_liquido: number
   sem_crai: string
+  /** A regra do mantido que o backend aplica (meses de mensalidade e prazo do estorno). */
+  meses_de_mrr: number
+  prazo_estorno_dias: number
 }
 
 /* ------------------------------------------------------------------ */
@@ -390,22 +414,27 @@ export type FaixaRisco = 'grave' | 'preocupante' | 'sem_risco' | 'sem_dado'
 
 export interface ClienteRisco {
   id: string
-  nome: string
-  mrr: number
+  nome: string // o nome da base; sem nome, o id que a empresa usa
+  mrr: number | null // null: cliente que só chegou por evento, sem mensalidade conhecida
   faixa: FaixaRisco
   motivo: string // uma frase, em linguagem simples
-  risco_decidido_por: 'modelo' | 'regua'
+  /** null: não há avaliação (sem dado), ou ela veio de um evento que não registra quem decidiu. */
+  risco_decidido_por: 'modelo' | 'regua' | null
   posicao_na_base: number | null // 1 = maior risco da base; null quando não há dado suficiente
-  abordagem: { oferta: OfertaRetencao; canal: Canal; status: 'aguardando' | 'enviada' | 'aceita' | 'recusada' } | null
-  atualizado_em: string
+  /** A oferta e o canal já vêm em português (o backend manda o texto pronto). */
+  abordagem: { oferta: string; canal: string; status: 'aguardando' | 'enviada' | 'aceita' | 'recusada' } | null
+  atualizado_em: string | null
   simulado: boolean
 }
 
 export interface BaseClientes {
   total: number
   com_dados_comportamento: number
+  /** Para quantos clientes o modelo de IA decide o risco hoje (0 se não há modelo ativo). */
+  decididos_pelo_modelo: number
   atualizada_em: string
-  origem: 'api' | 'anexo'
+  /** null: a base é anterior ao registro de origem, e a tela não adivinha. */
+  origem: 'api' | 'anexo' | null
 }
 
 export interface ResumoVoluntario {
@@ -417,6 +446,9 @@ export interface ResumoVoluntario {
   preocupante: number
   ofertas_enviadas: number
   ofertas_aceitas: number
+  /** A regra do "mantido", como o backend a aplica: quantos meses de mensalidade e o prazo do estorno. */
+  meses_de_mrr: number
+  prazo_estorno_dias: number
 }
 
 export interface ComparacaoReguaModelo {
@@ -430,10 +462,18 @@ export interface ComparacaoReguaModelo {
 export interface ResultadoImportacao {
   arquivo: string
   linhas: number
-  novos: number
-  atualizados: number
-  sem_id_recorrencia: number
+  /** Quantas linhas entraram na base e quantas foram recusadas (com o motivo em `avisos`). */
+  importados: number
+  rejeitados: number
+  /** O backend não separa novos de corrigidos, nem conta os sem id da recorrência: null. */
+  novos: number | null
+  atualizados: number | null
+  sem_id_recorrencia: number | null
+  /** Importadas sem dado de comportamento: ficam como "Sem dado suficiente". */
+  sem_comportamento: number | null
   avisos: string[]
+  /** Só na demonstração: o arquivo não saiu do navegador. */
+  demonstracao: boolean
 }
 
 /* ------------------------------------------------------------------ */

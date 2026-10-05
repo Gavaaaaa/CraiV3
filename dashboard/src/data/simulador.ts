@@ -175,6 +175,8 @@ export function estadoVazio(): EstadoSimulacao {
     pensando: [],
     sem_crai: null,
     linha_do_tempo: [],
+    modo_mensagem: 'escolha',
+    prazo_escolha_horas: 8,
   }
 }
 
@@ -215,7 +217,7 @@ export function iniciar(cliente: ClienteFicticio): EstadoSimulacao {
   concluir(e, 'cobranca')
   const { chance, contribuicoes } = diagnostico(cliente, causa)
   e.chance_recuperar = chance
-  e.contribuicoes = contribuicoes
+  e.contribuicoes = contribuicoes.map((c) => ({ fator: c.fator, efeito: c.pontos >= 0 ? 'Aumentou a chance de recuperar' : 'Reduziu a chance de recuperar' }))
   const est = ESTIMATIVA_SALDO[cliente.perfil]
   e.dia_provavel_saldo = somaDias(e.hoje, est.dias)
 
@@ -394,48 +396,56 @@ export const ABORDAGEM: Record<Abordagem, string> = {
 export const MRR_ALTO = 3000
 
 export const OFERTA: Record<OfertaRetencao, string> = {
-  desconto: 'Desconto de 20% por 3 meses',
-  suporte: 'Suporte dedicado por 30 dias',
-  plano_leve: 'Plano mais leve, sem multa',
+  desconto_10: 'Desconto de 10% por 3 meses',
+  desconto_20: 'Desconto de 20% por 3 meses',
+  pausa_1_mes: 'Pausa de 1 mês na assinatura, sem custo',
+  pix_boleto_flash: 'Troca para Pix ou boleto em 1 clique',
 }
 
+/** Quanto do MRR o desconto concedido tira, com 1 mês contado (a mesma conta do backend). */
+const DESCONTO_CONCEDIDO: Record<OfertaRetencao, number> = { desconto_10: 0.1, desconto_20: 0.2, pausa_1_mes: 1, pix_boleto_flash: 0 }
+
+/** A retenção simulada da DEMONSTRAÇÃO (sem backend). No modo real, quem decide é o sistema de verdade. */
 export function simularRetencao(c: ClienteRiscoFicticio): ResultadoRetencaoSimulada {
-  const sinais = [c.sinais.uso_caiu, c.sinais.tickets, c.sinais.atraso].filter(Boolean).length
+  const sinais = [c.sinais.uso_caiu, c.sinais.tickets, c.sinais.atraso, c.sinais.abriu_cancelamento].filter(Boolean).length
   // Regra das faixas: Grave = topo 10% da base pelo risco, Preocupante = 20% seguintes, sempre com
   // sinal real. Cliente de mensalidade alta entra como Preocupante e só sobe para Grave depois.
   const mrrAlto = c.mrr >= MRR_ALTO
-  const faixa = sinais >= 2 ? (mrrAlto ? 'preocupante' : 'grave') : sinais === 1 ? 'preocupante' : 'sem_risco'
+  const faixa = c.sinais.abriu_cancelamento || (sinais >= 2 && !mrrAlto) ? 'grave' : sinais >= 1 ? 'preocupante' : 'sem_risco'
   const motivos: string[] = []
-  if (c.sinais.uso_caiu) motivos.push('o uso caiu pela metade em 2 semanas')
+  if (c.sinais.abriu_cancelamento) motivos.push('abriu a página de cancelamento')
+  if (c.sinais.uso_caiu) motivos.push('sem entrar há 24 dias, usando 1 funcionalidade')
   if (c.sinais.tickets) motivos.push('abriu 3 chamados de suporte no mês')
-  if (c.sinais.atraso) motivos.push('pagou atrasado 2 vezes')
+  if (c.sinais.atraso) motivos.push('teve 2 pagamentos com falha em 90 dias')
   let motivo = motivos.length ? motivos.join(', ').replace(/^./, (x) => x.toUpperCase()) + '.' : 'Nenhum sinal de risco nos dados de comportamento.'
-  if (sinais >= 2 && mrrAlto) motivo += ' Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.'
+  if (faixa === 'preocupante' && sinais >= 2 && mrrAlto) motivo += ' Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.'
+
+  const risco = faixa === 'grave' ? 0.9 : faixa === 'preocupante' ? 0.8 : 0.1
+  const base = { faixa, motivo, decidido_por: 'regua', risco, corte_de_intervencao: 0.6, meses_de_mrr: 1, prazo_estorno_dias: 30 } as const
+  if (faixa === 'sem_risco') {
+    return { ...base, oferta: null, oferta_legivel: null, canal_legivel: null, porque: null, aceitou: null, valor_mantido_liquido: 0, sem_crai: 'O sistema não interveio: com ou sem a CRAI, este cliente segue como está.' }
+  }
 
   // O que o sistema decide (sem ver a propensão): pela combinação de sinais e valor
-  const oferta: OfertaRetencao = c.sinais.tickets ? 'suporte' : c.sinais.uso_caiu && c.mrr >= 2000 ? 'plano_leve' : 'desconto'
+  const oferta: OfertaRetencao = c.sinais.atraso ? 'pix_boleto_flash' : c.sinais.uso_caiu && c.mrr >= 2000 ? 'pausa_1_mes' : c.sinais.tickets ? 'desconto_20' : 'desconto_10'
   const porque = {
-    suporte: 'Chamados abertos indicam problema de uso, não de preço: suporte dedicado costuma reter mais nesse caso.',
-    plano_leve: 'Uso em queda com mensalidade alta: um plano mais leve segura o cliente sem descontar em cima de um valor grande.',
-    desconto: 'Para este perfil, o desconto curto é a oferta que mais aceita nos últimos 30 dias.',
+    pix_boleto_flash: 'Pagamentos atrasados indicam atrito na cobrança, não no produto: trocar o meio de pagamento resolve sem dar desconto.',
+    pausa_1_mes: 'Uso em queda com mensalidade alta: uma pausa segura o cliente sem descontar em cima de um valor grande.',
+    desconto_20: 'Chamados abertos indicam insatisfação: o desconto maior é a oferta mais aceita nesse caso.',
+    desconto_10: 'Para este perfil, o desconto curto é a oferta mais aceita nos últimos 30 dias.',
   }[oferta]
 
-  const sorteio = semente(`${c.nome}:oferta:${oferta}`)
-  const aceitou = faixa !== 'sem_risco' && sorteio < c.propensao[oferta]
-  const base = oferta === 'desconto' ? c.mrr * 0.8 : oferta === 'plano_leve' ? c.mrr * 0.6 : c.mrr
-  const valor = aceitou ? centavos(base * (1 - TAXA.voluntario)) : 0
+  const aceitou = semente(`${c.nome}:oferta:${oferta}`) < c.propensao[oferta]
+  const valor = aceitou ? centavos(c.mrr * (1 - DESCONTO_CONCEDIDO[oferta]) * (1 - TAXA.voluntario)) : 0
 
   return {
-    faixa,
-    motivo,
+    ...base,
     oferta,
-    canal: 'whatsapp',
+    oferta_legivel: OFERTA[oferta],
+    canal_legivel: 'WhatsApp',
     porque,
     aceitou,
     valor_mantido_liquido: valor,
-    sem_crai:
-      faixa === 'sem_risco'
-        ? 'Sem sinais, nada muda: o cliente segue normalmente.'
-        : 'Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.',
+    sem_crai: 'Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.',
   }
 }
