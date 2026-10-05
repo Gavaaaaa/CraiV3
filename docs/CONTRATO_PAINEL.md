@@ -132,6 +132,7 @@ complemento de `colunas_nao_encontradas` sobre a lista dos seis campos.
 
 | HTTP | `motivo` |
 |---|---|
+| 403 | `papel_insuficiente`: desde a Rodada 4, importar exige o papel `owner` ou `admin` no token (claim `papel`). Membro e token sem papel recebem 403, e nada é gravado |
 | 415 | `extensao_nao_suportada` |
 | 413 | `arquivo_grande_demais`, `linhas_demais` |
 | 422 | `arquivo_vazio`, `arquivo_ilegivel`, `sem_linhas`, `mapeamento_invalido` |
@@ -520,7 +521,7 @@ padrão (sem telefone, no site) continua dando `popup`.
 | `risk_score` | number 0–1 | não | |
 | `criticality` | string | não | `critico` \| `alto` \| `padrao` |
 | `profile` | string | não | |
-| `offer_type` | string | **sim** | a oferta escolhida; `null` quando o sistema decidiu não abordar (com a régua decidindo o risco: abaixo de 0,60; com o modelo v3: sem evento de intenção explícita e fora das faixas grave e preocupante). Com o modelo v3 e um caso que não é grave, é a de menor custo entre as candidatas, e as candidatas trazem `motivo_codigo` `menor_custo` ou `custo_maior_que_a_escolhida` |
+| `offer_type` | string | **sim** | a oferta escolhida; `null` quando o sistema decidiu não abordar (com a régua decidindo o risco: abaixo de 0,60; com o modelo v3: sem evento de intenção explícita e fora das faixas grave e preocupante). Para o preocupante (no disparo em lote; e no pipeline de eventos com o modelo v3, quando veio pela posição na base) é a de menor custo entre as ofertas de retenção, sem contar a troca para Pix ou boleto: as candidatas são as três ofertas de retenção e trazem `motivo_codigo` `menor_custo` ou `custo_maior_que_a_escolhida` |
 | `offer_label` | string | não | `--` quando não há oferta |
 | `channel` | string | sim | `whatsapp` \| `popup` \| `email`; `null` sem abordagem |
 | `canais_considerados` | array | não (pode ser `[]`) | ver 6.1; `[]` sem abordagem |

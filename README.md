@@ -229,7 +229,7 @@ fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
 | Assistente | Real. Responde com os números agregados da empresa; sem a chave do modelo de linguagem configurada no backend, mostra um texto fixo de ajuda com os links das páginas |
 | API (listar, gerar e revogar as chaves de API da empresa; os exemplos de uso) | Real |
 | Configuração, seção Mensagens (modo, prazo, janela de contato, canais) | Real |
-| Configuração, Dados e privacidade (exportar e anonimizar os dados de um cliente, explicar uma decisão, não contatar, o texto para a política de privacidade, os prazos) | Real. Dos prazos, o expurgo diário executa o das mensagens (90 dias), o do registro de acesso (12 meses) e o da trilha de decisões (5 anos); o dos ciclos (24 meses) e o da base depois do contrato (6 meses) estão definidos e ainda não são executados |
+| Configuração, Dados e privacidade (exportar e anonimizar os dados de um cliente, explicar uma decisão, não contatar, o texto para a política de privacidade, os prazos) | Real. Dos prazos, o expurgo diário executa o das mensagens (90 dias), o do registro de acesso (12 meses), o da trilha de decisões (5 anos) e o dos ciclos (24 meses: os identificadores saem, os valores ficam); o da base depois do contrato (6 meses) está definido e ainda não é executado |
 | Configuração: Empresa, Equipe, Integração (webhook e teste), Notificações | Demonstração |
 | O nome da empresa no topo | Fixo ("Empresa de demonstração"): o login ainda é o de desenvolvimento |
 | **A tela não marca os blocos fictícios** | Esta tabela é o registro do que é real. A etiqueta "Demonstração" só aparece na Simulação do gateway e nos dados simulados que ela cria. Para religar as etiquetas nos outros blocos, ver abaixo |
@@ -424,17 +424,32 @@ fallbacks — e a ausência aparece na tela, não em silêncio.
 
 ## As rotas
 
-| Grupo | Rotas |
-|---|---|
-| Webhooks | `/webhooks/pix-automatico`, `/webhooks/stripe`, `/webhooks/segment`, `/webhooks/retention-outcome` |
-| Self-service (com JWT) | `POST /clientes/importar`, `GET /insights`, `POST /insights/enviar`, `GET /metrics/recovery` (tenant do token, nunca da URL) |
-| Operação | `GET /health` |
-| Simulação | `/simulate/pix-falhado`, `/simulate/pix-pago`, `/simulate/payment-failed`, `/simulate/churn-risk` |
-| Painel | `/simulate/painel/` + `ambiente`, `cobranca-falhada`, `evento-risco`, `disparo-lote`, `importar`, `insights` |
+Todas as rotas de hoje. "Token" é o token de login da empresa (o tenant sai do token, nunca
+da URL nem do corpo); "chave" é a chave de API da empresa (`crai_live_...`).
 
-Tudo em `/simulate/*` e o painel exigem `ENV=development` ou `ENV=demo`. Apenas
-`/clientes/importar` e `/insights` exigem o JWT do Supabase, e existe um teste que garante
-que continuem sendo só essas duas.
+| Grupo | Rotas | Quem chama |
+|---|---|---|
+| Webhooks | `POST /webhooks/pix-automatico`, `/webhooks/stripe`, `/webhooks/segment`, `/webhooks/retention-outcome` | O PSP e o Segment, com assinatura HMAC |
+| Eventos de comportamento | `POST /eventos` | O servidor da empresa, com a chave ou o token |
+| API de clientes | `POST /clientes`, `POST /clientes/lote`, `PATCH /clientes/{id}`, `DELETE /clientes/{id}` | O servidor da empresa, com a chave ou o token |
+| Base de clientes no painel | `POST /clientes/importar` (dono ou administrador), `GET /clientes/base`, `GET /clientes/recentes`, `POST` e `DELETE /clientes/{id}/nao-contatar` (dono ou administrador), `GET /insights`, `POST /insights/enviar` | Token |
+| Involuntário | `GET /ciclos`, `GET /ciclos/{id}`, `POST /ciclos/{id}/mensagens/escolher` e `/regerar` (dono ou administrador), `GET /metrics/involuntario/mes`, `/serie` e `/funil`, `GET /metrics/recovery` | Token |
+| Voluntário | `GET /metrics/voluntario/mes`, `/serie` e `/regua-x-modelo` | Token (plano premium) |
+| Visão geral | `GET /metrics/visao-geral`, `GET /metrics/serie`, `GET /metrics/o-que-funciona`, `GET /atividade`, `GET /extrato` e `GET /extrato/csv` (dono ou administrador; são as únicas com a taxa da CRAI; para empresa em período de piloto, a taxa é zero e a coluna "Taxa fora do piloto" mostra o que seria cobrado), `GET /busca` | Token |
+| Configuração e chaves | `GET` e `PUT /configuracao`, `GET` e `POST /integracao/chaves`, `DELETE /integracao/chaves/{id}` | Token (gravar: dono ou administrador) |
+| Direitos do titular (LGPD) | `GET /titular/explicacao/{id}`, `POST /titular/exportar`, `POST /titular/anonimizar`, `GET /titular/texto-para-politica` | Token (exportar e anonimizar: dono ou administrador) |
+| Simulação do gateway | `GET` e `DELETE /simulacao`, `POST /simulacao/cliente`, `/cobrar`, `/avancar` e `/retencao` | Token (escrever: dono ou administrador) |
+| Assistente | `POST /assistente` | Token |
+| Operação | `GET /health` | Pública (com token, diz também a base da empresa) |
+| Só em desenvolvimento | `POST /dev/token` (só com `ENV=development`); `POST /simulate/pix-falhado`, `/simulate/pix-pago`, `/simulate/pix-estornado`, `/simulate/resposta-sair`, `/simulate/payment-failed`, `/simulate/churn-risk` | Quem desenvolve |
+| Painel antigo | `/simulate/painel/` + `ambiente`, `cobranca-falhada`, `evento-risco`, `disparo-lote`, `importar`, `insights` | A página `/painel/v2` |
+
+Tudo em `/simulate/*` e o painel antigo exigem `ENV=development` ou `ENV=demo`. As rotas do
+dashboard exigem o token de login, e cada uma lê e grava só o que é da empresa do token: o
+identificador de outra empresa responde 404, igual ao que não existe. A chave de API vale
+só nas cinco rotas marcadas acima (`POST /eventos` e as quatro da API de clientes); nas
+outras ela é recusada com 401. Há testes que percorrem todas as rotas do aplicativo para
+conferir as duas coisas.
 
 Os webhooks verificam HMAC e têm janela anti-replay. A borda valida a forma dos campos que
 o pipeline consome — o escopo exato dessa validação está declarado em `app/README.md`.

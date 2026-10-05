@@ -563,19 +563,19 @@ expurgo, CORS e token de desenvolvimento: `docs/interno/RELATORIO_ETAPA2_BLOCO*.
    folga. Depende de os dois relógios concordarem; dois ciclos sobrepostos do mesmo
    mandato saem com `trilha_ambigua: true`.
 
-9. **O expurgo diário apaga o texto das mensagens, o registro de acesso e, desde a Rodada
-   3, a ponta antiga da trilha.** Uma vez por dia o relógio apaga o texto das mensagens dos
-   ciclos fechados há mais de `retencao_mensagens_dias` (90 por padrão; a abordagem fica),
-   os registros de acesso com mais de 12 meses e as decisões da trilha do Art. 20 com mais
-   de **5 anos** (`api/relogio.py::expurgar_trilha`, o único chamador da função de
-   retenção), e diz no log quantas linhas tocou. Os 5 anos são o mínimo: a empresa que
-   configurou `retencao_trilha_anos` maior tem o prazo dela; a que configurou menor fica
-   com 5. A trilha é truncada só pela ponta antiga, e o que sobra continua encadeado
-   (`verificar_cadeia` marca `inicio_truncado`). A trilha dos arquivos de simulação não é
-   tocada pelo relógio (ela sai quando a empresa apaga a simulação). Os prazos de 24 meses
-   dos ciclos e de 6 meses da base depois do contrato estão na configuração e **não são
-   executados**. O dia do último expurgo mora na memória do processo: depois de um reinício
-   ele roda de novo, o que não faz mal (é idempotente).
+9. **O expurgo diário cuida de cinco coisas** (as duas últimas desde a Rodada 4). Uma vez
+   por dia o relógio: apaga o texto das mensagens dos ciclos fechados há mais de
+   `retencao_mensagens_dias` (90 por padrão; a abordagem fica); apaga os registros de acesso
+   com mais de 12 meses; apaga as decisões da trilha do Art. 20 com mais de **5 anos**
+   (`api/relogio.py::expurgar_trilha`; os 5 anos são o mínimo, e a empresa que configurou
+   mais tem o prazo dela); **anonimiza os ciclos de cobrança** com desfecho há mais de
+   `retencao_ciclos_meses` (24 por padrão); e **apaga a simulação do gateway** em que
+   ninguém mexe há mais de 30 dias. Diz no log quantas linhas tocou em cada uma. O que
+   continua **sem execução**: o prazo da base depois do fim do contrato (6 meses), que
+   depende de o site informar quando o contrato acabou (Etapa 5), e o do dataset de
+   retenção do voluntário (ver a seção da Rodada 4, abaixo). O dia do último expurgo mora
+   na memória do processo: depois de um reinício ele roda de novo, o que não faz mal (é
+   idempotente).
 
 10. **O registro de acesso guarda o papel, não a pessoa.** Cada leitura de
     `GET /titular/explicacao/{id}`, `GET /ciclos/{id}` e `GET /ciclos` grava empresa, rota,
@@ -1108,33 +1108,46 @@ entre ofertas e o "não contatar" seguram a oferta nos dois casos, como antes.
 
 **O que isto declara:**
 
-1. **"A oferta mais leve" é a de menor custo para a empresa entre as três que o bandit
-   considerou na rodada** (`voluntary_agent.oferta_mais_leve`; o custo é o de
-   `offer_bandit.offer_cost`). Grave leva a primeira do bandit; quem não é grave leva a
-   mais leve. A tabela 2.4 do plano diz "oferta mais leve" sem dizer qual: esta definição
-   foi escolhida na implementação. Na prática, quando a troca para Pix ou boleto está entre
-   as três, ela é a mais leve (custa R$ 2); senão, costuma ser o desconto de 10%.
+1. **"A oferta mais leve" é a de menor custo entre as ofertas de retenção de verdade**
+   (`voluntary_agent.oferta_mais_leve`; o custo é o de `offer_bandit.offer_cost`). **A troca
+   para Pix ou boleto não entra na comparação** (decisão do Crai, Rodada 4): ela muda o meio
+   de pagamento, não o preço nem o plano. Com as quatro ofertas de hoje, a mais leve é
+   **sempre o desconto de 10% por 3 meses** (custa 30% de uma mensalidade, contra 60% do
+   desconto de 20% e 100% da pausa). Nesse caso o bandit não escolhe; ele continua
+   aprendendo com o aceite ou a recusa dessa oferta. Quando é o bandit que escolhe, a troca
+   para Pix ou boleto continua sendo uma das quatro.
 
-2. **Por intenção explícita, quem não é grave nem preocupante pela posição também leva a
-   mais leve.** A instrução define a intensidade para grave e para preocupante; para o
-   cliente "sem risco" que abre a página de cancelamento, foi adotada a mais leve (a leitura
-   conservadora: a faixa define a intensidade, e ele não é grave). Se a decisão for dar a
-   oferta do bandit a todo evento de intenção, é uma linha em
-   `voluntary_agent.intensidade_da_faixa`.
+2. **Por intenção explícita, o cliente leva a oferta do bandit, qualquer que seja a faixa**
+   (decisão do Crai, Rodada 4). A mais leve fica só para o preocupante que veio pela
+   posição na base.
 
-3. **O disparo em lote não mudou.** Ele já decide pela faixa (grave e preocupante) e continua
-   dando a primeira oferta do bandit às duas. A intensidade pela faixa vale só no pipeline
-   de eventos, e só quando o modelo v3 decide. Alinhar o lote é trocar uma linha (a função
-   é a mesma).
+3. **O disparo em lote usa a mesma regra de intensidade** (decisão do Crai, Rodada 4):
+   grave leva a primeira oferta do bandit; preocupante, a mais leve. Vale para toda linha
+   do lote, tenha o risco vindo da régua ou do modelo, e a decisão de oferta do lote grava
+   `intensidade` na trilha. **No pipeline de eventos com a régua decidindo, nada mudou:** a
+   oferta é a primeira do bandit acima do corte de 0,60, sem intensidade.
 
-4. **A referência de posição pode não ser a base da empresa.** Um evento sozinho é
-   posicionado contra a base da empresa se ela foi pontuada **neste processo** e tem pelo
+4. **A referência de posição da empresa fica em disco, em quantis.** Um evento sozinho é
+   posicionado contra a base da empresa, se ela já foi pontuada alguma vez e tinha pelo
    menos 30 clientes com dado; senão, contra os quantis de treino gravados no meta do
    modelo. Sem nenhuma das duas, ninguém é grave nem preocupante, e só a intenção explícita
-   gera oferta. A referência da empresa mora na memória do processo: depois de um reinício,
-   vale a de treino até a base ser pontuada de novo (alguém abrir o painel de risco, por
-   exemplo). A frase do motivo diz "da sua base" nos dois casos; a trilha registra qual
-   referência foi usada (`posicao.referencia`).
+   gera oferta. Desde a Rodada 4, cada pontuação da base grava os **101 quantis do score e
+   os 101 do MRR** da empresa em `referencias_de_posicao.json`, ao lado do banco de ciclos
+   de retenção (ou onde `CRAI_REFERENCIAS_POSICAO` mandar), e o serviço os lê na subida: a
+   referência **sobrevive ao reinício**. O que isto declara:
+   - o arquivo não tem dado de cliente (só os quantis, a contagem e a data), mas o primeiro
+     e o último quantil são a menor e a maior mensalidade da base, sem dizer de quem;
+   - a posição passou a ser calculada contra 101 quantis, e não contra a lista inteira de
+     scores: a resolução é de 1 ponto percentual, igual à da referência de treino;
+   - a referência é a da **última pontuação da base** (alguém abrir o painel de risco ou o
+     lote rodar), não é recalculada a cada evento; a data fica no arquivo;
+   - se a base encolhe para menos de 30 clientes com dado, a referência da empresa é
+     apagada e volta a valer a de treino;
+   - com mais de um processo do serviço, cada um grava o arquivo inteiro: duas empresas
+     pontuadas no mesmo instante por processos diferentes podem perder uma das gravações,
+     que se refaz na pontuação seguinte;
+   - a frase do motivo diz "da sua base" nos dois casos; a trilha registra qual referência
+     foi usada (`posicao.referencia`).
 
 5. **A trilha diz a regra; o dataset de ciclos, não.** A chave `regra_de_intervencao` entra
    na saída da decisão de risco (as duas regras que intervêm e os dois motivos de não
@@ -1157,26 +1170,191 @@ entre ofertas e o "não contatar" seguram a oferta nos dois casos, como antes.
    `sem_oferta_porque`. Quando a régua decide, `corte_de_intervencao` é 0,60 e as três
    chaves novas vêm nulas.
 
-**Achados deste conserto, não consertados (fora do pedido):**
+**Os dois achados do conserto, consertados na Rodada 4:**
 
-9. **Um segundo evento do mesmo cliente, no mesmo processo, regrava na trilha as decisões
-   do primeiro.** O estado do grafo fica guardado por cliente (`MemorySaver`), e a lista
-   `decisoes` do evento anterior não é zerada no começo do seguinte: `update_crm` grava de
-   novo as decisões antigas, junto com as novas. Medido no caminho da régua, sem este
-   conserto: dois eventos do mesmo cliente deixam 8 linhas na trilha, e não 5. A cadeia
-   continua íntegra (as linhas repetidas são acrescentadas, não alteradas) e o dataset de
-   ciclos não é afetado, mas a trilha fica com decisões duplicadas, e o número cresce a cada
-   evento. É anterior a esta rodada. O conserto provável é uma linha (zerar `decisoes` na
-   entrada do grafo); não foi feito porque muda o que a trilha grava no caminho da régua,
-   que este conserto se comprometeu a não tocar.
+9. **A trilha não repete mais as decisões do evento anterior.** O estado do grafo fica
+   guardado por cliente (`MemorySaver`), e a lista `decisoes` do evento anterior não era
+   zerada: o segundo evento do mesmo cliente regravava as decisões do primeiro (8 linhas
+   onde deviam ser 5). Agora `assess_risk`, a entrada de todo evento, zera o que é do
+   evento: as decisões, as candidatas, as ofertas e os canais considerados, e o motivo de
+   não ofertar. **As linhas duplicadas que já estavam na trilha continuam lá:** a trilha é
+   só de acréscimo, e apagar linha dela é o que ela existe para impedir. Elas têm a data e
+   o conteúdo da decisão original repetidos em linhas com `id` maior.
 
-10. **Na lista "Clientes em risco", o motivo de um cliente que veio por evento pode dizer
-    "crítico pelo valor da conta, não pelo risco" sem ser verdade.** A frase é montada
-    depois, a partir do ciclo gravado (`insights_unificados._linha_do_sdk`), com a lógica da
-    régua: grave com risco abaixo de 0,90 só podia ser "pelo valor". Com o modelo, grave
-    pela posição tem risco baixo na escala antiga. O ciclo gravado não guarda quem decidiu
-    nem a posição; a trilha guarda. Na simulação do gateway a frase já foi corrigida (ali a
-    posição está à mão).
+10. **Na lista "Clientes em risco", o motivo de quem veio por evento diz quem decidiu.** A
+    frase é montada a partir do ciclo gravado mais a **decisão de risco da trilha** daquele
+    evento (uma leitura nova, `retention_log.ultimas_decisoes_de_risco`): se foi o modelo, a
+    frase é a da posição pelo modelo; se a oferta saiu por intenção explícita, a frase diz;
+    se foi a régua, a frase de sempre. A linha também passou a dizer quem decidiu
+    (`decidido_por`), que antes vinha nulo para quem veio por evento. Se a trilha não tiver
+    a decisão daquele ciclo (ela é gravada por melhor esforço), a frase não afirma "crítico
+    pelo valor da conta" para uma mensalidade abaixo do limiar de valor, e `decidido_por`
+    fica nulo.
 
 11. **`app/README.md` ainda desenha o fluxo com "[risco >= 0.60?]".** O arquivo não pode ser
     tocado nesta rodada.
+
+### Pendências de tela e de operação fechadas na Rodada 4 (05/10/2026)
+
+1. **Os ciclos antigos são anonimizados, não apagados.** Um ciclo de cobrança com desfecho
+   há mais que o prazo da empresa perde o que o liga a uma pessoa: o id da recorrência e o
+   da cobrança viram `anonimizado-<número do ciclo>`; os ids do PSP, das tentativas e das
+   devoluções saem; o que restar de texto de mensagem é apagado; e a linha do dataset de
+   treino do involuntário que aponta para o ciclo perde os dois identificadores dela.
+   **Ficam** os valores, as datas, a causa, o estado, a taxa e as features do dataset: as
+   métricas e o extrato daquele período dão o mesmo número de antes (há teste). O que isto
+   declara:
+   - depois disso o ciclo não tem mais nome de cliente na tela (o id não bate com a base),
+     e a busca não o acha pelo cliente;
+   - a exportação e a anonimização a pedido do titular (art. 18) deixam de alcançar esse
+     ciclo, porque ele já não é dele;
+   - **a trilha do Art. 20 não é tocada por este expurgo.** As decisões daquele ciclo
+     continuam nela, com o identificador original, até o prazo próprio da trilha (5 anos);
+   - a linha do dataset de treino sem `ciclo_id` (anterior à Etapa 1) não é alcançada;
+   - ciclo sem desfecho nunca é anonimizado, por mais antigo que seja.
+
+2. **A simulação parada é apagada inteira, pela data dos arquivos.** "Parada" é não ter
+   nenhum arquivo de simulação daquela empresa gravado nos últimos 30 dias (tempo de
+   verdade, não o relógio simulado). O prazo é uma constante
+   (`simulador.DIAS_DE_SIMULACAO_PARADA`), não é configurável pela empresa.
+
+3. **O que falta nos expurgos, e por quê.**
+   - **A base depois do fim do contrato (6 meses):** o backend não sabe quando o contrato
+     de uma empresa acabou. Quem sabe é o site (Etapa 5). Precisa de: a data de fim do
+     contrato por empresa; uma passagem que, 6 meses depois, apague a base, as marcas de
+     "não contatar", as chaves de API, a configuração e o arquivo de referência de posição
+     daquela empresa.
+   - **O dataset de retenção do voluntário (`ciclos_retencao`):** seria preciso (a)
+     decidir o prazo, que hoje não existe na configuração; (b) garantir que ele é maior que
+     o intervalo máximo entre ofertas (365 dias), porque o limite de contato lê a última
+     oferta enviada dali; (c) anonimizar em vez de apagar, trocando `user_id` por um
+     marcador e mantendo features, oferta e desfecho, porque é dado de treino do bandit e
+     do modelo de risco; e (d) fazer o mesmo com a tabela das retenções mantidas, de onde
+     saem o valor mantido e o estorno. Não foi feito.
+
+4. **A próxima ação do sistema é das cobranças reais, e é uma só.** O cartão do
+   Involuntário mostra a mais próxima entre a próxima tentativa agendada e o próximo envio
+   de mensagem (a escolhida que espera o horário, ou a recomendada quando o prazo de
+   escolha vencer). O fim do prazo de recuperação de um ciclo não entra. Com "Mostrar:
+   Simulação" o cartão continua mostrando só o que é real: os ciclos simulados andam no
+   relógio da simulação.
+
+5. **A busca do topo** procura o texto no nome do cliente (em qualquer posição) e no começo
+   do identificador do cliente e do id da recorrência. Devolve no máximo 8 clientes e 8
+   cobranças, sem contato. No SQLite (desenvolvimento) ela não distingue maiúscula de
+   minúscula só nas letras sem acento; no Postgres, em todas. Fora do plano premium vêm só
+   as cobranças. Entra no registro de acesso.
+
+6. **O sino** mostra o número de `GET /metrics/involuntario/mes` (quem espera a escolha
+   agora, sem contar quem já escolheu e só espera o horário) e consulta de novo a cada 60
+   segundos, como as páginas. Ele não avisa de mais nada.
+
+7. **O extrato em CSV vem do backend** (`GET /extrato/csv`): separador `;`, vírgula
+   decimal, uma linha de total, a marca de UTF-8 no começo. Uma célula de texto que comece
+   por `=`, `+`, `-` ou `@` ganha um apóstrofo na frente, para a planilha não a executar
+   como fórmula. Na demonstração (sem backend), o arquivo é montado na tela com as linhas
+   que ela mostra.
+
+8. **`POST /clientes/importar` exige o papel de dono ou de administrador.** O token sem
+   papel recebe 403, como nas outras rotas que escrevem. O papel só existe no token de
+   desenvolvimento e passará a vir do login de verdade (Etapa 5).
+
+---
+
+### O modo piloto: o que ele declara (05/10/2026)
+
+O plano de negócio promete um piloto sem cobrança. Desde a Rodada 4 (Fase 3) o sistema tem
+esse modo, com seis regras decididas pelo Crai (M1 a M6). O que ele faz e o que não faz:
+
+1. **Quem define o piloto é a CRAI, numa variável de ambiente.** `CRAI_TENANTS_EM_PILOTO`
+   traz os ids das empresas em piloto, separados por vírgula. Nenhuma rota liga ou desliga
+   o piloto, e a configuração da empresa não tem essa chave (mandar `piloto` no
+   `PUT /configuracao` responde 422). A variável é lida a cada recuperação, mas o processo
+   só enxerga o valor novo depois de reiniciar: **entrar ou sair do piloto é mudar a
+   variável e reiniciar o serviço**. Não há data de início nem de fim guardada, nem
+   histórico de quem esteve em piloto: a marca fica em cada linha recuperada.
+
+2. **Em piloto, a taxa cobrada é zero, e a que seria cobrada fica guardada ao lado.** No
+   involuntário, o ciclo recuperado é gravado com `fee = 0` e com `fee_fora_do_piloto` (a
+   taxa normal daquele valor). No voluntário, a linha do valor mantido, igual. Como todas
+   as contas de líquido usam a `fee` gravada, o líquido vira o valor inteiro na linha do
+   ciclo, nas métricas do mês, na Visão geral, na atividade e no extrato, sem conta nova.
+   Fora do piloto, `fee_fora_do_piloto` é nulo, que quer dizer "esta linha não é de
+   piloto" (e não "taxa de zero reais").
+
+3. **A taxa que seria cobrada aparece só no extrato**, em `GET /extrato` (campo
+   `fee_fora_do_piloto` por linha, e o bloco `piloto` com a soma do mês) e em
+   `GET /extrato/csv` (coluna "Taxa fora do piloto (R$)", logo depois da taxa). A coluna
+   aparece para a empresa em piloto e, depois dele, nos meses que ainda têm linha de
+   piloto. Nenhuma outra rota traz esse número, e há teste que varre as outras rotas.
+
+4. **O que decide é o momento em que a linha é gravada, e ela nunca é recalculada.**
+   Involuntário: o instante em que a confirmação do pagamento fecha o ciclo. Um ciclo
+   aberto durante o piloto e pago depois dele tem taxa; um ciclo recuperado antes de a
+   empresa entrar no piloto continua com a taxa que tinha. Voluntário: o instante do
+   aceite, porque o aceite passou a gravar a linha do valor mantido na hora (antes ela
+   nascia na leitura seguinte da tela). **Resíduo declarado:** se essa gravação no aceite
+   falhar (é de melhor esforço), a linha nasce na próxima leitura, com o piloto daquele
+   momento. E o aceite sorteado da demonstração continua nascendo na leitura.
+
+5. **O estorno funciona igual.** Em piloto não há taxa a devolver (`fee_devolvida = 0`), e
+   o líquido que sai do mês é o valor devolvido inteiro. No extrato, a linha do estorno
+   devolve também a taxa que seria cobrada, na mesma proporção do valor devolvido, para o
+   relatório do fim do piloto não contar taxa sobre dinheiro que voltou. Essa parte é
+   calculada na leitura (não é gravada): o último estorno leva o resto, e a soma fecha no
+   centavo.
+
+6. **A receita interna conta zero.** No dataset de ciclos (`success_fee`) e nas métricas
+   internas (`fee_total`, `margem`), a recuperação de uma empresa em piloto entra com taxa
+   zero. A margem dessas empresas fica negativa pelo custo das mensagens, que é o que um
+   piloto é. O rótulo de treino (`recovered`) não muda.
+
+7. **A tela.** A Visão geral mostra a etiqueta "Período de piloto: sem taxa" ao lado do
+   período, e o extrato repete o aviso e mostra a coluna. Na demonstração (sem backend)
+   não existe piloto.
+
+8. **O que o modo piloto NÃO é.** Não é um desconto parcial (a taxa é zero ou a normal).
+   Não é por produto: vale para o involuntário e o voluntário juntos. Não muda o
+   percentual da taxa, que continua um só por instalação (`CRAI_SUCCESS_FEE_PCT`, com a
+   variável própria do voluntário). E não emite o relatório do fim do piloto: ele é o
+   extrato dos meses do piloto, com a coluna somada.
+
+---
+
+### O experimento das redes neurais: o que ele mede e o que não (05/10/2026)
+
+A Rodada 4 (Fase 5) mediu duas redes neurais como **desafiantes**, com as mesmas features
+dos modelos atuais: uma de classificação no lugar do XGBoost + Random Forest, e uma de
+regressão no lugar do LSTM + Prophet. O código é `app/crai/scripts/experimento_redes_neurais.py`;
+o resultado está em `docs/evidencia_redes_neurais/` (`LEIA.md`, `resultados.json` e a saída
+do treino). **Nada foi promovido**: as redes ficam em `app/models/experimentos_rn/` e nenhum
+código de produção as carrega.
+
+1. **A base é sintética.** O que se mede é quem aprende melhor a regra que o próprio projeto
+   escreveu. O teto de Bayes do holdout (0,7106) mostra que o modelo atual (0,7096) já está
+   colado no que há para aprender: não havia espaço para a rede vencer por margem.
+
+2. **Uma configuração só, sem busca de hiperparâmetros.** A rede de classificação é uma MLP
+   do scikit-learn com duas camadas (64 e 32). Uma busca poderia mover o número. A regra de
+   decisão pede vantagem acima do desvio da validação cruzada justamente para não trocar de
+   modelo por ruído.
+
+3. **A versão em PyTorch não foi feita.** A instrução a pedia só se sobrasse tempo.
+
+4. **A rede de regressão recebe a janela achatada** (30 dias x 5 features = 150 números) e
+   devolve um número de dias. Uma arquitetura recorrente nova, para regressão, não foi
+   testada. Ela erra menos em dias na média e acerta menos vezes o dia certo.
+
+5. **"Pouco histórico" é uma definição do experimento:** a janela só tem os últimos 14 ou 7
+   dias reais, e os outros entram zerados. Nenhum dos modelos foi treinado com janelas
+   assim. O corte mede o que aconteceria hoje com um cliente novo, e é onde o Prophet mais
+   ajuda. Em produção não existe hoje um caminho de "cliente sem histórico": a série de 30
+   dias é sempre simulada.
+
+6. **O limiar foi escolhido numa partição de validação tirada de dentro do treino** (20% dos
+   clientes de treino). O artefato de produção viu esses clientes no treino dele; por isso o
+   experimento traz duas comparações: uma como em produção (os dois modelos treinados em
+   todo o treino) e outra com o algoritmo atual retreinado sem a validação.
+
+7. **Trocar de modelo é decisão do Crai.** A regra de decisão foi escrita antes de medir e
+   está no `LEIA.md`. Pela regra, ficam os modelos atuais.

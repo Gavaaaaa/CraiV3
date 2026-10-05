@@ -200,3 +200,4 @@ módulo indicado.
 | `CRAI_RECOVERY_DB` | `crai/dunning/recovery_log.py` |
 | `CRAI_RETRY_STATE` | `crai/dunning/retry_state.py` |
 | `CRAI_SUCCESS_FEE_PCT`, `CRAI_CUSTO_INTERVENCAO_WHATSAPP`, `CRAI_CUSTO_TENTATIVA_PIX` | `crai/config.py` |
+| `CRAI_TENANTS_EM_PILOTO` | `crai/config.py` (as empresas em período de piloto, separadas por vírgula: a taxa cobrada delas é zero; quem preenche é a CRAI, e a mudança vale a partir do reinício do serviço) |
