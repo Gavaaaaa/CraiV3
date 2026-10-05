@@ -237,6 +237,7 @@ async def listar_ciclos(
     cursor: Optional[str] = None,
     limite: Optional[int] = None,
     incluir_simulados: bool = False,
+    aguardando_escolha: bool = False,
     conta: dict = Depends(get_conta),
 ) -> dict:
     """Os ciclos da empresa, do mais recentemente atualizado ao mais antigo.
@@ -251,6 +252,10 @@ async def listar_ciclos(
     simulação do gateway desta empresa, com os mesmos filtros, cada um com
     `simulado: true` e o nome do cliente fictício. Sem o parâmetro, a lista é
     só de ciclos reais.
+
+    `?aguardando_escolha=true` (Rodada 4) deixa só os ciclos que esperam a
+    escolha da empresa agora: é a mesma conta do número `aguardando_escolha`
+    das métricas (o sino do painel mostra o número e leva a esta lista).
     """
     tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
@@ -270,7 +275,8 @@ async def listar_ciclos(
     pagina = cc.listar_ciclos(
         tenant_id, status=lista_status, desde=abertos_desde, ate=abertos_ate,
         texto=texto or None,
-        cursor=_decodificar_cursor(cursor) if cursor else None, limite=limite + 1)
+        cursor=_decodificar_cursor(cursor) if cursor else None, limite=limite + 1,
+        aguardando_escolha=aguardando_escolha)
     tem_mais = len(pagina) > limite
     pagina = pagina[:limite]
     nomes = _nomes(tenant_id, pagina)
@@ -278,7 +284,8 @@ async def listar_ciclos(
     if incluir_simulados and not cursor:
         simulados = simulador.na_simulacao(tenant_id, lambda: (
             cc.listar_ciclos(tenant_id, status=lista_status, desde=abertos_desde,
-                             ate=abertos_ate, texto=texto or None, limite=LIMITE_MAXIMO),
+                             ate=abertos_ate, texto=texto or None, limite=LIMITE_MAXIMO,
+                             aguardando_escolha=aguardando_escolha),
             simulador.nomes(tenant_id)))
         if simulados:
             do_simulador, nomes_ficticios = simulados
@@ -687,6 +694,47 @@ def _resumo(linhas: list, estornos: Optional[list] = None) -> dict:
                          "valor_liquido_estornado": estornado}}
 
 
+def proxima_acao_do_sistema(tenant_id: str, agora: datetime) -> Optional[dict]:
+    """O que o sistema vai fazer em seguida nos ciclos REAIS desta empresa, e
+    quando (Rodada 4: o cartão "Próxima ação do sistema"). É a mais próxima entre:
+
+      - a próxima tentativa de cobrança agendada (ciclos em recobrança);
+      - o envio de uma mensagem que já foi escolhida e espera a janela de contato;
+      - o envio automático da recomendada (no modo automático, na próxima janela;
+        no modo "eu escolho", quando o prazo de escolha vencer).
+
+    `{quando, tipo, descricao, ciclo_id}`, ou None se nada está agendado. Sem
+    nome nem identificador do cliente: só o id do ciclo, para a tela abrir.
+    O fim do prazo de recuperação de um ciclo não entra: não é uma ação sobre
+    o cliente."""
+    config = configuracao.ler(tenant_id)
+    candidatas = []
+    tentativa = cc.proxima_tentativa_pendente(tenant_id)
+    if tentativa is not None:
+        candidatas.append({"quando": cc._data(tentativa["agendada_para"]), "tipo": "tentativa",
+                           "descricao": f"Tentativa {tentativa['numero']} de cobrança",
+                           "ciclo_id": tentativa["ciclo_id"]})
+    for ciclo in cc.ciclos_esperando_mensagem(tenant_id):
+        if ciclo["tem_escolhida"]:
+            quando = configuracao.proximo_inicio_da_janela(config, agora)
+            descricao = "Envio da mensagem escolhida"
+        elif config["modo_mensagem_involuntario"] == configuracao.MODO_AUTOMATICO:
+            quando = configuracao.proximo_inicio_da_janela(config, agora)
+            descricao = "Envio da mensagem recomendada"
+        else:
+            inicio = cc._data(ciclo.get("aguardando_escolha_em")) or agora
+            limite = inicio + timedelta(hours=config["prazo_escolha_horas"])
+            quando = configuracao.proximo_inicio_da_janela(config, max(limite, agora))
+            descricao = "Envio automático da mensagem recomendada"
+        candidatas.append({"quando": quando, "tipo": "mensagem", "descricao": descricao,
+                           "ciclo_id": ciclo["id"]})
+    candidatas = [c for c in candidatas if c["quando"] is not None]
+    if not candidatas:
+        return None
+    proxima = min(candidatas, key=lambda c: (c["quando"], c["ciclo_id"]))
+    return {**proxima, "quando": datas.iso_com_fuso(proxima["quando"])}
+
+
 @router.get("/metrics/involuntario/mes")
 async def metricas_do_mes(mes: Optional[str] = None, incluir_simulados: bool = False,
                           tenant_id: str = Depends(get_tenant_id)) -> dict:
@@ -718,7 +766,10 @@ async def metricas_do_mes(mes: Optional[str] = None, incluir_simulados: bool = F
             "ciclos_abertos_no_mes": ler(
                 lambda d: cc.contagem_por_status(tenant_id, inicio + d, fim + d)),
             # Agora, não no mês: quantos ciclos esperam a escolha da empresa.
-            "aguardando_escolha": ler(lambda d: cc.contar_aguardando_escolha(tenant_id))}
+            "aguardando_escolha": ler(lambda d: cc.contar_aguardando_escolha(tenant_id)),
+            # Rodada 4: o que o sistema faz em seguida nos ciclos reais, e quando
+            # (None se nada está agendado). Os simulados têm relógio próprio e não entram.
+            "proxima_acao": proxima_acao_do_sistema(tenant_id, datas.agora_local())}
 
 
 @router.get("/metrics/involuntario/serie")

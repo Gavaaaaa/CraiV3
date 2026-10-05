@@ -56,6 +56,15 @@ def _xlsx(linhas) -> bytes:
 
 
 @pytest.fixture
+def supabase_falso(supabase_falso):
+    """Rodada 4: o anexo da base passou a exigir dono ou administrador. O token
+    destes testes, que nao dizia o papel, passa a ser o do dono."""
+    original = supabase_falso.bearer
+    supabase_falso.bearer = lambda tenant_id=None, **s: original(tenant_id, **{"papel": "owner", **s})
+    return supabase_falso
+
+
+@pytest.fixture
 def cliente():
     with TestClient(app_module.app, raise_server_exceptions=False) as c:
         yield c

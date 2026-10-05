@@ -58,7 +58,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import ambiente
-from ..config import custo_intervencao, custo_tentativa_pix, success_fee_pct
+from ..config import custo_intervencao, custo_tentativa_pix, success_fee_cobrada_pct
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,9 @@ def registrar_ciclo(state: dict, tentativas_usadas: int = 0) -> Optional[int]:
         "tentativas_usadas": int(tentativas_usadas or 0),
         "custo_total": custo_realizado(tentativas_usadas,
                                        bool(state.get("dunning_sent"))),
-        "success_fee": (round(float(state.get("amount") or 0) * success_fee_pct(), 2)
+        # A fee COBRADA: zero para empresa em piloto (Rodada 4, Fase 3).
+        "success_fee": (round(float(state.get("amount") or 0)
+                              * success_fee_cobrada_pct(state.get("tenant_id")), 2)
                         if state.get("recovered") else 0.0),
         "amount": _num(state.get("amount")),
         "ciclo_id": int(state["ciclo_id"]) if state.get("ciclo_id") else None,
@@ -337,7 +339,7 @@ def registrar_recuperacao(
                     WHERE id = ?""",
                 (_agora(), int(tentativas_usadas or 0),
                  custo_realizado(tentativas_usadas, dunning_enviado),
-                 round(valor * success_fee_pct(), 2), valor, linha["id"]),
+                 round(valor * success_fee_cobrada_pct(tenant_id), 2), valor, linha["id"]),
             )
             return True
     except Exception as e:                       # noqa: BLE001
@@ -412,7 +414,8 @@ def reconciliar_recuperados(ciclos: list[dict]) -> list[int]:
                         WHERE id = ?""",
                     (ciclo.get("recuperado_em") or _agora(), usadas,
                      custo_realizado(usadas, mensagem),
-                     round(valor * success_fee_pct(), 2), valor, aberta["id"]))
+                     round(valor * success_fee_cobrada_pct(ciclo["tenant_id"]), 2), valor,
+                     aberta["id"]))
         except Exception as e:                   # noqa: BLE001
             logger.warning("[RECOVERY-LOG] Falha ao reconciliar ciclo %s: %s", ciclo.get("id"), e)
             continue

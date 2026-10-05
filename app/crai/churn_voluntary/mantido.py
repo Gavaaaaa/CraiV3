@@ -60,6 +60,7 @@ Este módulo NÃO importa de `api/app.py`.
 """
 
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS retencoes_mantidas (
     valor_estornado       REAL,
     fee_estornada         REAL,
     criado_em             TEXT    NOT NULL,
+    fee_fora_do_piloto    REAL,
     UNIQUE (tenant_id, ciclo_retencao_id)
 );
 CREATE INDEX IF NOT EXISTS idx_mantidas_aceite ON retencoes_mantidas (tenant_id, aceito_em);
@@ -111,6 +113,15 @@ CREATE INDEX IF NOT EXISTS idx_mantidas_cancelamento
 def _conectar():
     conn = ciclo_cobranca._conectar()
     conn.executescript(_DDL)
+    # Rodada 4, Fase 3 (modo piloto): a coluna nova num banco que já existia.
+    # `NULL` em toda linha que não é de piloto.
+    if "fee_fora_do_piloto" not in {l[1] for l in conn.execute(
+            "PRAGMA table_info(retencoes_mantidas)")}:
+        try:
+            conn.execute("ALTER TABLE retencoes_mantidas ADD COLUMN fee_fora_do_piloto REAL")
+        except sqlite3.OperationalError:
+            # Outro processo acrescentou a coluna entre a leitura e o ALTER.
+            pass
     return conn
 
 
@@ -137,13 +148,18 @@ def desconto_concedido(offer_type: str, mrr: float, meses: Optional[int] = None)
     return 0.0
 
 
-def valores_da_retencao(offer_type: str, mrr: float) -> dict:
-    """V1 para UMA retenção: base (meses de MRR menos o desconto), fee e líquido."""
+def valores_da_retencao(offer_type: str, mrr: float, tenant_id: Optional[str] = None) -> dict:
+    """V1 para UMA retenção: base (meses de MRR menos o desconto), fee e líquido.
+
+    Com o `tenant_id` de uma empresa em PILOTO (Rodada 4, Fase 3), a fee
+    cobrada é zero, o líquido é a base inteira, e `fee_fora_do_piloto` traz a
+    fee que seria cobrada. Fora do piloto, `fee_fora_do_piloto` é `None`."""
     desconto = desconto_concedido(offer_type, mrr)
     base = round(max(0.0, MESES_DE_MRR_MANTIDOS * mrr - desconto), 2)
-    fee = round(base * config.success_fee_voluntario_pct(), 2)
+    fee, fora = config.taxa_cobrada_e_fora_do_piloto(
+        base * config.success_fee_voluntario_pct(), tenant_id)
     return {"meses": MESES_DE_MRR_MANTIDOS, "desconto": desconto, "valor_base": base,
-            "fee": fee, "liquido": round(base - fee, 2)}
+            "fee": fee, "liquido": round(base - fee, 2), "fee_fora_do_piloto": fora}
 
 
 # ── A sincronização ───────────────────────────────────────────────────────
@@ -188,11 +204,15 @@ def sincronizar(tenant_id: str) -> dict:
         if mrr is None or float(mrr) <= 0 or aceito_em is None:
             feito["sem_valor"] += 1
             continue
-        v = valores_da_retencao(c["offer_type"], float(mrr))
+        # O piloto é o de AGORA, que é quando a linha nasce: por isso o aceite
+        # chama esta sincronização na hora (ver `voluntary_agent`), e uma linha
+        # já gravada nunca é recalculada (M5).
+        v = valores_da_retencao(c["offer_type"], float(mrr), tenant_id)
         novas.append((tenant_id, c["id"], cliente_id, c["offer_type"], c.get("channel"),
                       _texto(aceito_em), round(float(mrr), 2), v["meses"], v["desconto"],
                       v["valor_base"], v["fee"],
-                      1 if c.get("origem_desfecho") == ORIGEM_SORTEIO else 0, agora))
+                      1 if c.get("origem_desfecho") == ORIGEM_SORTEIO else 0, agora,
+                      v["fee_fora_do_piloto"]))
 
     prazo = configuracao.ler(tenant_id)["prazo_estorno_dias"]
     conn = _conectar()
@@ -202,8 +222,9 @@ def sincronizar(tenant_id: str) -> dict:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO retencoes_mantidas
                        (tenant_id, ciclo_retencao_id, cliente_id, offer_type, channel, aceito_em,
-                        mrr, meses, desconto, valor_base, fee, simulado, criado_em)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", linha)
+                        mrr, meses, desconto, valor_base, fee, simulado, criado_em,
+                        fee_fora_do_piloto)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", linha)
             feito["novas"] += cur.rowcount
         candidatas = [dict(l) for l in conn.execute(
             "SELECT id, cliente_id, aceito_em, valor_base, fee FROM retencoes_mantidas "

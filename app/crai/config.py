@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 # ── Envs ─────────────────────────────────────────────────────────────────
 ENV_SUCCESS_FEE = "CRAI_SUCCESS_FEE_PCT"
 ENV_SUCCESS_FEE_VOLUNTARIO = "CRAI_SUCCESS_FEE_VOLUNTARIO_PCT"
+# Rodada 4, Fase 3 (modo piloto): as empresas em período de piloto, separadas
+# por vírgula. Quem escreve esta lista é a CRAI, na instalação: nenhuma rota da
+# empresa liga ou desliga o piloto (M1).
+ENV_TENANTS_EM_PILOTO = "CRAI_TENANTS_EM_PILOTO"
 
 # Rodada 3, Fase 6 (descadastro): a linha que toda mensagem ao cliente final
 # carrega. Quem responde SAIR é marcado como "não contatar" e não recebe mais
@@ -120,6 +124,46 @@ def success_fee_voluntario_pct() -> float:
     nenhuma no código, e a única taxa declarada da instalação era essa.
     """
     return _float_da_env(ENV_SUCCESS_FEE_VOLUNTARIO, success_fee_pct(), 0.0, 1.0)
+
+
+# ── Modo piloto (Rodada 4, Fase 3) ───────────────────────────────────────
+#
+#   M1  quem define o piloto é a CRAI, pela env `CRAI_TENANTS_EM_PILOTO`;
+#   M2  em piloto, a fee COBRADA é zero: o líquido é o valor inteiro;
+#   M3  a fee que seria cobrada fora do piloto continua sendo calculada e é
+#       guardada ao lado (`fee_fora_do_piloto`); só o extrato a mostra;
+#   M5  a env é lida a cada recuperação: sair do piloto vale dali para a frente,
+#       e o que foi gravado com fee zero durante o piloto não é recalculado.
+
+def tenants_em_piloto() -> frozenset:
+    """As empresas em período de piloto (M1). Lida da env a cada chamada; os
+    ids vêm separados por vírgula (ou ponto e vírgula), e espaço em volta não
+    conta. A comparação é exata: o `tenant_id` distingue maiúscula."""
+    bruto = os.getenv(ENV_TENANTS_EM_PILOTO) or ""
+    return frozenset(p.strip() for p in bruto.replace(";", ",").split(",") if p.strip())
+
+
+def tenant_em_piloto(tenant_id) -> bool:
+    """`True` se esta empresa está na lista do piloto. Sem id, não está."""
+    return bool(tenant_id) and str(tenant_id) in tenants_em_piloto()
+
+
+def taxa_cobrada_e_fora_do_piloto(taxa_cheia: float, tenant_id) -> tuple:
+    """M2 e M3 numa conta só: `(fee cobrada, fee fora do piloto)`.
+
+    Fora do piloto: `(taxa_cheia, None)`, como sempre foi. Em piloto:
+    `(0.0, taxa_cheia)`: nada é cobrado, e o que seria cobrado fica guardado
+    para o relatório do fim do piloto. `None` quer dizer "esta linha não é de
+    piloto", e é diferente de uma taxa de zero reais."""
+    cheia = round(float(taxa_cheia), 2)
+    return (0.0, cheia) if tenant_em_piloto(tenant_id) else (cheia, None)
+
+
+def success_fee_cobrada_pct(tenant_id) -> float:
+    """O percentual que a CRAI de fato cobra desta empresa na recuperação:
+    zero em piloto (M2), `success_fee_pct()` fora dele. É o número do dataset
+    de ciclos e das métricas internas de receita."""
+    return 0.0 if tenant_em_piloto(tenant_id) else success_fee_pct()
 
 
 def custo_intervencao(canal: str = CANAL_PADRAO) -> float:

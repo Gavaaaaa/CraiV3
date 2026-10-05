@@ -213,7 +213,11 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
         props["phone"] = linha["phone"]
 
     rodada = va._bandit.classificar_ofertas(tenant_id, perfil, risco, mrr=mrr)
-    oferta = rodada[0]["offer"]
+    # A mesma regra de intensidade do pipeline de eventos (Rodada 4): grave leva
+    # a oferta do bandit; preocupante, a mais leve das ofertas de retenção.
+    intensidade = va.intensidade_da_faixa(criticidade)
+    escolhida, consideradas = va.escolher_pela_intensidade(rodada, intensidade)
+    oferta = escolhida["offer"]
 
     # Trilha do Art. 20: o risco desta linha veio de `batch_scoring` (régua
     # da base ou global, ou modelo treinado se ativo); a oferta, do bandit.
@@ -242,13 +246,16 @@ async def tratar(linha: dict, tenant_id: str, gerar_texto: bool = False) -> tupl
                   "mrr": retention_log._num(mrr), "billing_profile": perfil,
                   **entradas_comportamentais(props_do_risco)},
         saida=saida_risco, contribuicoes=avaliacao["contribuicoes"])
-    decisao_oferta = va.decisao_de_oferta(tenant_id, _user_id(cid), perfil, risco, mrr, rodada)
+    decisao_oferta = va.decisao_de_oferta(tenant_id, _user_id(cid), perfil, risco, mrr, rodada,
+                                          escolhida=escolhida, intensidade=intensidade,
+                                          consideradas=consideradas)
 
     estado = {
         "tenant_id": tenant_id, "user_id": _user_id(cid), "event": EVENTO_LOTE,
         "props": props, "risk_score": risco, "profile": perfil,
         "criticality": criticidade, "is_critical": criticidade == "critico",
-        "offer_type": oferta, "ofertas_consideradas": rodada[:va.N_CANDIDATAS],
+        "offer_type": oferta, "ofertas_consideradas": consideradas,
+        "intensidade_da_oferta": intensidade,
         "channel": None, "on_site_now": props["on_site_now"],
         "prior_channel_success": None, "message": None,
         "offer_sent": False, "accepted": None, "retained": False,

@@ -863,6 +863,9 @@ class TestRegistrarEstorno:
 # ══════════════════════════════════════════════════════════════════════════
 
 NOVAS = ("estornado_em", "valor_estornado", "fee_estornada")
+# Rodada 4, Fase 3: a coluna do modo piloto veio depois; um banco de antes do
+# Bloco 5 tambem nao a tinha, e a migracao a acrescenta por ultimo.
+DEPOIS_DO_BLOCO_5 = ("fee_fora_do_piloto",)
 
 
 def _linhas(banco, tabela) -> list:
@@ -904,7 +907,7 @@ class TestMigracao:
         e sem a tabela de estornos), com ciclos em todos os estados."""
         banco = tmp_path / "bloco4.db"
         ddl = "\n".join(l for l in cc._DDL_CICLOS.replace("{nome}", "ciclos_cobranca").split("\n")
-                        if not any(c in l for c in NOVAS))
+                        if not any(c in l for c in NOVAS + DEPOIS_DO_BLOCO_5))
         with sqlite3.connect(banco) as conn:
             conn.executescript(ddl)
             for i, estado in enumerate(cc.ESTADOS, start=1):
@@ -923,7 +926,8 @@ class TestMigracao:
 
         _abrir_com_o_codigo_de_hoje(banco, monkeypatch)
 
-        assert _colunas(banco, "ciclos_cobranca")[-3:] == list(NOVAS)
+        # As 3 do Bloco 5 e, depois delas, a do modo piloto (Rodada 4, Fase 3).
+        assert _colunas(banco, "ciclos_cobranca")[-4:] == list(NOVAS + DEPOIS_DO_BLOCO_5)
         _conferir_preservado(banco, antes)
         # O banco migrado e um banco novo têm as mesmas colunas, na mesma ordem.
         novo = tmp_path / "novo.db"

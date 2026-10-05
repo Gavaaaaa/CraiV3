@@ -48,8 +48,8 @@ from ..agent.pix_codes import CAUSA_REVOGADA
 from ..agent.workflow import (
     concluir_ciclo_por_resultado,
     estado_do_ciclo,
+    fee_da_recuperacao,
     refazer_por_revogacao,
-    success_fee,
     tentativas_ja_disparadas,
     update_roi_dashboard,
 )
@@ -61,6 +61,7 @@ from ..churn_voluntary import (clientes_importados, disparo_lote, importacao,
                                insights_unificados, origem_da_base, retention_log)
 from ..integrations import email_sender
 from ..accounts import get_conta, get_tenant_id
+from ..accounts.auth import exigir_papel
 from ..integrations.payment_gateway import (
     DEGRADACOES_BLOQUEANTES,
     MOTIVO_SEM_IDENTIFICACAO,
@@ -87,6 +88,7 @@ from . import dev_token
 from . import integracao as integracao_api
 from . import relogio
 from . import assistente as assistente_api
+from . import busca as busca_api
 from . import eventos_recebidos
 from . import simulacao as simulacao_api
 from . import titular as titular_api
@@ -1235,6 +1237,8 @@ app.include_router(simulacao_api.router)
 # O assistente do dashboard (Rodada 3) - `api/assistente.py`. Só lê: a
 # documentação de produto e os totais da empresa do token.
 app.include_router(assistente_api.router)
+# A busca do topo do painel (Rodada 4) - `api/busca.py`. Só lê, da empresa do token.
+app.include_router(busca_api.router)
 # O token de DESENVOLVIMENTO do dashboard: a rota só é montada com
 # `ENV=development`, e a chave que assina nasce aqui, em memória — ver
 # `api/dev_token.py`. Fora de `development`, `/dev/token` não existe.
@@ -1248,9 +1252,11 @@ async def importar_clientes(
         default=None,
         description='JSON {"coluna no arquivo": "campo esperado"}, ex. '
                     '{"Última atividade": "days_since_last", "MRR (R$)": "mrr"}'),
-    tenant_id: str = Depends(get_tenant_id),
+    conta: dict = Depends(get_conta),
 ) -> JSONResponse:
-    """Upload em lote da base de clientes da empresa autenticada.
+    """Upload em lote da base de clientes da empresa autenticada. Exige o
+    papel `owner` ou `admin` (Rodada 4; membro recebe 403, antes de o arquivo
+    ser lido).
 
     Campos esperados no arquivo (nome exato, case-insensitive, ou via
     `mapeamento`): `customer_id_externo`, `mrr`, `billing_profile`
@@ -1261,6 +1267,8 @@ async def importar_clientes(
     colunas_nao_encontradas, linhas_sem_dado_comportamental}`. Uma linha
     inválida não derruba o lote. Ver `churn_voluntary/importacao.py`.
     """
+    exigir_papel(conta, "owner", "admin")
+    tenant_id = conta["tenant_id"]
     conteudo = await arquivo.read()
     try:
         relatorio = importacao.importar(
@@ -1909,10 +1917,12 @@ async def _fechar_ciclo_recuperado(
 
         # O valor autoritativo é o da cobrança que FALHOU e abriu o ciclo.
         amount = float(ciclo["valor"] or valor or 0.0)
-        fee = success_fee(amount, True)
+        # Em piloto, a fee cobrada é zero e a que seria cobrada fica ao lado.
+        fee, fee_fora_do_piloto = fee_da_recuperacao(amount, tenant_do_ciclo)
         estava_com_mensagem = ciclo["estado"] == ciclo_cobranca.MENSAGEM_ENVIADA
         fechamento = ciclo_cobranca.fechar_como_recuperado(
-            ciclo["id"], fee, agora, id_cobranca=id_cobranca, e2e_confirmacao=e2e_id)
+            ciclo["id"], fee, agora, id_cobranca=id_cobranca, e2e_confirmacao=e2e_id,
+            fee_fora_do_piloto=fee_fora_do_piloto)
         print(f"[PIX] Cobrança confirmada — ciclo {ciclo['id']} de {customer_id} fechado como "
               f"recuperado (tentativa paga: {fechamento['tentativa_paga'] or 'nenhuma disparada'}, "
               f"{fechamento['canceladas']} cancelada(s), e2e {e2e_id[:16]})")
@@ -1959,7 +1969,7 @@ async def _fechar_pela_linha_do_dataset(customer_id: str, e2e_id: str, valor: Op
         "antes da Etapa 1. Ciclo criado como recuperado a partir dela.",
         customer_id, linha["e2e_id"], linha["registrado_em"], dias)
     amount = float(linha["amount"] or valor or 0.0)
-    fee = success_fee(amount, True)
+    fee, fee_fora_do_piloto = fee_da_recuperacao(amount, linha["tenant_id"])
     try:
         ciclo = ciclo_cobranca.abrir_ciclo(
             linha["tenant_id"], customer_id, amount, linha.get("failure_cause") or "desconhecida",
@@ -1969,7 +1979,8 @@ async def _fechar_pela_linha_do_dataset(customer_id: str, e2e_id: str, valor: Op
             eprofit=linha.get("eprofit"))
     except ciclo_cobranca.CicloJaExiste as e:
         ciclo = ciclo_cobranca.ciclo_por_id(e.ciclo_id)
-    ciclo_cobranca.atualizar(ciclo["id"], agora, fee=fee, decidido_em=agora.isoformat())
+    ciclo_cobranca.atualizar(ciclo["id"], agora, fee=fee, fee_fora_do_piloto=fee_fora_do_piloto,
+                             decidido_em=agora.isoformat())
     ciclo = ciclo_cobranca.ciclo_por_id(ciclo["id"])
     estado = estado_do_ciclo(ciclo)
     estado["recovered"] = True

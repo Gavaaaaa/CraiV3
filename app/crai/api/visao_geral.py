@@ -38,8 +38,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
-from .. import simulador
+from .. import config, simulador
 from ..accounts import get_conta
 from ..accounts.auth import PLANO_PREMIUM, exigir_papel
 from ..agent.pix_codes import CAUSA_LEGIVEL
@@ -182,6 +183,9 @@ async def visao_geral(dias: Optional[int] = None, incluir_simulados: bool = Fals
         "ciclos_com_desfecho": com_desfecho,
         "retido_voluntario": None, "clientes_mantidos": None,
         "clientes_risco_grave": None, "risco_grave_com_oferta": None,
+        # Rodada 4, Fase 3 (M6): a empresa está em período de piloto AGORA.
+        # Só o aviso; o valor da taxa continua fora desta rota.
+        "piloto": config.tenant_em_piloto(tenant_id),
     }
     mantido_total = inv["recuperado_liquido"]
     if _premium(conta):
@@ -522,6 +526,8 @@ def linhas_do_involuntario(tenant_id: str, inicio: datetime, fim: datetime,
             "descricao": (_maiuscula(_descricao_da_recuperacao(c).replace("recuperada", "recuperado"))
                           if recuperacao else "Devolução ao cliente dentro do prazo: estorno"),
             "valor_base": l["valor_base"], "fee": l["fee"], "liquido": l["liquido"],
+            # Só na linha de piloto: a fee que seria cobrada fora dele (M3).
+            "fee_fora_do_piloto": l.get("fee_fora_do_piloto"),
             # Na linha da recuperação: se ela foi estornada por inteiro depois.
             "estornado": (not recuperacao) or c.get("status") == cc.STATUS_ENCERRADO,
             "simulado": sim(l)})
@@ -546,6 +552,7 @@ def linhas_do_voluntario(tenant_id: str, inicio: datetime, fim: datetime,
             "descricao": f"Aceitou {oferta}",
             "mrr": round(float(m["mrr"]), 2), "desconto": round(float(m["desconto"]), 2),
             "valor_base": round(float(m["valor_base"]), 2), "fee": round(float(m["fee"]), 2),
+            "fee_fora_do_piloto": _fora_do_piloto(m),
             "liquido": m["liquido"], "estornado": m["estornada"], "simulado": m["simulado"]})
     for e in estornos:
         dias = (datetime.fromisoformat(e["cancelamento_em"])
@@ -557,18 +564,35 @@ def linhas_do_voluntario(tenant_id: str, inicio: datetime, fim: datetime,
             "descricao": f"Cancelou {dias} {'dia' if dias == 1 else 'dias'} depois do aceite: estorno",
             "valor_base": -round(float(e["valor_estornado"] or 0), 2),
             "fee": -round(float(e["fee_estornada"] or 0), 2),
+            # O cancelamento no prazo devolve a retenção inteira (E2): a fee
+            # que seria cobrada volta inteira também.
+            "fee_fora_do_piloto": _fora_do_piloto(e, sinal=-1),
             "liquido": -e["liquido_devolvido"], "estornado": True, "simulado": e["simulado"]})
     return saida
 
 
-@router.get("/extrato")
-async def extrato(mes: Optional[str] = None, incluir_simulados: bool = False,
-                  conta: dict = Depends(get_conta)) -> dict:
-    """A memória de cálculo do mês (`?mes=AAAA-MM`; padrão: o corrente): uma
-    linha por cobrança recuperada ou cliente mantido, com o valor base, a fee
-    da CRAI e o líquido; e uma linha negativa por estorno, no mês em que ele
-    aconteceu. É a ÚNICA rota que devolve a fee. Exige `owner` ou `admin` e
-    entra no registro de acesso. Fora do plano premium, só o involuntário."""
+def _fora_do_piloto(linha: dict, sinal: int = 1) -> Optional[float]:
+    """A fee que seria cobrada fora do piloto, de uma linha do valor mantido;
+    `None` se a linha não é de piloto."""
+    valor = linha.get("fee_fora_do_piloto")
+    return None if valor is None else sinal * round(float(valor), 2)
+
+
+def resumo_do_piloto(tenant_id: str, linhas: list) -> dict:
+    """M3 e M6 para o extrato: se a empresa está em piloto AGORA (`ativo`), e a
+    soma da fee que seria cobrada nas linhas de piloto do período
+    (`fee_fora_do_piloto`; `None` quando nenhuma linha é de piloto). Uma
+    empresa que saiu do piloto continua vendo a coluna nos meses em que ele
+    valeu."""
+    de_piloto = [l["fee_fora_do_piloto"] for l in linhas
+                 if l.get("fee_fora_do_piloto") is not None]
+    return {"ativo": config.tenant_em_piloto(tenant_id),
+            "fee_fora_do_piloto": round(sum(de_piloto), 2) if de_piloto else None}
+
+
+def _extrato_do_mes(conta: dict, mes: Optional[str], incluir_simulados: bool, rota: str) -> dict:
+    """O extrato do mês, para a rota em JSON e para a do arquivo: a mesma conta
+    nas duas. Exige `owner` ou `admin` e grava o acesso com o nome da `rota`."""
     papel = exigir_papel(conta, "owner", "admin")
     tenant_id = conta["tenant_id"]
     rotulo, inicio, fim = vol.periodo_do_mes(mes)
@@ -577,10 +601,110 @@ async def extrato(mes: Optional[str] = None, incluir_simulados: bool = False,
         mantido.sincronizar_sem_levantar(tenant_id)
         linhas += linhas_do_voluntario(tenant_id, inicio, fim, incluir_simulados)
     linhas.sort(key=lambda l: (l["data"] or "", l["id"]), reverse=True)
-    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_EXTRATO, papel, datas.agora_local())
+    registro_acesso.registrar(tenant_id, rota, papel, datas.agora_local())
     return {"mes": rotulo, "inicio": datas.iso_com_fuso(inicio), "fim": datas.iso_com_fuso(fim),
             "linhas": linhas,
             "totais": {"valor_base": round(sum(l["valor_base"] for l in linhas), 2),
                        "fee": round(sum(l["fee"] for l in linhas), 2),
                        "liquido": round(sum(l["liquido"] for l in linhas), 2)},
+            "piloto": resumo_do_piloto(tenant_id, linhas),
             "meses_de_mrr": mantido.MESES_DE_MRR_MANTIDOS}
+
+
+@router.get("/extrato")
+async def extrato(mes: Optional[str] = None, incluir_simulados: bool = False,
+                  conta: dict = Depends(get_conta)) -> dict:
+    """A memória de cálculo do mês (`?mes=AAAA-MM`; padrão: o corrente): uma
+    linha por cobrança recuperada ou cliente mantido, com o valor base, a fee
+    da CRAI e o líquido; e uma linha negativa por estorno, no mês em que ele
+    aconteceu. Com `GET /extrato/csv`, são as ÚNICAS rotas que devolvem a fee.
+    Exige `owner` ou `admin` e entra no registro de acesso. Fora do plano
+    premium, só o involuntário.
+
+    Modo piloto (Rodada 4, Fase 3): em linha de piloto a `fee` é zero, o
+    `liquido` é o valor inteiro e `fee_fora_do_piloto` traz a fee que seria
+    cobrada (nas outras linhas, `null`). `piloto` diz se a empresa está em
+    piloto agora e a soma dessa coluna no mês."""
+    return _extrato_do_mes(conta, mes, incluir_simulados, registro_acesso.ROTA_EXTRATO)
+
+
+# ── GET /extrato/csv (Rodada 4) ───────────────────────────────────────────
+
+COLUNAS_DO_CSV = ("Data", "Cliente", "Identificador", "Origem", "O que aconteceu", "Valor (R$)",
+                  "Taxa da CRAI (R$)", "Líquido para você (R$)", "Situação", "Demonstração")
+ORIGEM_NO_CSV = {"involuntario": "Involuntário", "voluntario": "Voluntário"}
+# A marca que diz ao Excel que o arquivo é UTF-8 (os acentos saem certos).
+MARCA_DE_UTF8 = chr(0xFEFF)
+# Rodada 4, Fase 3 (M3): a coluna própria do piloto. Só entra no arquivo quando
+# a empresa está em piloto ou o mês tem linha de piloto; fica logo depois da taxa.
+COLUNA_DO_PILOTO = "Taxa fora do piloto (R$)"
+POSICAO_DA_COLUNA_DO_PILOTO = COLUNAS_DO_CSV.index("Taxa da CRAI (R$)") + 1
+
+
+def _celula_do_csv(valor) -> str:
+    """Uma célula do arquivo. Número: duas casas e vírgula decimal (o Excel em
+    português lê como número). Texto: se começar por `=`, `+`, `-`, `@`, tab ou
+    retorno de carro, ganha um apóstrofo na frente, para a planilha não o
+    executar como fórmula (o nome do cliente vem da base da empresa); e vai
+    entre aspas se tiver `;`, aspas ou quebra de linha."""
+    if isinstance(valor, bool):
+        valor = "Sim" if valor else "Não"
+    if isinstance(valor, (int, float)):
+        return f"{float(valor):.2f}".replace(".", ",")
+    texto = "" if valor is None else str(valor)
+    if texto[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        texto = "'" + texto
+    if any(c in texto for c in (";", '"', "\n", "\r")):
+        texto = '"' + texto.replace('"', '""') + '"'
+    return texto
+
+
+def _situacao(linha: dict) -> str:
+    if linha.get("tipo") == "estorno":
+        return "Estorno"
+    return "Estornado" if linha.get("estornado") else "Confirmado"
+
+
+def extrato_em_csv(linhas: list, com_piloto: bool = False) -> str:
+    """As linhas do extrato num CSV para o Excel em português: `;` entre as
+    colunas, vírgula decimal, uma linha de cabeçalho e uma de total. Com
+    `com_piloto`, a coluna "Taxa fora do piloto" entra depois da taxa: o valor
+    nas linhas de piloto, vazio nas outras, e a soma na linha de total."""
+    def data(l):
+        quando = datas.com_fuso(l.get("data"))
+        return quando.strftime("%d/%m/%Y") if quando else ""
+    saida = [COLUNAS_DO_CSV]
+    for l in linhas:
+        saida.append((data(l), l.get("cliente") or "Cliente sem cadastro", l.get("id_cliente"),
+                      ORIGEM_NO_CSV.get(l.get("origem"), l.get("origem")), l.get("descricao"),
+                      float(l["valor_base"]), float(l["fee"]), float(l["liquido"]),
+                      _situacao(l), bool(l.get("simulado"))))
+    saida.append(("", "Total", "", "", "",
+                  round(sum(float(l["valor_base"]) for l in linhas), 2),
+                  round(sum(float(l["fee"]) for l in linhas), 2),
+                  round(sum(float(l["liquido"]) for l in linhas), 2), "", ""))
+    if com_piloto:
+        p = POSICAO_DA_COLUNA_DO_PILOTO
+        fora = [l.get("fee_fora_do_piloto") for l in linhas]
+        coluna = ([COLUNA_DO_PILOTO] + [None if f is None else float(f) for f in fora]
+                  + [round(sum(float(f) for f in fora if f is not None), 2)])
+        saida = [tuple(linha[:p]) + (celula,) + tuple(linha[p:])
+                 for linha, celula in zip(saida, coluna)]
+    return "\r\n".join(";".join(_celula_do_csv(c) for c in linha) for linha in saida) + "\r\n"
+
+
+@router.get("/extrato/csv")
+async def extrato_csv(mes: Optional[str] = None, incluir_simulados: bool = False,
+                      conta: dict = Depends(get_conta)) -> Response:
+    """O mesmo extrato de `GET /extrato`, num arquivo CSV para o financeiro
+    (`?mes=AAAA-MM`; padrão: o corrente). Exige `owner` ou `admin` (membro
+    recebe 403) e entra no registro de acesso, com o nome próprio desta rota.
+    Traz a fee. Nenhum contato: do cliente, só o nome e o identificador que o
+    extrato já mostra."""
+    corpo = _extrato_do_mes(conta, mes, incluir_simulados, registro_acesso.ROTA_EXTRATO_CSV)
+    piloto = corpo["piloto"]
+    com_piloto = piloto["ativo"] or piloto["fee_fora_do_piloto"] is not None
+    return Response(content=MARCA_DE_UTF8 + extrato_em_csv(corpo["linhas"], com_piloto),
+                    media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="crai-extrato-{corpo["mes"]}.csv"'})

@@ -52,6 +52,7 @@ import json
 import logging
 import math
 import re
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -319,6 +320,82 @@ def limpar(tenant_id: str) -> int:
     offer_bandit.esquecer_copia_da_simulacao(tenant_id)
     logger.info("[SIMULACAO] tenant=%s: simulação limpa (%d arquivo(s))", tenant_id, apagados)
     return apagados
+
+
+# Uma simulação em que ninguém mexe há mais que isto é apagada pelo relógio
+# diário (Rodada 4). "Parada" é pelo tempo de verdade (a última gravação nos
+# arquivos dela), e não pelo relógio simulado.
+DIAS_DE_SIMULACAO_PARADA = 30
+
+
+def _simulacoes_em_disco() -> dict:
+    """`{parte do nome: [arquivos]}` de toda simulação gravada, de qualquer
+    empresa, achada pelo NOME dos arquivos ao lado dos reais."""
+    with ambiente.fora_da_simulacao():
+        reais = [ciclo_cobranca.caminho_do_banco(), recovery_log.caminho_do_banco(),
+                 retention_log.caminho_do_banco(), retry_state.caminho_do_estado(),
+                 Path(offer_bandit.STATE_PATH)]
+    grupos: dict = {}
+    for real in {str(Path(r)): Path(r) for r in reais}.values():
+        prefixo, sufixo = f"{real.stem}.{ambiente.MARCA}.", real.suffix
+        if not real.parent.is_dir():
+            continue
+        for arquivo in real.parent.iterdir():
+            nome = arquivo.name
+            for extra in ("", "-wal", "-shm", "-journal"):
+                fim = sufixo + extra
+                if nome.startswith(prefixo) and nome.endswith(fim) and len(nome) > len(prefixo) + len(fim):
+                    parte = nome[len(prefixo):len(nome) - len(fim)]
+                    grupos.setdefault(parte, []).append(arquivo)
+                    break
+    return grupos
+
+
+def _tenant_dos_arquivos(arquivos_do_grupo: list) -> Optional[str]:
+    """De qual empresa é esta simulação, lido do relógio gravado nela (o nome do
+    arquivo pode ser o sha256 do tenant). None se não der para ler."""
+    for arquivo in arquivos_do_grupo:
+        if arquivo.suffix != ".db":
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{arquivo.as_posix()}?mode=ro", uri=True)
+            try:
+                linha = conn.execute("SELECT tenant_id FROM simulacao_relogio LIMIT 1").fetchone()
+            finally:
+                conn.close()
+            if linha and linha[0]:
+                return linha[0]
+        except sqlite3.Error:
+            continue
+    return None
+
+
+def apagar_paradas(agora: datetime, dias: int = DIAS_DE_SIMULACAO_PARADA) -> int:
+    """RETENÇÃO: apaga as simulações em que nenhum arquivo é gravado há mais de
+    `dias` dias. Devolve quantas simulações (empresas) saíram. Só toca arquivo
+    com a marca de simulação no nome; os reais não entram na lista. Uma falha
+    LEVANTA, como no resto do expurgo."""
+    if isinstance(dias, bool) or not isinstance(dias, int) or dias < 1:
+        raise ValueError(f"dias precisa ser inteiro >= 1; recebido {dias!r}")
+    limite = agora.timestamp() - dias * 86400
+    apagadas = 0
+    for parte, do_grupo in sorted(_simulacoes_em_disco().items()):
+        existentes = [a for a in do_grupo if a.exists()]
+        if not existentes or max(a.stat().st_mtime for a in existentes) >= limite:
+            continue
+        tenant_id = _tenant_dos_arquivos(existentes)
+        if tenant_id is not None and ambiente.parte_do_nome(tenant_id) == parte:
+            limpar(tenant_id)                     # o caminho de sempre: arquivos e memória
+        else:
+            gc.collect()
+            for alvo in existentes:
+                if f".{ambiente.MARCA}.{parte}." not in alvo.name:
+                    raise RuntimeError(f"recusado: {alvo.name} não é arquivo de simulação")
+                alvo.unlink()
+            ciclo_cobranca.esquecer_schema_garantido()
+        apagadas += 1
+        logger.info("[SIMULACAO] simulação parada há mais de %d dias apagada (%s)", dias, parte)
+    return apagadas
 
 
 # ── O relógio da empresa ──────────────────────────────────────────────────

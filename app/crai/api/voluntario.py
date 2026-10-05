@@ -231,12 +231,13 @@ def _clientes_ficticios_em_risco(tenant_id: str) -> list:
             "faixa": r.get("faixa") or "sem_dado", "motivo": r.get("motivo"),
             "decidido_por": r.get("decidido_por"), "posicao_no_ranking": None,
             "abordagem": abordagem, "atualizado_em": quando,
-            "origem": "simulacao", "simulado": True})
+            "origem": "simulacao", "nao_contatar": False, "simulado": True})
     return linhas
 
 
 @router.get("/clientes/recentes")
 async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: bool = False,
+                            cliente: Optional[str] = None,
                             conta: dict = Depends(get_conta)) -> dict:
     """Os clientes da empresa atualizados mais recentemente (`?limite=` 1..100,
     padrão 10), cada um com a faixa de risco, o motivo em uma frase, quem
@@ -245,7 +246,12 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
     situação do último ciclo de retenção dele, ou `null` se nunca houve oferta.
 
     `posicao_no_ranking` é a posição pelo risco na base inteira (1 = o maior
-    risco); `total_na_base` é o tamanho dessa base."""
+    risco); `total_na_base` é o tamanho dessa base.
+
+    Rodada 4: cada cliente diz se está marcado como "não contatar"
+    (`nao_contatar`); e `?cliente=<id>` devolve só aquele cliente, esteja ou
+    não entre os mais recentes (a busca do topo leva a ele). Id que não é da
+    empresa devolve a lista vazia, igual ao que não existe."""
     tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
     if not 1 <= limite <= LIMITE_MAXIMO:
@@ -257,9 +263,16 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
     except clientes_importados.ConfiguracaoAusente as e:
         raise _500_base(e) from e
     abordagens = abordagens_por_cliente(tenant_id)
+    try:
+        marcados = clientes_importados.marcados_nao_contatar(tenant_id)
+    except clientes_importados.ConfiguracaoAusente:
+        marcados = {}
+    so_este = cliente.strip() if cliente and cliente.strip() else None
 
     linhas = []
     for posicao, l in enumerate(ranking, start=1):
+        if so_este is not None and l["customer_id_externo"] != so_este:
+            continue
         quando = _atualizado_em(l, carimbos)
         linhas.append((quando, posicao, l))
     minimo = datetime.min.replace(tzinfo=datas.fuso_local())
@@ -279,12 +292,15 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
             "abordagem": _abordagem(abordagens.get(cid)),
             "atualizado_em": quando.isoformat(timespec="seconds") if quando else None,
             "origem": l.get("origem"),
+            # Rodada 4: quem pediu para não receber mensagens (ou foi marcado pela empresa).
+            "nao_contatar": cid in marcados,
             "simulado": False,
         })
     if incluir_simulados:
         # Os clientes fictícios em risco da simulação do gateway entram na mesma
         # lista, marcados, e a lista continua do mais recente ao mais antigo.
-        clientes += _clientes_ficticios_em_risco(tenant_id)
+        clientes += [c for c in _clientes_ficticios_em_risco(tenant_id)
+                     if so_este is None or c["id"] == so_este]
         clientes.sort(key=lambda c: datas.com_fuso(c["atualizado_em"]) or minimo, reverse=True)
         clientes = clientes[:limite]
     # A lista lê o nome do cliente final na base: é leitura de dado de titular.

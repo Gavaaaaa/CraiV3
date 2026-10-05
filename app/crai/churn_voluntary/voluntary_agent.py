@@ -215,9 +215,15 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
                   if isinstance(props.get("billing_profile"), str) else None,
                   **entradas_comportamentais(props)},
         saida=saida, contribuicoes=avaliacao["contribuicoes"])
+    # O estado do grafo fica guardado por cliente (`MemorySaver`), e `assess_risk`
+    # é a entrada de todo evento: o que é DESTE evento nasce vazio aqui. Sem isto
+    # o segundo evento do mesmo cliente regravava na trilha as decisões do
+    # primeiro (Rodada 4), e um evento sem oferta devolvia as candidatas do anterior.
     return trilha.anotar_decisao(
         {**state, "risk_score": risk, "profile": profile, "criticality": criticality,
-         "regra_de_intervencao": regra, "intensidade_da_oferta": None}, dec)
+         "regra_de_intervencao": regra, "intensidade_da_oferta": None,
+         "decisoes": [], "ofertas_consideradas": None, "candidatas": None,
+         "canais_considerados": None, "sem_oferta_por": None}, dec)
 
 
 async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -235,34 +241,34 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # que `choose_offer` devolveria com a mesma semente.
     rodada = _bandit_em_uso().classificar_ofertas(tenant, state["profile"], state["risk_score"],
                                                   mrr=mrr)
-    escolhida, intensidade = rodada[0], None
     regra = state.get("regra_de_intervencao")
-    if regra in REGRAS_QUE_INTERVEM:
-        # O modelo v3 decidiu o risco: a faixa define a intensidade. Grave leva a
-        # oferta do bandit; o resto, a mais leve entre as que ele considerou.
-        intensidade = intensidade_da_faixa(state.get("criticality"))
-        if intensidade == INTENSIDADE_MAIS_LEVE:
-            escolhida = oferta_mais_leve(rodada[:N_CANDIDATAS])
+    # Só quando o modelo v3 decidiu o risco: a intenção explícita leva a oferta
+    # do bandit, qualquer que seja a faixa; pela posição na base, grave leva a
+    # do bandit e preocupante, a mais leve. Com a régua (regra None), a de sempre.
+    intensidade = (intensidade_da_intervencao(regra, state.get("criticality"))
+                   if regra in REGRAS_QUE_INTERVEM else None)
+    escolhida, consideradas = escolher_pela_intensidade(rodada, intensidade)
     offer = escolhida["offer"]
     p_estimado = escolhida["p_estimado"]
-    como = ("a mais leve entre as consideradas" if intensidade == INTENSIDADE_MAIS_LEVE
+    como = ("a mais leve das ofertas de retenção" if intensidade == INTENSIDADE_MAIS_LEVE
             else "Thompson Sampling")
     print(f"[CHURN-VOL] Oferta escolhida ({como}): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
     dec = decisao_de_oferta(tenant, state["user_id"], state["profile"],
                             state["risk_score"], mrr, rodada, escolhida=escolhida,
                             regra=regra if regra in REGRAS_QUE_INTERVEM else None,
-                            intensidade=intensidade)
+                            intensidade=intensidade, consideradas=consideradas)
     return trilha.anotar_decisao(
         {**state, "offer_type": offer,
-         "ofertas_consideradas": rodada[:N_CANDIDATAS],
+         "ofertas_consideradas": consideradas,
          "intensidade_da_oferta": intensidade,
          "is_critical": is_critical_risk(state["risk_score"])}, dec)
 
 
 def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list,
                       escolhida: dict | None = None, regra: str | None = None,
-                      intensidade: str | None = None) -> dict:
+                      intensidade: str | None = None,
+                      consideradas: list | None = None) -> dict:
     """A linha da trilha para a escolha do bandit. Compartilhada com o
     disparo em lote, que chama o bandit direto.
 
@@ -271,16 +277,19 @@ def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list
     o estado do posterior é segredo comercial (Art. 20 §1º) e
     `_sem_dado_cru` os tira de qualquer jeito.
 
-    `escolhida`, `regra` e `intensidade` só vêm quando o MODELO v3 decidiu o
-    risco no pipeline de eventos: a oferta que saiu (a do bandit, ou a mais
-    leve entre as consideradas), a regra que levou à intervenção e a
-    intensidade. Sem eles, a linha é a de sempre: `rodada[0]`, sem chave nova.
+    `escolhida`, `intensidade` e `consideradas` vêm quando a intensidade foi
+    decidida pela faixa (o pipeline de eventos com o MODELO v3 decidindo o
+    risco, e o disparo em lote): a oferta que saiu (a do bandit, ou a mais leve
+    das ofertas de retenção), a intensidade e as ofertas que entraram na
+    comparação. `regra` é a que levou à intervenção, só no pipeline de eventos
+    com o modelo. Sem eles, a linha é a de sempre: `rodada[0]`, sem chave nova.
     """
     escolhida = escolhida or rodada[0]
+    consideradas = consideradas if consideradas is not None else rodada[:N_CANDIDATAS]
     saida = {"offer_type": escolhida["offer"],
              "p_estimado": escolhida.get("p_estimado"),
              "ofertas_consideradas": [{"offer": r["offer"], "p_estimado": r.get("p_estimado")}
-                                      for r in rodada[:N_CANDIDATAS]]}
+                                      for r in consideradas]}
     if intensidade is not None:
         saida["intensidade"] = intensidade
     if regra is not None:
@@ -678,11 +687,11 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
             "eprofit_amostrado": linha.get("eprofit_amostrado"),
             "escolhida": vencedora,
             "origem_texto": origem_c,
-            "motivo": (("a oferta de menor custo entre as consideradas nesta rodada: o caso "
-                        "não é grave, e a faixa pede a oferta mais leve"
+            "motivo": (("a oferta de retenção de menor custo: o caso é preocupante, e não "
+                        "grave, e a faixa pede a oferta mais leve"
                         if vencedora else
-                        f"considerada nesta rodada (posição {posicao} em e-Profit amostrado), "
-                        "mas não é a de menor custo")
+                        f"considerada nesta rodada (posição {posicao} em e-Profit amostrado "
+                        "entre as ofertas de retenção), mas não é a de menor custo")
                        if mais_leve else
                        "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
                        if vencedora else
@@ -865,6 +874,14 @@ async def registrar_resultado_externo(user_id: str, offer_type: str, profile: st
     if accepted and canal:
         _channel_history[chave_de_canal(tenant_id, user_id)] = canal
 
+    # Rodada 4, Fase 3 (modo piloto): a linha do valor mantido nasce NO ACEITE,
+    # e não na próxima leitura da tela, para a fee gravada ser a deste momento
+    # (zero, se a empresa está em piloto agora). Melhor esforço: se falhar, a
+    # leitura seguinte materializa a linha.
+    if accepted:
+        from . import mantido
+        mantido.sincronizar_sem_levantar(tenant_id)
+
     # Rótulo em ASCII, não os emoji do `track_outcome`: a catraca do N-12
     # (tests/test_encoding_saida.py) diz que o inventário de caracteres que o
     # cp1252 não codifica só pode DESCER. As 2 ocorrências do `track_outcome`
@@ -924,8 +941,11 @@ CORTE_DE_INTERVENCAO = 0.60
 #      posição na base — a criticidade de `batch_scoring.criticidade_do_evento`,
 #      a mesma do lote e do SDK, que já exige o sinal absoluto de abandono. Sem
 #      referência de posição, não intervém.
-#   3. A faixa define a intensidade: grave leva a oferta do bandit; o resto, a
-#      mais leve entre as que o bandit considerou (`oferta_mais_leve`).
+#   3. A intensidade (decisões do Crai de 05/10, Rodada 4): a intenção explícita
+#      leva a oferta do bandit, qualquer que seja a faixa. Pela posição na base,
+#      grave leva a do bandit e preocupante, a mais leve: a de menor custo entre
+#      as ofertas de retenção de verdade (`oferta_mais_leve`; a troca para Pix ou
+#      boleto não entra na comparação). O disparo em lote usa a mesma regra.
 #
 # O intervalo mínimo entre ofertas e o "não contatar" valem nos dois casos, como
 # antes. Quando a RÉGUA decide (sem modelo, sem dado para o modelo, ou modelo
@@ -940,6 +960,10 @@ REGRAS_QUE_INTERVEM = (REGRA_INTENCAO_EXPLICITA, REGRA_POSICAO_NA_BASE)
 FAIXAS_QUE_INTERVEM = ("critico", "alto")          # grave e preocupante
 INTENSIDADE_DO_BANDIT = "oferta_do_bandit"
 INTENSIDADE_MAIS_LEVE = "oferta_mais_leve"
+# A troca para Pix ou boleto muda o meio de pagamento, não o preço nem o plano:
+# não serve de "oferta mais leve" para quem dá sinal de que vai sair. O bandit
+# continua podendo escolhê-la quando é ele que escolhe.
+OFERTAS_FORA_DA_MAIS_LEVE = frozenset({"pix_boleto_flash"})
 
 
 def regra_de_intervencao(event: str, criticality: str, posicao_na_base) -> str:
@@ -958,18 +982,46 @@ def regra_de_intervencao(event: str, criticality: str, posicao_na_base) -> str:
 
 
 def intensidade_da_faixa(criticality: str) -> str:
-    """Grave leva a oferta que o bandit escolheu. Qualquer outra faixa que
-    chegue a receber oferta (preocupante; ou, por intenção explícita, quem não
-    é grave nem preocupante pela posição) leva a mais leve."""
+    """A intensidade de quem chega à oferta PELA FAIXA (a posição na base, no
+    pipeline de eventos, e o disparo em lote): grave leva a oferta que o bandit
+    escolheu; preocupante, a mais leve."""
     return INTENSIDADE_DO_BANDIT if criticality == "critico" else INTENSIDADE_MAIS_LEVE
 
 
-def oferta_mais_leve(consideradas: list) -> dict:
-    """A de MENOR CUSTO para a empresa entre as ofertas que o bandit
-    considerou nesta rodada (`custo`, de `offer_bandit.offer_cost`, já na
-    linha). Empate fica com a mais bem colocada pelo bandit. Continua sendo
-    uma das candidatas do bandit: ele só deixa de escolher a ordem."""
-    return min(consideradas, key=lambda linha: linha["custo"])
+def intensidade_da_intervencao(regra: str, criticality: str) -> str:
+    """A intensidade no pipeline de eventos, com o modelo v3 decidindo o risco.
+    Intenção explícita: a oferta do bandit, qualquer que seja a faixa (quem
+    abre a página de cancelamento já disse que vai sair). Posição na base: a
+    da faixa."""
+    if regra == REGRA_INTENCAO_EXPLICITA:
+        return INTENSIDADE_DO_BANDIT
+    return intensidade_da_faixa(criticality)
+
+
+def ofertas_de_retencao(rodada: list) -> list:
+    """A rodada do bandit, na ordem dele, sem as ofertas que não entram na
+    comparação da mais leve (`OFERTAS_FORA_DA_MAIS_LEVE`)."""
+    return [linha for linha in rodada if linha["offer"] not in OFERTAS_FORA_DA_MAIS_LEVE]
+
+
+def oferta_mais_leve(rodada: list) -> dict:
+    """A de MENOR CUSTO para a empresa entre as ofertas de retenção de verdade
+    da rodada (`custo`, de `offer_bandit.offer_cost`, já na linha). A troca
+    para Pix ou boleto não entra. Empate fica com a mais bem colocada pelo
+    bandit. Com as quatro ofertas de hoje é sempre o desconto de 10% (30% de
+    uma mensalidade, contra 60% do desconto de 20% e 100% da pausa)."""
+    return min(ofertas_de_retencao(rodada), key=lambda linha: linha["custo"])
+
+
+def escolher_pela_intensidade(rodada: list, intensidade: str | None) -> tuple:
+    """(a oferta que sai, as ofertas que entraram na comparação). Uma função
+    só para o pipeline de eventos e o disparo em lote. Mais leve: a de menor
+    custo entre as de retenção, e as consideradas são as de retenção. Qualquer
+    outra intensidade (ou nenhuma): a primeira do bandit, e as consideradas de
+    sempre."""
+    if intensidade == INTENSIDADE_MAIS_LEVE:
+        return oferta_mais_leve(rodada), ofertas_de_retencao(rodada)[:N_CANDIDATAS]
+    return rodada[0], rodada[:N_CANDIDATAS]
 
 
 # ── O limite de contato (Rodada 3, S5) ────────────────────────────────────

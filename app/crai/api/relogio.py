@@ -208,6 +208,34 @@ def expurgar_trilha(agora: datetime) -> int:
     return apagadas
 
 
+def expurgar_ciclos(agora: datetime) -> int:
+    """A RETENÇÃO DOS CICLOS DE COBRANÇA (Rodada 4; LGPD art. 15 e 16): os
+    ciclos com desfecho há mais que `retencao_ciclos_meses` (da configuração de
+    cada empresa; padrão 24) são ANONIMIZADOS, e não apagados: somem os
+    identificadores, ficam os valores, as datas e os desfechos, e as métricas
+    do período continuam iguais (`ciclo_cobranca.anonimizar_ciclos_expirados`).
+    Devolve quantos ciclos foram anonimizados, e diz no log. Uma falha LEVANTA."""
+    anonimizados, tenants = 0, ciclo_cobranca.tenants_com_ciclos_identificados()
+    for tenant_id in tenants:
+        meses = configuracao.ler(tenant_id)["retencao_ciclos_meses"]
+        anonimizados += ciclo_cobranca.anonimizar_ciclos_expirados(agora, tenant_id, meses)
+    logger.info("[RETENCAO-CICLOS] %s: %d ciclo(s) de cobrança anonimizado(s), em %d "
+                "empresa(s) verificada(s).", agora.date().isoformat(), anonimizados, len(tenants))
+    return anonimizados
+
+
+def expurgar_simulacoes(agora: datetime) -> int:
+    """A RETENÇÃO DA SIMULAÇÃO DO GATEWAY (Rodada 4): a simulação em que
+    ninguém mexe há mais de 30 dias é apagada inteira (`simulador.apagar_paradas`).
+    Devolve quantas simulações saíram. Uma falha LEVANTA."""
+    from .. import simulador                       # tardio: `simulador` importa de `dunning`
+    apagadas = simulador.apagar_paradas(agora)
+    logger.info("[RETENCAO-SIMULACAO] %s: %d simulação(ões) parada(s) há mais de %d dias "
+                "apagada(s).", agora.date().isoformat(), apagadas,
+                simulador.DIAS_DE_SIMULACAO_PARADA)
+    return apagadas
+
+
 async def passagem(agora: datetime) -> dict:
     """O que o relógio faz a cada volta. Devolve o que aconteceu, para o log e
     para o teste. As varreduras e a mensagem devida vêm de dentro de
@@ -224,6 +252,9 @@ async def passagem(agora: datetime) -> dict:
         resultado["expurgo"] = expurgar(agora)
         # Rodada 3, Fase 7: a retenção da trilha do Art. 20, no mesmo dia.
         resultado["expurgo_da_trilha"] = expurgar_trilha(agora)
+        # Rodada 4: os ciclos antigos são anonimizados e a simulação parada é apagada.
+        resultado["ciclos_anonimizados"] = expurgar_ciclos(agora)
+        resultado["simulacoes_apagadas"] = expurgar_simulacoes(agora)
         _estado["ultimo_expurgo_em"] = hoje
     return resultado
 
@@ -318,11 +349,30 @@ def configurar_saida(*fluxos) -> list:
     return feitos
 
 
+def carregar_referencias_de_posicao() -> int:
+    """Lê do disco, na subida, a referência de posição de cada empresa (os
+    quantis do score e do MRR que a última pontuação da base gravou; Rodada 4):
+    depois de um reinício, um evento do voluntário continua sendo posicionado
+    contra a base da própria empresa. Devolve quantas empresas têm referência.
+    Nunca levanta: sem o arquivo, vale a referência de treino do modelo."""
+    try:
+        from ..churn_voluntary import batch_scoring
+        empresas = batch_scoring.carregar_referencias(forcar=True)
+        logger.info("[REFERENCIAS] %d empresa(s) com referência de posição lida do disco.",
+                    empresas)
+        return empresas
+    except Exception as e:                        # noqa: BLE001 - não derruba a subida
+        logger.warning("[REFERENCIAS] não foi possível ler as referências de posição: %r", e)
+        return 0
+
+
 @asynccontextmanager
 async def ciclo_de_vida(app):
     """O `lifespan` do FastAPI: na subida, a saída deixa de levantar por
-    caractere e o relógio liga; na descida, o relógio desliga."""
+    caractere, as referências de posição são lidas do disco e o relógio liga;
+    na descida, o relógio desliga."""
     configurar_saida()
+    carregar_referencias_de_posicao()
     ligar()
     try:
         yield

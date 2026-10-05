@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS {nome} (
     estornado_em          TEXT,
     valor_estornado       REAL,
     fee_estornada         REAL,
+    fee_fora_do_piloto    REAL,
     UNIQUE (tenant_id, id_cobranca_original)
 );
 """.replace("{estados}", ", ".join(repr(e) for e in ESTADOS)).replace(
@@ -420,19 +421,24 @@ CREATE INDEX IF NOT EXISTS idx_estorno_recebido ON estornos_ciclo (recebido_em);
 #                prazo. O estado continua `recuperado`, e `valor` e `fee` NUNCA
 #                mudam: são o que foi recuperado, e é com eles que um mês já
 #                fechado continua igual (E5). Cada aviso mora em `estornos_ciclo`.
+#   fee_fora_do_piloto (Rodada 4, Fase 3) — só em ciclo recuperado de empresa
+#                em PILOTO: a fee que seria cobrada fora dele (com `fee = 0`).
+#                `NULL` em todo o resto: a linha não é de piloto. Não entra em
+#                conta nenhuma de valor líquido; só o extrato a mostra.
 _COLUNAS_ACRESCENTADAS: tuple = (("ciclos_cobranca", "decidido_em", "TEXT"),
                                  ("ciclos_cobranca", "mensagem_confirmada_em", "TEXT"),
                                  ("ciclos_cobranca", "aguardando_escolha_em", "TEXT"),
                                  ("ciclos_cobranca", "motivo_perdido", "TEXT"),
                                  ("ciclos_cobranca", "estornado_em", "TEXT"),
                                  ("ciclos_cobranca", "valor_estornado", "REAL"),
-                                 ("ciclos_cobranca", "fee_estornada", "REAL"))
+                                 ("ciclos_cobranca", "fee_estornada", "REAL"),
+                                 ("ciclos_cobranca", "fee_fora_do_piloto", "REAL"))
 
 # Campos de `ciclos_cobranca` que `atualizar`/`transicionar` aceitam por nome.
 _CAMPOS_ATUALIZAVEIS = frozenset({
     "estrategia", "motivo_descarte", "recovery_score", "p_recovery", "eprofit",
     "fee", "causa_original", "codigo_falha_original", "e2e_falha_original",
-    "decidido_em", "mensagem_confirmada_em", "motivo_perdido",
+    "decidido_em", "mensagem_confirmada_em", "motivo_perdido", "fee_fora_do_piloto",
 })
 
 _schema_garantido_lock = threading.Lock()
@@ -1389,10 +1395,13 @@ def ciclo_para_confirmacao(tenant_id: Optional[str], id_recorrencia: str,
 
 def fechar_como_recuperado(ciclo_id: int, fee: float, agora: Optional[datetime] = None,
                            id_cobranca: Optional[str] = None,
-                           e2e_confirmacao: Optional[str] = None) -> dict:
+                           e2e_confirmacao: Optional[str] = None,
+                           fee_fora_do_piloto: Optional[float] = None) -> dict:
     """R4, numa transação só: marca a tentativa que pagou (pelo `id_cobranca`
     da confirmação; senão a disparada mais recente sem resultado), cancela as
     não disparadas (`recuperado`) e leva o ciclo a `recuperado` com a fee.
+    `fee_fora_do_piloto` só vem de empresa em piloto (com `fee` zero): é a fee
+    que seria cobrada, guardada para o extrato.
 
     Raises:
         TransicaoInvalida: o ciclo não está em estado que aceite `recuperado`
@@ -1433,9 +1442,12 @@ def fechar_como_recuperado(ciclo_id: int, fee: float, agora: Optional[datetime] 
             (CANCELADA, marca, ciclo_id, PENDENTE)).rowcount
         conn.execute(
             """UPDATE ciclos_cobranca
-                  SET estado = ?, fee = ?, recuperado_em = ?, atualizado_em = ?
+                  SET estado = ?, fee = ?, fee_fora_do_piloto = ?, recuperado_em = ?,
+                      atualizado_em = ?
                 WHERE id = ?""",
-            (RECUPERADO, round(float(fee), 2), marca, marca, ciclo_id))
+            (RECUPERADO, round(float(fee), 2),
+             None if fee_fora_do_piloto is None else round(float(fee_fora_do_piloto), 2),
+             marca, marca, ciclo_id))
         conn.commit()
         return {"ciclo_id": ciclo_id, "estado_anterior": ciclo["estado"],
                 "tentativa_paga": numero_paga, "canceladas": canceladas,
@@ -1545,7 +1557,7 @@ def ciclo_do_tenant(tenant_id: str, ciclo_id: int) -> Optional[dict]:
 def listar_ciclos(tenant_id: str, status: Optional[list] = None,
                   desde: Optional[datetime] = None, ate: Optional[datetime] = None,
                   texto: Optional[str] = None, cursor: Optional[tuple] = None,
-                  limite: int = 50) -> list[dict]:
+                  limite: int = 50, aguardando_escolha: bool = False) -> list[dict]:
     """Os ciclos DESTE tenant, do mais recentemente atualizado para o mais
     antigo, com `status` e `tentativas_executadas`.
 
@@ -1554,8 +1566,15 @@ def listar_ciclos(tenant_id: str, status: Optional[list] = None,
     `id_recorrencia` ou o `id_cobranca_original` exato — sem `LIKE '%x%'`
     varrendo a tabela. `cursor`: `(atualizado_em, id)` da última linha da
     página anterior. Devolve até `limite` linhas; quem pagina pede uma a mais.
+    `aguardando_escolha` (Rodada 4): só os ciclos que esperam a escolha da
+    empresa AGORA, pela mesma conta de `contar_aguardando_escolha` (o sino do
+    painel leva a esta lista, e os dois números têm de bater).
     """
     filtros, params = ["c.tenant_id = ?"], [tenant_id]
+    if aguardando_escolha:
+        filtros.append("c.estado = ? AND NOT EXISTS (SELECT 1 FROM mensagens_ciclo m "
+                       "WHERE m.ciclo_id = c.id AND m.escolhida = 1)")
+        params.append(AGUARDANDO_ESCOLHA)
     if status:
         desconhecidos = set(status) - set(STATUS_DA_TELA)
         if desconhecidos:
@@ -1803,6 +1822,41 @@ def contar_aguardando_escolha(tenant_id: str) -> int:
         conn.close()
 
 
+def proxima_tentativa_pendente(tenant_id: str) -> Optional[dict]:
+    """A tentativa de cobrança ainda não disparada mais próxima, entre os ciclos
+    em recobrança DESTE tenant: `{ciclo_id, numero, agendada_para}`, ou None
+    (Rodada 4: o cartão "Próxima ação do sistema")."""
+    conn = _conectar()
+    try:
+        linha = conn.execute(
+            """SELECT t.ciclo_id, t.numero, t.agendada_para
+                 FROM tentativas_cobranca t JOIN ciclos_cobranca c ON c.id = t.ciclo_id
+                WHERE c.tenant_id = ? AND c.estado = ? AND t.resultado = ?
+                  AND t.disparada_em IS NULL
+             ORDER BY t.agendada_para, t.id LIMIT 1""",
+            (tenant_id, RECOBRANDO, PENDENTE)).fetchone()
+        return dict(linha) if linha else None
+    finally:
+        conn.close()
+
+
+def ciclos_esperando_mensagem(tenant_id: str) -> list[dict]:
+    """Os ciclos DESTE tenant em `aguardando_escolha`, com o instante em que
+    passaram a esperar e se já têm mensagem escolhida: `{id,
+    aguardando_escolha_em, tem_escolhida}`."""
+    conn = _conectar()
+    try:
+        return [dict(l) for l in conn.execute(
+            """SELECT c.id, c.aguardando_escolha_em,
+                      EXISTS (SELECT 1 FROM mensagens_ciclo m
+                               WHERE m.ciclo_id = c.id AND m.escolhida = 1) AS tem_escolhida
+                 FROM ciclos_cobranca c
+                WHERE c.tenant_id = ? AND c.estado = ?
+             ORDER BY c.id""", (tenant_id, AGUARDANDO_ESCOLHA))]
+    finally:
+        conn.close()
+
+
 def pendencias_de_mensagem(agora: datetime) -> dict:
     """O que o relógio precisa fazer pelos ciclos em `aguardando_escolha`, em
     três listas (quem decide é `agent/workflow.processar_pendencias_de_mensagem`,
@@ -1888,6 +1942,97 @@ def apagar_texto_expirado(agora: datetime, tenant_id: Optional[str], dias: int) 
             (_iso(agora), tenant_id, RECUPERADO, PERDIDO, DESCARTADO, limite)).rowcount
         conn.commit()
         return int(tocadas)
+    finally:
+        conn.close()
+
+
+# ── Retenção dos ciclos (Rodada 4, LGPD art. 15 e 16) ─────────────────────
+#
+# Um ciclo com desfecho há mais que o prazo da empresa (`retencao_ciclos_meses`,
+# padrão 24) é ANONIMIZADO, e não apagado: somem os identificadores que o ligam
+# a uma pessoa (o id da recorrência e os ids de cobrança, de devolução e do
+# PSP) e o que restar de texto de mensagem; ficam os valores, as datas, a
+# causa, o estado e a fee. As métricas e o extrato do período continuam dando o
+# mesmo número: é isso que "manter os agregados" quer dizer aqui.
+#
+# O identificador vira `anonimizado-<id do ciclo>`: continua único (a tabela
+# exige), e é pela marca que a função sabe o que já fez (idempotente, sem
+# coluna nova). A linha do dataset de treino do involuntário que aponta para o
+# ciclo (`ciclos_recuperacao.ciclo_id`, no mesmo arquivo) perde os dois
+# identificadores dela junto; as features ficam.
+MARCA_DE_ANONIMIZADO = "anonimizado-"
+DESFECHOS = (RECUPERADO, PERDIDO, DESCARTADO)
+
+
+def meses_atras(agora: datetime, meses: int) -> datetime:
+    """`agora` menos `meses`, no calendário (31/03 menos 1 mês é 28 ou 29/02)."""
+    total = agora.year * 12 + (agora.month - 1) - int(meses)
+    ano, mes = divmod(total, 12)
+    dia = agora.day
+    while True:
+        try:
+            return agora.replace(year=ano, month=mes + 1, day=dia)
+        except ValueError:
+            dia -= 1
+
+
+def tenants_com_ciclos_identificados() -> list:
+    """Os tenants com ciclo fechado que ainda tem identificador: de quem ler o
+    prazo de retenção."""
+    if not _banco_existe():
+        return []
+    conn = _conectar()
+    try:
+        return [l[0] for l in conn.execute(
+            f"""SELECT DISTINCT tenant_id FROM ciclos_cobranca
+                 WHERE estado IN ({', '.join('?' * len(DESFECHOS))})
+                   AND id_recorrencia NOT LIKE ?
+              ORDER BY tenant_id""", (*DESFECHOS, MARCA_DE_ANONIMIZADO + "%"))]
+    finally:
+        conn.close()
+
+
+def anonimizar_ciclos_expirados(agora: datetime, tenant_id: Optional[str], meses: int) -> int:
+    """RETENÇÃO: anonimiza os ciclos do tenant cujo desfecho (`recuperado_em`,
+    `perdido_em` ou `descartado_em`) tem mais de `meses` meses. Ciclo sem
+    desfecho nunca é tocado. Idempotente. Devolve quantos ciclos foram
+    anonimizados. Uma falha aqui LEVANTA, como no resto do expurgo."""
+    if isinstance(meses, bool) or not isinstance(meses, int) or meses < 1:
+        raise ValueError(f"meses precisa ser inteiro >= 1; recebido {meses!r}")
+    limite = _iso(meses_atras(agora, meses))
+    conn = _conectar()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        ids = [l[0] for l in conn.execute(
+            f"""SELECT id FROM ciclos_cobranca
+                 WHERE tenant_id IS ? AND estado IN ({', '.join('?' * len(DESFECHOS))})
+                   AND COALESCE(recuperado_em, perdido_em, descartado_em) < ?
+                   AND id_recorrencia NOT LIKE ?""",
+            (tenant_id, *DESFECHOS, limite, MARCA_DE_ANONIMIZADO + "%"))]
+        tem_dataset = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ciclos_recuperacao'"
+        ).fetchone() is not None
+        for inicio in range(0, len(ids), 500):
+            lote = ids[inicio:inicio + 500]
+            marcas = ", ".join("?" * len(lote))
+            conn.execute(
+                f"""UPDATE ciclos_cobranca
+                       SET id_recorrencia = ? || id, id_cobranca_original = ? || id,
+                           e2e_falha_original = NULL
+                     WHERE id IN ({marcas})""",
+                (MARCA_DE_ANONIMIZADO, MARCA_DE_ANONIMIZADO, *lote))
+            conn.execute(f"UPDATE tentativas_cobranca SET id_cobranca = NULL, e2e_resultado = NULL "
+                         f"WHERE ciclo_id IN ({marcas})", lote)
+            conn.execute(f"UPDATE estornos_ciclo SET id_devolucao = ? || id "
+                         f"WHERE ciclo_id IN ({marcas})", (MARCA_DE_ANONIMIZADO, *lote))
+            conn.execute(f"UPDATE mensagens_ciclo SET texto = NULL, texto_apagado_em = ? "
+                         f"WHERE texto IS NOT NULL AND ciclo_id IN ({marcas})", (_iso(agora), *lote))
+            if tem_dataset:
+                conn.execute(f"UPDATE ciclos_recuperacao SET customer_id = ? || ciclo_id, "
+                             f"e2e_id = ? || id WHERE ciclo_id IN ({marcas})",
+                             (MARCA_DE_ANONIMIZADO, MARCA_DE_ANONIMIZADO, *lote))
+        conn.commit()
+        return len(ids)
     finally:
         conn.close()
 
@@ -2112,7 +2257,7 @@ def estornos_no_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list
     try:
         linhas = conn.execute(
             """SELECT e.id, e.ciclo_id, e.id_devolucao, e.valor_considerado, e.fee_devolvida,
-                      e.recebido_em, c.id_recorrencia, c.valor,
+                      e.recebido_em, c.id_recorrencia, c.valor, c.fee_fora_do_piloto,
                       (SELECT COALESCE(SUM(a.valor_considerado), 0) FROM estornos_ciclo a
                         WHERE a.ciclo_id = e.ciclo_id AND a.no_prazo = 1
                           AND (a.recebido_em < e.recebido_em
@@ -2128,6 +2273,17 @@ def estornos_no_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list
         d = dict(l)
         d["liquido_devolvido"] = round(float(d["valor_considerado"]) - float(d["fee_devolvida"]), 2)
         d["total"] = float(d["valor"] or 0) > 0 and float(d["acumulado"]) >= float(d["valor"]) - _FOLGA_DE_CENTAVO
+        # Ciclo de piloto: quanto da fee que SERIA cobrada este estorno leva,
+        # na mesma proporção de E3 (o que fecha a devolução leva o resto).
+        # Fora do piloto a chave não existe.
+        cheia = d.pop("fee_fora_do_piloto")
+        if cheia is not None and float(d["valor"] or 0) > 0:
+            valor, cheia = float(d["valor"]), float(cheia)
+            ate = min(float(d["acumulado"]), valor)
+            antes = max(0.0, ate - float(d["valor_considerado"]))
+            d["fee_fora_do_piloto_devolvida"] = round(
+                (cheia if d["total"] else round(cheia * ate / valor, 2))
+                - round(cheia * antes / valor, 2), 2)
         saida.append(d)
     return saida
 
@@ -2143,19 +2299,26 @@ def extrato_do_periodo(tenant_id: str, inicio: datetime, fim: datetime) -> list[
     conn = _conectar()
     try:
         recuperacoes = conn.execute(
-            """SELECT id, id_recorrencia, valor, fee, recuperado_em FROM ciclos_cobranca
+            """SELECT id, id_recorrencia, valor, fee, fee_fora_do_piloto, recuperado_em
+                 FROM ciclos_cobranca
                 WHERE tenant_id = ? AND estado = ? AND recuperado_em >= ? AND recuperado_em < ?""",
             (tenant_id, RECUPERADO, _iso(inicio), _iso(fim))).fetchall()
     finally:
         conn.close()
+    # `fee_fora_do_piloto` só existe na linha de piloto (Rodada 4, Fase 3): a
+    # fee que seria cobrada. Fora do piloto a linha sai como sempre saiu.
     linhas = [{"tipo": "recuperacao", "ciclo_id": r["id"], "id_recorrencia": r["id_recorrencia"],
                "quando": r["recuperado_em"], "valor_base": round(float(r["valor"] or 0), 2),
                "fee": round(float(r["fee"] or 0), 2),
-               "liquido": round(float(r["valor"] or 0) - float(r["fee"] or 0), 2)}
+               "liquido": round(float(r["valor"] or 0) - float(r["fee"] or 0), 2),
+               **({} if r["fee_fora_do_piloto"] is None
+                  else {"fee_fora_do_piloto": round(float(r["fee_fora_do_piloto"]), 2)})}
               for r in recuperacoes]
     linhas += [{"tipo": "estorno", "ciclo_id": e["ciclo_id"], "id_recorrencia": e["id_recorrencia"],
                 "quando": e["recebido_em"], "valor_base": -round(float(e["valor_considerado"]), 2),
-                "fee": -round(float(e["fee_devolvida"]), 2), "liquido": -e["liquido_devolvido"]}
+                "fee": -round(float(e["fee_devolvida"]), 2), "liquido": -e["liquido_devolvido"],
+                **({} if "fee_fora_do_piloto_devolvida" not in e
+                   else {"fee_fora_do_piloto": -e["fee_fora_do_piloto_devolvida"]})}
                for e in estornos_no_periodo(tenant_id, inicio, fim)]
     linhas.sort(key=lambda l: (l["quando"], l["tipo"] == "estorno", l["ciclo_id"]))
     return linhas

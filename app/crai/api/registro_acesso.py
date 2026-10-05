@@ -60,6 +60,9 @@ ROTA_EXPORTAR = "POST /titular/exportar"
 ROTA_ANONIMIZAR = "POST /titular/anonimizar"
 ROTA_NAO_CONTATAR = "POST /clientes/{customer_id_externo}/nao-contatar"
 ROTA_VOLTAR_A_CONTATAR = "DELETE /clientes/{customer_id_externo}/nao-contatar"
+# Rodada 4: o extrato baixado em arquivo (traz a fee) e a busca do topo (lê o nome).
+ROTA_EXTRATO_CSV = "GET /extrato/csv"
+ROTA_BUSCA = "GET /busca"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS acessos_titular (

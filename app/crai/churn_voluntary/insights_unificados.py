@@ -53,8 +53,65 @@ def _linha_do_upload(l: dict) -> dict:
             "evento": None}
 
 
-def _linha_do_sdk(ciclo: dict, idioma: str = "pt") -> dict:
-    """Um ciclo do `retention_log` no MESMO formato do ranking do upload."""
+# O evento que o disparo em lote grava no ciclo (`disparo_lote.EVENTO_LOTE`; importar
+# seria circular, e há teste que confere a igualdade).
+EVENTO_DO_LOTE = "Disparo em lote"
+
+
+def _decisao_deste_ciclo(ciclo: dict, decisao: dict | None) -> dict | None:
+    """A decisão de risco da trilha, se ela é a DESTE ciclo: o mesmo evento e o
+    mesmo risco. A trilha é gravada por melhor esforço e o ciclo não aponta
+    para ela; se não bater, a linha fica sem a informação em vez de usar a de
+    outro evento."""
+    if not isinstance(decisao, dict):
+        return None
+    entradas, saida = decisao.get("entradas") or {}, decisao.get("saida") or {}
+    try:
+        mesmo_risco = round(float(ciclo.get("risk_score")), 4) == round(float(saida.get("risk_score")), 4)
+    except (TypeError, ValueError):
+        return None
+    # A decisão de risco do disparo em lote não leva `event` nas entradas.
+    mesmo_evento = entradas.get("event", EVENTO_DO_LOTE) == ciclo.get("event")
+    return decisao if mesmo_risco and mesmo_evento else None
+
+
+def _explicar_o_sdk(cliente: dict, risk, crit: str, decisao: dict | None, idioma: str) -> tuple:
+    """(a frase, quem decidiu, a posição na base) da linha de quem veio por
+    evento (Rodada 4). QUEM DECIDIU DE VERDADE sai da trilha:
+
+      - o modelo decidiu: a frase é a da posição pelo modelo, a mesma do ranking;
+      - a régua decidiu: a frase de sempre (nela, grave com risco abaixo de 0,90
+        é mesmo pelo valor da conta);
+      - sem a decisão na trilha: a frase da régua, mas SEM afirmar "crítico pelo
+        valor da conta" quando a mensalidade não chega ao limiar de valor.
+
+    Em qualquer caso, se a oferta saiu por intenção explícita, a frase diz."""
+    saida = (decisao or {}).get("saida") or {}
+    if decisao is not None and decisao.get("modelo") not in (None, retention_log.MODELO_REGRA):
+        posicao = (saida.get("posicao") or {}).get("na_base")
+        faixas = batch_scoring.faixas_de_posicao()
+        promovido = (crit == "critico" and posicao is not None
+                     and posicao < 1 - faixas[0] / 100)
+        frase = batch_scoring._explicar_pelo_modelo(cliente, posicao, crit, faixas, idioma,
+                                                    promovido=promovido)
+        decidido = batch_scoring.DECIDIDO_MODELO
+    else:
+        posicao = None
+        frase = batch_scoring.explicar(cliente, risk, crit, None, idioma)
+        decidido = batch_scoring.DECIDIDO_REGRA if decisao is not None else None
+        pelo_valor = batch_scoring._f("critico_valor", idioma)
+        mrr = _rs.mrr_utilizavel(cliente.get("mrr"))
+        if (decisao is None and frase.endswith(pelo_valor)
+                and (mrr is None or mrr < _rs.limiar_de_alto_valor())):
+            frase = frase[:-len(pelo_valor)]
+    if saida.get("regra_de_intervencao") == "intencao_explicita":
+        frase += batch_scoring._f("intencao_explicita", idioma)
+    return frase, decidido, posicao
+
+
+def _linha_do_sdk(ciclo: dict, idioma: str = "pt", decisao: dict | None = None) -> dict:
+    """Um ciclo do `retention_log` no MESMO formato do ranking do upload.
+    `decisao` é a última decisão de risco da trilha para este cliente (ou None)."""
     risk = ciclo.get("risk_score")
     crit = ciclo.get("criticality") or "padrao"
     cliente = {
@@ -64,7 +121,8 @@ def _linha_do_sdk(ciclo: dict, idioma: str = "pt") -> dict:
         "days_since_last": ciclo.get("days_since_last"),
         "features_used_30d": ciclo.get("features_used_30d"),
     }
-    explicacao = batch_scoring.explicar(cliente, risk, crit, None, idioma)
+    explicacao, decidido, posicao = _explicar_o_sdk(
+        cliente, risk, crit, _decisao_deste_ciclo(ciclo, decisao), idioma)
     evento = ciclo.get("event")
     if evento:
         explicacao = f"último evento: {evento}; {explicacao}"
@@ -73,6 +131,10 @@ def _linha_do_sdk(ciclo: dict, idioma: str = "pt") -> dict:
         "risk_score": risk,
         "criticality": crit,
         "explicacao": explicacao,
+        # Quem decidiu o risco deste evento, lido da trilha (None se ela não tem
+        # a decisão deste ciclo), e a posição que o modelo deu.
+        "risco_decidido_por": decidido,
+        "posicao_na_base": posicao,
         "email": None,
         "importado_em": None,
         # O evento pontual não tem base para se comparar: é sempre a régua
@@ -104,8 +166,9 @@ def clientes_em_risco(tenant_id: str, idioma: str = "pt") -> list[dict]:
     for l in batch_scoring.pontuar_base(tenant_id, idioma):
         por_cliente[l["customer_id_externo"]] = _linha_do_upload(l)
 
+    decisoes = retention_log.ultimas_decisoes_de_risco(tenant_id)
     for ciclo in retention_log.ultimo_ciclo_por_cliente(tenant_id):
-        linha = _linha_do_sdk(ciclo, idioma)
+        linha = _linha_do_sdk(ciclo, idioma, decisoes.get(ciclo.get("user_id")))
         cid = linha["customer_id_externo"]
         if cid in por_cliente:
             vencedora = _mais_recente(por_cliente[cid], linha)

@@ -530,9 +530,16 @@ class TestOQueNaoPodeAparecer:
             if caminho.startswith(("/simulate", "/dev", "/docs", "/openapi", "/redoc", "/painel")):
                 continue
             r = _get(cenario, A, caminho)
-            if r.status_code == 200 and "fee" in set(_chaves(r.json())):
+            if r.status_code != 200:
+                continue
+            # Rodada 4: o extrato tambem sai em arquivo (`/extrato/csv`), com a mesma fee.
+            if r.headers["content-type"].startswith("text/csv"):
+                tem_fee = "Taxa da CRAI" in r.text
+            else:
+                tem_fee = "fee" in set(_chaves(r.json()))
+            if tem_fee:
                 com_fee.append(caminho)
-        assert com_fee == ["/extrato"]
+        assert com_fee == ["/extrato", "/extrato/csv"]
 
     @pytest.mark.parametrize("rota", ROTAS)
     def test_nenhum_contato_em_nenhuma_resposta(self, cenario, rota):

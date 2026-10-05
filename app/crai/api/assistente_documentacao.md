@@ -55,9 +55,10 @@ aconteceu.
   posição na base. Se quem decidiu foi a régua: quando o risco passa do corte.
 - A **oferta** é uma entre quatro: desconto de 10% por 3 meses, desconto de 20% por 3
   meses, pausa de 1 mês na assinatura, ou troca para Pix ou boleto. O sistema aprende com
-  cada aceite e cada recusa qual oferta funciona melhor. Com o modelo de IA decidindo, o
-  caso grave leva a oferta que o sistema escolheu, e os outros levam a de menor custo entre
-  as que ele considerou.
+  cada aceite e cada recusa qual oferta funciona melhor. Quem mostra intenção explícita de
+  sair e quem está como grave levam a oferta que o sistema escolheu. Quem está como
+  preocupante leva a oferta de retenção de menor custo (hoje, o desconto de 10%); a troca
+  para Pix ou boleto não conta como a mais leve.
 - **Valor mantido:** quando o cliente aceita a oferta, conta a mensalidade dele pelo número
   de meses em "meses_de_mensalidade_contados", menos o desconto concedido. Se ele cancelar
   dentro do prazo de estorno, o valor sai da conta.
@@ -78,6 +79,12 @@ Sem recuperação, não há cobrança. Os valores que o painel mostra já são l
 fica para a empresa). O **extrato**, na Visão geral, mostra cada linha com o valor, a taxa
 e o líquido; ele é visível para o dono e o administrador da conta. O assistente não informa
 o percentual da taxa: ele está no contrato e no extrato.
+
+No **período de piloto**, a CRAI não cobra taxa: o valor líquido é o valor inteiro. A Visão
+geral e o extrato mostram o aviso "Período de piloto: sem taxa". O extrato ganha a coluna
+"Taxa fora do piloto", com o que seria cobrado fora do piloto; esse valor não é cobrado.
+Quem define se a empresa está em piloto é a CRAI, pelo contrato: não há botão para isso no
+painel. Ao fim do piloto, a taxa vale só para o que for recuperado ou mantido dali em diante.
 
 ## O que a CRAI faz com os dados
 

@@ -875,9 +875,10 @@ ROTULOS_DE_REGRA_DE_INTERVENCAO = {
                                   "comparar este cliente, e o evento não é de intenção explícita"),
 }
 ROTULOS_DE_INTENSIDADE = {
-    "oferta_do_bandit": "intensidade: a oferta escolhida pelo algoritmo, por ser um caso grave",
-    "oferta_mais_leve": ("intensidade: a oferta de menor custo entre as consideradas, por não "
-                         "ser um caso grave"),
+    "oferta_do_bandit": ("intensidade: a oferta escolhida pelo algoritmo (caso grave, ou "
+                         "evento de intenção explícita)"),
+    "oferta_mais_leve": ("intensidade: a oferta de retenção de menor custo, por ser um caso "
+                         "preocupante, e não grave"),
 }
 
 ROTULOS_DE_ORIGEM_TEXTO = {"template": "texto de modelo pronto (não gerado)",
@@ -1236,6 +1237,29 @@ def decisoes_do_sujeito(tenant_id: str, sujeito_id: str, limite: int = 50,
     except Exception as e:                       # noqa: BLE001
         print(f"[ART20] Falha ao ler decisões: {e}")
         return []
+
+
+def ultimas_decisoes_de_risco(tenant_id: str) -> dict:
+    """`{sujeito_id: decisão}`: a decisão de RISCO do voluntário mais recente
+    de cada sujeito deste tenant. Só leitura (Rodada 4): é como a lista
+    "Clientes em risco" sabe quem decidiu de verdade o risco de quem veio por
+    evento, o que o ciclo gravado não guarda. Nunca levanta: sem a trilha, a
+    lista continua saindo, sem essa informação."""
+    try:
+        with _conectar() as conn:
+            linhas = conn.execute(
+                """SELECT d.* FROM decisoes_automatizadas d
+                     JOIN (SELECT sujeito_id, MAX(id) AS ultimo
+                             FROM decisoes_automatizadas
+                            WHERE tenant_id = ? AND dominio = ? AND tipo_decisao = ?
+                         GROUP BY sujeito_id) u
+                       ON u.ultimo = d.id
+                    WHERE d.tenant_id = ?""",
+                (tenant_id, DOMINIO_VOLUNTARIO, TIPO_RISCO, tenant_id)).fetchall()
+            return {l["sujeito_id"]: _linha_da_trilha(l) for l in linhas}
+    except Exception as e:                       # noqa: BLE001
+        print(f"[ART20] Falha ao ler as últimas decisões de risco: {e}")
+        return {}
 
 
 def verificar_cadeia(tenant_id: str) -> dict:

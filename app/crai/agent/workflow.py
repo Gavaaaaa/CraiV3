@@ -11,6 +11,7 @@ from ..config import (
     custo_tentativa_pix,
     custos_por_canal,
     success_fee_pct,
+    taxa_cobrada_e_fora_do_piloto,
 )
 from .pix_codes import (CAUSA_LEGIVEL, CAUSA_REVOGADA, CAUSAS_RETENTAVEIS_PIX,
                         EXPLICACAO_DA_CAUSA, causa_do_codigo)
@@ -1189,6 +1190,14 @@ def success_fee(amount: float, recovered: bool) -> float:
     return round(amount * success_fee_pct(), 2) if recovered else 0.0
 
 
+def fee_da_recuperacao(amount: float, tenant_id) -> tuple:
+    """Rodada 4, Fase 3 (modo piloto): `(fee cobrada, fee fora do piloto)` de
+    uma cobrança RECUPERADA desta empresa. Fora do piloto é `(success_fee,
+    None)`; em piloto, `(0.0, success_fee)`. É o que os dois pontos que fecham
+    um ciclo gravam (ver `config.taxa_cobrada_e_fora_do_piloto`)."""
+    return taxa_cobrada_e_fora_do_piloto(success_fee(amount, True), tenant_id)
+
+
 def tentativas_ja_disparadas(state: AgentState) -> int:
     """Quantas tentativas deste ciclo foram EXECUTADAS (saíram para o PSP, ou
     têm resultado de execução).
@@ -1207,7 +1216,8 @@ def tentativas_ja_disparadas(state: AgentState) -> int:
 
 
 async def update_roi_dashboard(state: AgentState) -> AgentState:
-    fee = success_fee(state["amount"], bool(state.get("recovered")))
+    fee = (fee_da_recuperacao(state["amount"], state.get("tenant_id"))[0]
+           if state.get("recovered") else 0.0)
     # `or 0`: um state reconstruído de um ciclo sem diagnóstico (legado, ou a
     # linha de transição do dataset) tem e-Profit None, e o log não pode cair.
     eprofit = state.get("eprofit") or 0

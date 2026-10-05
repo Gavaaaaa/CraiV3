@@ -525,8 +525,8 @@ def _porque_da_oferta(regra, intensidade, estimada) -> str:
               if estimada is not None else ".")
     if intensidade == voluntary_agent.INTENSIDADE_MAIS_LEVE:
         return (_PORQUE_DA_REGRA.get(regra, "")
-                + "Como o caso não é grave, o sistema escolheu a oferta de menor custo entre as "
-                  "que considerou nesta rodada" + chance)
+                + "Como o caso é preocupante, e não grave, o sistema escolheu a oferta de "
+                  "retenção de menor custo" + chance)
     return (_PORQUE_DA_REGRA.get(regra, "")
             + "O sistema sorteia a partir do que já aprendeu sobre cada oferta para este "
               "perfil. Nesta rodada, esta teve o maior retorno esperado" + chance)
@@ -672,7 +672,7 @@ async def simular_retencao(corpo: dict = Body(...), conta: dict = Depends(get_co
                 user_id, oferta, final.get("profile") or "PJ", aceitou, tenant_id=tenant_id)
             if aceitou:
                 mantido.sincronizar_sem_levantar(tenant_id)
-                valores = mantido.valores_da_retencao(oferta, cliente["mrr"])
+                valores = mantido.valores_da_retencao(oferta, cliente["mrr"], tenant_id)
         faixa = vol.FAIXA_DA_CRITICIDADE.get(criticidade, "sem_risco")
         simulador.registrar_resultado_da_retencao(
             registro["id"], faixa=faixa, motivo=motivo,

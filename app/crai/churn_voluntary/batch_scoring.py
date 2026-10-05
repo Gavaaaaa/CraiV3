@@ -135,6 +135,9 @@ FRASES = {
                        "en": "risk by the model, with no base to compare against"},
     "promovido_valor": {"pt": " — grave pelo valor da conta: tem risco e o MRR está entre os {x}% maiores da sua base",
                         "en": " - serious because of the account value: at risk and the MRR is among the top {x}% of your base"},
+    # Rodada 4: o motivo de quem veio por evento diz quem decidiu de verdade.
+    "intencao_explicita": {"pt": " — o sistema agiu por intenção explícita do cliente (o evento), e não pela pontuação de risco",
+                           "en": " - the system acted on the customer's explicit intent (the event), not on the risk score"},
 }
 
 
@@ -400,9 +403,11 @@ def esquecer_calculos_da_regua() -> None:
     um teste que pediu o ranking não pode deixar `regua_calculada_em`
     preenchido para o teste seguinte. Zera também a referência do score do
     modelo por tenant (promoção v3, Bloco 2), pelo mesmo motivo."""
+    global _referencias_lidas_de
     _ultimo_calculo_da_regua.clear()
     _referencia_do_score.clear()
     _referencia_do_mrr.clear()
+    _referencias_lidas_de = None          # o próximo que consultar relê o disco (Rodada 4)
     # O cache da régua do dashboard (Rodada 3) guarda um resultado deste módulo:
     # some junto. Import aqui dentro: `insights_unificados` importa este módulo.
     from . import insights_unificados
@@ -486,13 +491,143 @@ MINIMO_LINHAS_POSICAO = MINIMO_LINHAS_REGUA_DA_BASE
 DECIDIDO_MODELO = "modelo"
 DECIDIDO_REGRA = "regra"
 
-# A referência do score do modelo por tenant, da última `pontuar_base` NESTE
-# processo — o que o caminho do SDK usa para posicionar um evento sozinho (D4).
-# Mesma classe de memória de `_ultimo_calculo_da_regua`: zera no reinício.
+# A referência do score do modelo por tenant, da última `pontuar_base` — o que
+# o caminho do SDK usa para posicionar um evento sozinho (D4). Desde a Rodada 4
+# são os QUANTIS do score (p0 a p100), e não a lista inteira, e ficam também em
+# disco (`caminho_das_referencias`): sobrevivem ao reinício do serviço.
 _referencia_do_score: dict = {}
-# A referência do MRR por tenant, da mesma `pontuar_base`, para a promoção pelo
-# valor no SDK.
+# A referência do MRR por tenant (também em quantis), da mesma `pontuar_base`,
+# para a promoção pelo valor no SDK.
 _referencia_do_mrr: dict = {}
+
+# ── A referência de posição em disco (Rodada 4) ──────────────────────────
+#
+# Antes, a referência morava só na memória do processo: depois de um reinício,
+# todo evento era posicionado contra a referência de TREINO do modelo até
+# alguém pedir o ranking da empresa de novo. Agora cada `pontuar_base` grava,
+# por empresa, os quantis do score e do MRR num arquivo JSON, e o processo os
+# lê na subida (e na primeira consulta, se ainda não leu).
+#
+# O QUE VAI PARA O DISCO: 101 números do score, 101 do MRR, quantos clientes
+# entraram na conta e quando. Nenhum identificador, nenhum dado de cliente: são
+# estatísticas da base (o p0 e o p100 são o menor e o maior valor, sem dizer de
+# quem). O arquivo fica ao lado do banco de ciclos de retenção
+# (`CRAI_RETENTION_DB`), ou onde `CRAI_REFERENCIAS_POSICAO` mandar.
+#
+# A REFERÊNCIA SEGUE A BASE: se a base da empresa deixa de ter o mínimo de
+# clientes com dado, a referência dela é apagada (memória e disco), e os
+# eventos voltam a ser posicionados contra a referência de treino.
+ENV_REFERENCIAS = "CRAI_REFERENCIAS_POSICAO"
+ARQUIVO_DAS_REFERENCIAS = "referencias_de_posicao.json"
+N_QUANTIS_DA_REFERENCIA = 101
+# De que arquivo a memória foi lida (None: ainda não leu neste processo).
+_referencias_lidas_de = None
+
+
+def caminho_das_referencias():
+    """Onde ficam as referências de posição por empresa."""
+    import os
+    from pathlib import Path
+
+    from . import retention_log
+
+    explicito = os.getenv(ENV_REFERENCIAS, "").strip()
+    if explicito:
+        return Path(explicito)
+    return Path(retention_log.caminho_do_banco()).parent / ARQUIVO_DAS_REFERENCIAS
+
+
+def quantis_da_referencia(valores) -> list:
+    """Os N_QUANTIS_DA_REFERENCIA quantis (p0 a p100) de uma lista de números,
+    em ordem crescente. É o que se guarda: a distribuição, não os valores."""
+    ordenados = np.sort(np.asarray(list(valores), dtype=float))
+    quantis = np.quantile(ordenados, np.linspace(0.0, 1.0, N_QUANTIS_DA_REFERENCIA))
+    return [round(float(q), 6) for q in quantis]
+
+
+def _ler_arquivo_das_referencias(caminho) -> dict:
+    import json
+
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            dados = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:                        # noqa: BLE001 - arquivo torto não derruba
+        logger.warning("[REFERENCIAS] %s ilegível (%r): as referências de posição em "
+                       "disco foram ignoradas.", caminho, e)
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def _lista_de_numeros(bruto):
+    if not isinstance(bruto, list) or len(bruto) < 2:
+        return None
+    try:
+        return sorted(float(v) for v in bruto)
+    except (TypeError, ValueError):
+        return None
+
+
+def carregar_referencias(forcar: bool = False) -> int:
+    """Lê do disco as referências de posição de todas as empresas, uma vez
+    por processo e por arquivo (`forcar` relê). Chamada na subida do serviço e,
+    por garantia, antes de cada consulta. O que já está na memória (uma
+    `pontuar_base` deste processo) vence o disco. Devolve quantas empresas
+    têm referência. Nunca levanta."""
+    global _referencias_lidas_de
+    caminho = caminho_das_referencias()
+    if not forcar and _referencias_lidas_de == str(caminho):
+        return len(_referencia_do_score)
+    _referencias_lidas_de = str(caminho)
+    for tenant_id, ref in _ler_arquivo_das_referencias(caminho).items():
+        if not isinstance(ref, dict):
+            continue
+        score, mrr = _lista_de_numeros(ref.get("score")), _lista_de_numeros(ref.get("mrr"))
+        if score and tenant_id not in _referencia_do_score:
+            _referencia_do_score[tenant_id] = score
+        if mrr and tenant_id not in _referencia_do_mrr:
+            _referencia_do_mrr[tenant_id] = mrr
+    return len(_referencia_do_score)
+
+
+def _guardar_referencias(tenant_id: str, scores, mrrs) -> None:
+    """A referência DESTA empresa passa a ser a desta base: os quantis do
+    score do modelo e do MRR, ou nada, se a base não tem o mínimo. Grava em
+    disco só quando mudou. Falha de disco não derruba o ranking: a memória
+    fica certa e o log diz."""
+    import json
+    import os
+
+    carregar_referencias()
+    score = quantis_da_referencia(scores) if scores is not None else None
+    mrr = quantis_da_referencia(mrrs) if mrrs is not None else None
+    if _referencia_do_score.get(tenant_id) == score and _referencia_do_mrr.get(tenant_id) == mrr:
+        return
+    for memoria, valor in ((_referencia_do_score, score), (_referencia_do_mrr, mrr)):
+        if valor is None:
+            memoria.pop(tenant_id, None)
+        else:
+            memoria[tenant_id] = valor
+    caminho = caminho_das_referencias()
+    try:
+        dados = _ler_arquivo_das_referencias(caminho)
+        if score is None and mrr is None:
+            dados.pop(tenant_id, None)
+        else:
+            dados[tenant_id] = {
+                "score": score, "mrr": mrr,
+                "clientes_com_score": None if scores is None else len(scores),
+                "clientes_com_mrr": None if mrrs is None else len(mrrs),
+                "atualizada_em": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        temporario = caminho.with_name(caminho.name + f".{os.getpid()}.tmp")
+        with open(temporario, "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=True, sort_keys=True)
+        os.replace(temporario, caminho)
+    except Exception as e:                        # noqa: BLE001
+        logger.warning("[REFERENCIAS] não foi possível gravar %s (%r): a referência de "
+                       "posição de %s vale só até o próximo reinício.", caminho, e, tenant_id)
 
 
 def posicao_pelo_modelo_ativa() -> bool:
@@ -586,6 +721,7 @@ def referencia_do_meta():
 
 def referencia_para_evento(tenant_id: str | None) -> tuple:
     """(referência, origem) para posicionar UM evento do SDK (D4)."""
+    carregar_referencias()
     ref = _referencia_do_score.get(tenant_id)
     if ref:
         return ref, REGUA_BASE
@@ -673,21 +809,23 @@ def pontuar_lista(clientes: list[dict], idioma: str = "pt", tenant_id: str | Non
         decisoes.append((risco, por_modelo))
 
     ref_mrr = referencia_de_mrr(clientes)
-    if ref_mrr is not None and tenant_id is not None:
-        _referencia_do_mrr[tenant_id] = ref_mrr
 
     referencias = {}
+    scores_do_modelo = None
     for por_modelo in (True, False):
         scores = sorted(d[0] for d in decisoes if d is not None and d[1] == por_modelo)
         if len(scores) >= MINIMO_LINHAS_POSICAO:
             referencias[por_modelo] = (scores, REGUA_BASE)
-            if por_modelo and tenant_id is not None:
-                _referencia_do_score[tenant_id] = scores
+            if por_modelo:
+                scores_do_modelo = scores
         elif por_modelo:
             ref = referencia_do_meta()
             referencias[por_modelo] = (ref, REGUA_GLOBAL)
         else:
             referencias[por_modelo] = (None, REGUA_GLOBAL)
+    if tenant_id is not None:
+        # A referência do SDK desta empresa (memória e disco) é a desta base.
+        _guardar_referencias(tenant_id, scores_do_modelo, ref_mrr)
 
     linhas = []
     for c, d in zip(clientes, decisoes):
@@ -747,7 +885,7 @@ def criticidade_do_evento(tenant_id: str | None, risco: float, mrr, dias, uso,
     if not decidido_pelo_modelo or _rs.contrato_ativo() != _rs.CONTRATO_V3:
         return {"criticality": classify_criticality(risco, mrr), "posicao_na_base": None,
                 "origem_da_posicao": None, "mrr_no_topo": None}
-    ref, origem = referencia_para_evento(tenant_id)
+    ref, origem = referencia_para_evento(tenant_id)      # já leu o disco, se faltava
     pos = posicao_no_score(risco, ref) if ref else None
     pos_mrr = _posicao_do_mrr(mrr, _referencia_do_mrr.get(tenant_id))
     return {"criticality": criticidade_por_posicao(pos, dias, uso,

@@ -251,14 +251,17 @@ class TestIntencaoExplicita:
         assert risco["saida"]["regra_de_intervencao"] == va.REGRA_INTENCAO_EXPLICITA
         assert len(_ofertas()) == 1
 
-    def test_quem_nao_e_grave_leva_a_oferta_mais_leve(self, cliente):
+    def test_quem_nao_e_grave_leva_a_oferta_do_bandit_por_intencao(self, cliente):
+        # Rodada 4, decisao do Crai: evento de intencao explicita leva a oferta do
+        # bandit, QUALQUER que seja a faixa (antes, quem nao era grave levava a mais leve).
         _instalar(REF_TODOS_ACIMA)
         _evento(cliente, _chave(cliente), evento=CANCELAMENTO, props=SAUDAVEL)
+        assert _decisoes(tipo=rl.TIPO_RISCO)[0]["saida"]["criticality"] == "padrao"
         saida = _decisoes(tipo=rl.TIPO_OFERTA)[0]["saida"]
-        assert saida["intensidade"] == va.INTENSIDADE_MAIS_LEVE
+        assert saida["intensidade"] == va.INTENSIDADE_DO_BANDIT
         consideradas = [c["offer"] for c in saida["ofertas_consideradas"]]
-        assert len(consideradas) == va.N_CANDIDATAS and saida["offer_type"] in consideradas
-        assert _custo(saida["offer_type"]) == min(_custo(o) for o in consideradas)
+        assert len(consideradas) == va.N_CANDIDATAS
+        assert saida["offer_type"] == consideradas[0], "a primeira do bandit, e nao a de menor custo"
 
     def test_grave_pela_posicao_leva_a_oferta_do_bandit(self, cliente):
         _instalar(REF_TODOS_ABAIXO)
@@ -338,7 +341,7 @@ class TestPosicaoNaBase:
         assert oferta["saida"]["intensidade"] == va.INTENSIDADE_DO_BANDIT
         assert oferta["saida"]["offer_type"] == oferta["saida"]["ofertas_consideradas"][0]["offer"]
         assert oferta["saida"]["offer_type"] == linha["offer_type"]
-        assert "por ser um caso grave" in oferta["explicacao"]
+        assert "a oferta escolhida pelo algoritmo (caso grave" in oferta["explicacao"]
         assert rl.verificar_cadeia(A)["integra"] is True
 
     def test_preocupante_recebe_a_oferta_mais_leve(self, cliente):
@@ -353,10 +356,12 @@ class TestPosicaoNaBase:
         assert saida["intensidade"] == va.INTENSIDADE_MAIS_LEVE
         consideradas = [c["offer"] for c in saida["ofertas_consideradas"]]
         assert _custo(saida["offer_type"]) == min(_custo(o) for o in consideradas)
+        # Rodada 4, decisao do Crai: a troca para Pix ou boleto nao entra na comparacao.
+        assert "pix_boleto_flash" not in consideradas and saida["offer_type"] == "desconto_10"
         # A probabilidade gravada e a da oferta que saiu, e nao a da primeira do bandit.
         assert saida["p_estimado"] == next(c["p_estimado"] for c in saida["ofertas_consideradas"]
                                            if c["offer"] == saida["offer_type"])
-        assert "menor custo entre as consideradas" in oferta["explicacao"]
+        assert "a oferta de retenção de menor custo, por ser um caso preocupante" in oferta["explicacao"]
         assert _linhas()[0]["offer_type"] == saida["offer_type"] and len(_ofertas()) == 1
 
     def test_no_topo_da_base_mas_sem_sinal_de_abandono_nao_recebe(self, cliente):
@@ -566,10 +571,14 @@ class TestTrilha:
 
     def test_as_candidatas_do_painel_dizem_por_que_a_mais_leve_venceu(self):
         import asyncio
-        _instalar(REF_TODOS_ACIMA)
+        # Rodada 4: a mais leve ficou so para o preocupante que veio pela posicao na base
+        # (antes, o cenario deste teste era a intencao explicita de quem nao era grave).
+        _instalar()
+        _instalar(_ref_que_deixa_preocupante(SESSAO, ABANDONO))
         final = asyncio.run(app_module._run_voluntary_pipeline(
-            "user:p-1", CANCELAMENTO, dict(SAUDAVEL), tenant_id=A))
-        assert final["regra_de_intervencao"] == va.REGRA_INTENCAO_EXPLICITA
+            "user:p-1", SESSAO, dict(ABANDONO), tenant_id=A))
+        assert final["regra_de_intervencao"] == va.REGRA_POSICAO_NA_BASE
+        assert final["criticality"] == "alto"
         assert final["intensidade_da_oferta"] == va.INTENSIDADE_MAIS_LEVE
         candidatas = final["candidatas"]
         assert len(candidatas) == va.N_CANDIDATAS

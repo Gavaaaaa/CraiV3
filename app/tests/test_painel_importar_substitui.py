@@ -119,7 +119,7 @@ class TestRotaAutenticadaContinuaAcumulando:
     def test_clientes_importar_faz_upsert_sem_apagar(self, cliente, supabase_falso):
         """Duas planilhas com ids diferentes pela rota autenticada: as duas
         ficam. A substituição é só da rota de demonstração."""
-        headers = supabase_falso.bearer("empresa-x")
+        headers = supabase_falso.bearer("empresa-x", papel="owner")   # Rodada 4: o anexo exige dono ou admin
         csv1 = b"customer_id_externo;mrr;billing_profile\na1;100;CLT\na2;200;PJ\n"
         csv2 = b"customer_id_externo;mrr;billing_profile\nb1;300;CLT\n"
         for nome, csv in (("um.csv", csv1), ("dois.csv", csv2)):
@@ -177,7 +177,7 @@ class TestCiclosLimposJunto:
         assert rl.apagar_tenant("ninguem") == 0
 
     def test_rota_autenticada_nao_apaga_ciclos(self, cliente, supabase_falso):
-        headers = supabase_falso.bearer("empresa-x")
+        headers = supabase_falso.bearer("empresa-x", papel="owner")   # Rodada 4: o anexo exige dono ou admin
         assert rl.registrar_ciclo({"tenant_id": "empresa-x", "user_id": "user:x1",
                                    "event": "Disparo em lote", "props": {}, "risk_score": 0.9,
                                    "profile": "CLT", "criticality": "critico",

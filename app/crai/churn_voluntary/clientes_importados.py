@@ -632,6 +632,31 @@ def obter_por_recorrencia(tenant_id: str, id_recorrencia: str):
         return linhas[0] if linhas else None
 
 
+def buscar(tenant_id: str, texto: str, limite: int = 8) -> list[dict]:
+    """Os clientes DESTE tenant cujo NOME contém `texto`, ou cujo identificador
+    (o da empresa, ou o da recorrência) começa por ele, sem distinguir maiúscula
+    de minúscula (Rodada 4: a busca do topo do painel). Devolve só o
+    identificador, o nome, o id da recorrência, a mensalidade e se cancelou:
+    nenhum contato. Inclui quem cancelou (a empresa pode procurar por ele).
+
+    No SQLite a comparação sem caixa vale para as letras sem acento; no
+    Postgres, para todas."""
+    termo = (texto or "").strip().lower()
+    if not termo:
+        return []
+    # `!` como caractere de escape: `%` e `_` do texto são literais.
+    literal = termo.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    with _conectar() as conn:
+        linhas = conn.executar(
+            f"SELECT customer_id_externo, nome, id_recorrencia, mrr, cancelado_em FROM {TABELA} "
+            "WHERE tenant_id = ? AND (LOWER(nome) LIKE ? ESCAPE '!' "
+            "OR LOWER(customer_id_externo) LIKE ? ESCAPE '!' "
+            "OR LOWER(id_recorrencia) LIKE ? ESCAPE '!') "
+            "ORDER BY customer_id_externo LIMIT ?",
+            (tenant_id, f"%{literal}%", f"{literal}%", f"{literal}%", int(limite)))
+    return [dict(l) for l in linhas]
+
+
 def nomes_por_recorrencia(tenant_id: str, ids_recorrencia: list) -> dict:
     """{id_recorrencia: nome} dos clientes DESTE tenant, numa consulta só —
     para a listagem do dashboard. Sem mapeamento, a chave não aparece."""
