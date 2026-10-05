@@ -331,7 +331,7 @@ function FaixaStatus({ estado, processando, ultima }: { estado: EstadoSimulacao;
 function Faixa({ tom, icone, children }: { tom: 'orange' | 'danger' | 'ok' | 'amber' | 'neutro'; icone: React.ReactNode; children: React.ReactNode }) {
   const classes = {
     orange: 'border-orange/50 bg-orange/10 text-orange',
-    danger: 'border-danger/50 bg-danger/10 text-[#f5a29a]',
+    danger: 'border-danger/50 bg-danger/10 text-danger-aviso',
     ok: 'border-ok/50 bg-ok/10 text-ok',
     amber: 'border-amber/40 bg-amber/[0.08] text-amber',
     neutro: 'border-line bg-paper/[0.04] text-silver',

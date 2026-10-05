@@ -12,7 +12,7 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variants: Record<Variant, string> = {
   // Ação em claro sobre escuro: o laranja fica reservado para sinal (seleção, estado).
-  primary: 'btn-shine rounded-[8px] bg-paper text-ink hover:bg-white',
+  primary: 'btn-shine rounded-[8px] bg-paper text-ink hover:bg-paper-forte',
   ghost: 'rounded-[8px] border border-graphite text-paper hover:border-silver hover:bg-paper/[0.04]',
   quiet: 'rounded-[8px] text-silver hover:bg-paper/[0.06] hover:text-paper',
 }

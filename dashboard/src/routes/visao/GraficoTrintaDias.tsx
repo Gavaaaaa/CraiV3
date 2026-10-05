@@ -255,7 +255,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             <path d={caminhoAcum} fill="none" stroke={LINHA_ACUM} strokeOpacity={0.9} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
             {ultimo ? (
               <>
-                <circle cx={cx0(dados.length - 1)} cy={yAcum(ultimo.acum)} r={6} fill="#241c15" />
+                <circle cx={cx0(dados.length - 1)} cy={yAcum(ultimo.acum)} r={6} fill="var(--color-card)" />
                 <circle cx={cx0(dados.length - 1)} cy={yAcum(ultimo.acum)} r={4} fill={LINHA_ACUM} />
                 <text
                   x={cx0(dados.length - 1) - 10}
@@ -305,7 +305,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             {ativo !== null ? (
               <g pointerEvents="none">
                 <line x1={cx0(ativo)} x2={cx0(ativo)} y1={TOPO} y2={baseDia} stroke="var(--color-silver)" strokeOpacity={0.45} />
-                <circle cx={cx0(ativo)} cy={yAcum(dados[ativo].acum)} r={6} fill="#241c15" />
+                <circle cx={cx0(ativo)} cy={yAcum(dados[ativo].acum)} r={6} fill="var(--color-card)" />
                 <circle cx={cx0(ativo)} cy={yAcum(dados[ativo].acum)} r={4} fill={LINHA_ACUM} />
               </g>
             ) : null}
@@ -314,7 +314,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
           {p ? (
             <div
               role="status"
-              className="pointer-events-none absolute top-8 z-10 w-[220px] rounded-[10px] border border-line bg-slate/95 px-3.5 py-3 shadow-[0_18px_40px_-18px_rgba(0,0,0,0.9)] backdrop-blur"
+              className="pointer-events-none absolute top-8 z-10 w-[220px] rounded-[10px] border border-line bg-slate/95 px-3.5 py-3 shadow-flutuante backdrop-blur"
               style={
                 tipADireita
                   ? { left: `calc(${tipX}% + 14px)` }

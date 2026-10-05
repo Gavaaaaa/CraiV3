@@ -12,7 +12,7 @@ export function ModoToggle({ modo, onChange }: { modo: Modo; onChange: (m: Modo)
     <div
       role="radiogroup"
       aria-label="Modo dos dados"
-      className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-bar/90 p-1 shadow-[0_20px_50px_-20px_rgba(0,0,0,0.9)] backdrop-blur-md"
+      className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-bar/90 p-1 shadow-flutuante backdrop-blur-md"
     >
       <span className="t-label pr-1 pl-3 text-muted">Mostrar</span>
       {opcoes.map((o) => (

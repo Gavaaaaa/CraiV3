@@ -98,7 +98,7 @@ export function BuscaDoTopo() {
           aria-label="Buscar cliente pelo nome ou pelo identificador"
           aria-expanded={aberto && procura}
           aria-controls="resultados-da-busca"
-          className="h-10 w-56 rounded-[10px] border border-line bg-slate/60 pr-3 pl-9 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
+          className="h-10 w-56 rounded-[10px] border border-campo bg-slate/60 pr-3 pl-9 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
         />
       </label>
 
@@ -107,10 +107,10 @@ export function BuscaDoTopo() {
           id="resultados-da-busca"
           aria-label="Resultados da busca"
           aria-busy={buscando}
-          className="scroll-fino absolute top-12 right-0 z-40 max-h-[70vh] w-[min(440px,90vw)] overflow-y-auto rounded-[12px] border border-line bg-card p-2 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.8)]"
+          className="scroll-fino absolute top-12 right-0 z-40 max-h-[70vh] w-[min(440px,90vw)] overflow-y-auto rounded-[12px] border border-line bg-card p-2 shadow-flutuante"
         >
           {erro ? (
-            <p role="alert" className="px-3 py-2 text-apoio text-[#f5a29a]">
+            <p role="alert" className="px-3 py-2 text-apoio text-danger-aviso">
               {erro}
             </p>
           ) : resultado === null ? (

@@ -5,31 +5,60 @@
  * Tokens iguais aos do site da CRAI (crai-site/src/index.css), para o dashboard
  * mudar de casa sem mudar de cara. Os tokens de gráfico e de status são novos:
  * passos das mesmas cores, escolhidos para a superfície escura e validados.
+ *
+ * DOIS TEMAS. O escuro é o padrão (a cara do site) e mora aqui, no `@theme`. O claro
+ * redefine os mesmos tokens em `:root[data-tema="claro"]`, mais abaixo; as telas usam as
+ * mesmas classes nos dois. O que cada token SIGNIFICA (e por isso o que muda no claro):
+ *   ink    a superfície do fundo (escura no escuro, papel claro no claro);
+ *   paper  o texto principal (claro no escuro, tinta escura no claro);
+ *   sobre-destaque  texto escuro sobre o laranja da marca e sobre os cartões coloridos:
+ *          NÃO inverte, porque o laranja é o mesmo nos dois temas;
+ *   sombra a cor que escurece (o véu atrás do painel lateral): não inverte;
+ *   marca  o laranja #ef9311 da marca, igual nos dois (a seta do logotipo, o cartão laranja);
+ *   orange, amber, ok, warn, danger  cores usadas como TEXTO e como preenchimento: no claro
+ *          ganham um passo mais escuro, para passar no contraste sobre o papel.
+ * Os pares de contraste conferidos estão em `temas.test.ts`.
  */
 @theme {
   --color-ink: #1a120a;
   --color-slate: #2b2926;
-  --color-graphite: #565c61;
+  --color-graphite: #6f7479; /* bordas de controle (botão fantasma): 3:1 sobre ink, card e slate */
   --color-silver: #a6aaad;
   --color-muted: #8a9095; /* texto de apoio: passa no contraste (4,5:1) onde o graphite não passa */
   --color-paper: #e8eaeb;
+  --color-paper-forte: #ffffff; /* o passo acima do paper: o botão principal ao passar o mouse */
   --color-orange: #ef9311;
   --color-amber: #ffb86c;
   --color-line: rgba(166, 170, 173, 0.14);
+  --color-campo: rgba(166, 170, 173, 0.56); /* borda de campo de formulário: 3:1 sobre ink e card */
+
+  /* O que não muda com o tema */
+  --color-marca: #ef9311;
+  --color-sobre-destaque: #1a120a;
+  --color-sombra: #1a120a;
 
   /* Superfícies do painel */
   --color-bar: #2a221a;
   --color-card: #221a12;
+  --color-fundo-ok: #1f2a22; /* o aviso "salvo" que flutua na Configuração */
+  --color-fundo-erro: #2a1c1a;
 
-  /* Séries de gráfico (validadas na superfície escura): involuntário e voluntário */
+  /* Séries de gráfico (validadas nas duas superfícies): involuntário e voluntário */
   --color-serie-inv: #d97400;
   --color-serie-vol: #1f9e8a;
+  --color-serie-vol-texto: #5cc9b5; /* a série do voluntário usada como texto ou ícone */
 
   /* Status: sempre com ícone ou texto, nunca só a cor */
   --color-ok: #3fb26f;
   --color-warn: #d99a1e;
   --color-danger: #c2453a;
   --color-danger-deep: #a11a2b;
+  --color-danger-texto: #f08a80; /* o vermelho como texto (selos, faixas, ícones) */
+  --color-danger-aviso: #f5a29a; /* o vermelho como texto de aviso em caixa */
+
+  /* Sombras do que flutua (busca, avisos, dicas) e dos painéis laterais */
+  --shadow-flutuante: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
+  --shadow-painel: 0 0 80px rgba(0, 0, 0, 0.6);
 
   --font-sans: 'Inter Variable', system-ui, sans-serif;
   --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -47,6 +76,62 @@
 
 :root {
   color-scheme: dark;
+  /* As partes dos componentes que mudam com o tema (o vidro, a grade, a rolagem) */
+  --vidro-a: rgba(52, 46, 40, 0.72);
+  --vidro-b: rgba(34, 27, 20, 0.78);
+  --vidro-brilho: rgba(255, 255, 255, 0.05);
+  --vidro-sombra: 0 24px 60px -30px rgba(0, 0, 0, 0.7);
+  --rolagem: rgba(166, 170, 173, 0.2);
+  --seta-do-seletor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6aaad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/*
+ * O TEMA CLARO: papel quente, tinta escura, o mesmo laranja de destaque. Cada valor aqui
+ * foi medido contra as superfícies claras (página, cartão, barra) em `temas.test.ts`.
+ */
+:root[data-tema='claro'] {
+  color-scheme: light;
+  --color-ink: #f4efe7;
+  --color-slate: #e3dcd0;
+  --color-graphite: #7f786d;
+  --color-silver: #5c564e;
+  --color-muted: #6b655c;
+  --color-paper: #1a120a;
+  --color-paper-forte: #2d241b;
+  --color-orange: #a24a00;
+  --color-amber: #8a5300;
+  --color-line: rgba(26, 18, 10, 0.14);
+  --color-campo: rgba(26, 18, 10, 0.48);
+  --color-bar: #ebe4da;
+  --color-card: #fbf9f6;
+  --color-fundo-ok: #e6f4ea;
+  --color-fundo-erro: #fbe9e7;
+  --color-serie-inv: #c26400;
+  --color-serie-vol: #157a68;
+  --color-serie-vol-texto: #136b5b;
+  --color-ok: #1a7040;
+  --color-warn: #8a5a00;
+  --color-danger: #b3261e;
+  --color-danger-deep: #8e1222;
+  --color-danger-texto: #a0261c;
+  --color-danger-aviso: #8f1f17;
+  --shadow-flutuante: 0 24px 60px -24px rgba(26, 18, 10, 0.35);
+  --shadow-painel: 0 0 80px rgba(26, 18, 10, 0.22);
+  --vidro-a: rgba(255, 255, 255, 0.78);
+  --vidro-b: rgba(251, 248, 243, 0.86);
+  --vidro-brilho: rgba(255, 255, 255, 0.9);
+  --vidro-sombra: 0 24px 60px -30px rgba(26, 18, 10, 0.25);
+  --rolagem: rgba(26, 18, 10, 0.22);
+  --seta-do-seletor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235c564e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* A troca de tema: as cores escorregam por um instante. Com movimento reduzido, trocam de uma vez. */
+html.tema-em-troca,
+html.tema-em-troca * {
+  transition:
+    background-color 220ms ease,
+    border-color 220ms ease,
+    color 220ms ease;
 }
 
 @layer base {
@@ -120,21 +205,22 @@
     letter-spacing: -0.03em;
   }
 
-  /* Superfície de vidro quente, como no site */
+  /* Superfície de vidro quente, como no site (os valores mudam com o tema, em :root) */
   .card-glass {
     border: 1px solid var(--color-line);
-    background: linear-gradient(160deg, rgba(52, 46, 40, 0.72), rgba(34, 27, 20, 0.78));
+    background: linear-gradient(160deg, var(--vidro-a), var(--vidro-b));
     -webkit-backdrop-filter: blur(14px) saturate(140%);
     backdrop-filter: blur(14px) saturate(140%);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.05),
-      0 24px 60px -30px rgba(0, 0, 0, 0.7);
+      inset 0 1px 0 var(--vidro-brilho),
+      var(--vidro-sombra);
   }
-  /* O único cartão colorido da tela: o valor mantido */
+  /* O único cartão colorido da tela: o valor mantido. É o laranja da marca nos dois temas,
+     com o texto escuro (sobre-destaque) por cima. */
   .card-orange {
     border: 1px solid rgba(255, 184, 108, 0.35);
     background: linear-gradient(150deg, #f39c1f 0%, #e07f0a 55%, #c96a00 100%);
-    color: var(--color-ink);
+    color: var(--color-sobre-destaque);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
       0 30px 70px -30px rgba(239, 147, 17, 0.55);
@@ -184,17 +270,17 @@
   .pulse-orange {
     animation: pulse-dot-orange 1.8s ease-out infinite;
   }
-  /* Grade sutil atrás do conteúdo, como papel milimetrado escuro */
+  /* Grade sutil atrás do conteúdo, como papel milimetrado (um brilho laranja nos dois temas) */
   .fundo-painel {
     background-image:
       radial-gradient(1200px 600px at 80% -10%, rgba(239, 147, 17, 0.07), transparent 60%),
       radial-gradient(800px 500px at -10% 110%, rgba(255, 184, 108, 0.05), transparent 60%);
   }
-  /* Caixa de seleção com a seta desenhada, igual em todo navegador */
+  /* Caixa de seleção com a seta desenhada, igual em todo navegador (a seta muda com o tema) */
   .seletor {
     appearance: none;
     padding-right: 36px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a6aaad' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: var(--seta-do-seletor);
     background-repeat: no-repeat;
     background-position: right 12px center;
     background-size: 16px;
@@ -208,7 +294,7 @@
     width: 8px;
   }
   .scroll-fino::-webkit-scrollbar-thumb {
-    background: rgba(166, 170, 173, 0.2);
+    background: var(--rolagem);
     border-radius: 8px;
   }
 }
@@ -239,6 +325,10 @@
     animation: none;
   }
   .btn-shine::after {
+    transition: none;
+  }
+  html.tema-em-troca,
+  html.tema-em-troca * {
     transition: none;
   }
 }

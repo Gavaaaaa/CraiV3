@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { IconBell, IconChat, IconGear, IconShield, IconTable, IconUsers } from '../components/icons/Icons'
+import { IconBell, IconChat, IconGear, IconShield, IconSun, IconTable, IconUsers } from '../components/icons/Icons'
 import { usePainel } from '../components/layout/Shell'
 import { Badge } from '../components/ui/Badge'
 import { Card } from '../components/ui/Card'
@@ -11,9 +11,9 @@ import { ErroApi, api } from '../data/api'
 import type { Configuracao as Config, EmpresaDetalhe, Membro, Papel } from '../data/tipos'
 import { cx } from '../lib/cx'
 import { useReducedMotion } from '../lib/useReducedMotion'
-import { SecaoDados, SecaoEmpresa, SecaoEquipe, SecaoIntegracao, SecaoMensagens, SecaoNotificacoes } from './configuracao/Secoes'
+import { SecaoAparencia, SecaoDados, SecaoEmpresa, SecaoEquipe, SecaoIntegracao, SecaoMensagens, SecaoNotificacoes } from './configuracao/Secoes'
 
-type SecaoId = 'mensagens' | 'empresa' | 'equipe' | 'integracao' | 'dados' | 'notificacoes'
+type SecaoId = 'mensagens' | 'empresa' | 'equipe' | 'integracao' | 'dados' | 'notificacoes' | 'aparencia'
 
 /** `de`: as funções de `api.ts` que alimentam a seção (decide a etiqueta "Demonstração"). */
 const SECOES: { id: SecaoId; rotulo: string; apoio: string; Icone: typeof IconGear; premium?: boolean; de: string[] }[] = [
@@ -23,6 +23,8 @@ const SECOES: { id: SecaoId; rotulo: string; apoio: string; Icone: typeof IconGe
   { id: 'integracao', rotulo: 'Integração', apoio: 'Chaves de API e webhook', Icone: IconTable, premium: true, de: ['integracao'] },
   { id: 'dados', rotulo: 'Dados e privacidade', apoio: 'Direitos do cliente, prazos', Icone: IconShield, de: ['exportarTitular', 'anonimizarTitular', 'explicacaoDecisao', 'naoContatar', 'voltarAContatar', 'textoParaPolitica'] },
   { id: 'notificacoes', rotulo: 'Notificações', apoio: 'Avisos para a equipe', Icone: IconBell, de: ['notificacoes'] },
+  // O tema é preferência de quem olha: não lê nem grava nada no backend (`de` vazio).
+  { id: 'aparencia', rotulo: 'Aparência', apoio: 'Tema claro ou escuro', Icone: IconSun, de: [] },
 ]
 
 export function Configuracao() {
@@ -142,7 +144,10 @@ export function Configuracao() {
               transition={{ duration: reduzido ? 0 : 0.2 }}
             >
               <FaixaDemonstracao de={atual.de} />
-              {erro ? (
+              {secao === 'aparencia' ? (
+                // Não depende da configuração da empresa: aparece mesmo com o backend fora do ar.
+                <SecaoAparencia />
+              ) : erro ? (
                 <ErroCarregar mensagem={erro} onTentar={() => setTentativa((t) => t + 1)} />
               ) : config === null ? (
                 <div className="min-h-[360px] animate-pulse rounded-[12px] bg-paper/[0.04]" aria-busy="true" />
@@ -174,8 +179,8 @@ export function Configuracao() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             className={cx(
-              'fixed bottom-20 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-full border px-4 py-2 text-apoio font-[560] shadow-[0_20px_50px_-20px_rgba(0,0,0,0.9)]',
-              aviso.erro ? 'border-danger/50 bg-[#2a1c1a] text-[#f5a29a]' : 'border-ok/50 bg-[#1f2a22] text-ok',
+              'fixed bottom-20 left-1/2 z-40 max-w-[calc(100vw-32px)] -translate-x-1/2 rounded-full border px-4 py-2 text-apoio font-[560] shadow-flutuante',
+              aviso.erro ? 'border-danger/50 bg-fundo-erro text-danger-aviso' : 'border-ok/50 bg-fundo-ok text-ok',
             )}
           >
             {aviso.texto}

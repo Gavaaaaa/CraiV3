@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cx } from '../../lib/cx'
-import { IconChat, IconGear, IconGrid, IconKey, IconLogout, IconPlay, IconRefresh, IconUsers } from '../icons/Icons'
+import { IconChat, IconGear, IconGrid, IconKey, IconPlay, IconRefresh, IconUsers } from '../icons/Icons'
 
 interface Item {
   to: string
@@ -40,8 +40,8 @@ export function Sidebar({ premium }: { premium: boolean }) {
               fill="none"
               aria-hidden="true"
             >
-              <path d="M2 21.5 L10 13.5 L22 3" stroke="var(--color-orange)" strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M15 3 L22 3 L22 10" stroke="var(--color-orange)" strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 21.5 L10 13.5 L22 3" stroke="var(--color-marca)" strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M15 3 L22 3 L22 10" stroke="var(--color-marca)" strokeWidth={4.5} strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </span>
           <span>I</span>
@@ -110,13 +110,8 @@ export function Sidebar({ premium }: { premium: boolean }) {
         >
           <IconGear width={21} height={21} />
         </NavLink>
-        <button
-          type="button"
-          aria-label="Sair"
-          className="flex h-12 w-12 items-center justify-center rounded-[14px] text-muted transition-colors hover:bg-paper/[0.06] hover:text-paper"
-        >
-          <IconLogout width={20} height={20} />
-        </button>
+        {/* O botão "Sair" saiu: não há login de verdade para sair (o de desenvolvimento é automático).
+            Volta quando a autenticação existir. */}
       </div>
     </nav>
   )

@@ -204,11 +204,11 @@ function Bloco({
 
 const TIPO: Record<TipoAtividade, { Icone: typeof IconCheck; classe: string; rotulo: string }> = {
   recuperado: { Icone: IconCheck, classe: 'bg-ok/15 text-ok', rotulo: 'Recuperado' },
-  oferta_aceita: { Icone: IconUsers, classe: 'bg-serie-vol/20 text-[#5cc9b5]', rotulo: 'Oferta aceita' },
-  tentativa_falhou: { Icone: IconX, classe: 'bg-danger/15 text-[#f08a80]', rotulo: 'Tentativa não passou' },
+  oferta_aceita: { Icone: IconUsers, classe: 'bg-serie-vol/20 text-serie-vol-texto', rotulo: 'Oferta aceita' },
+  tentativa_falhou: { Icone: IconX, classe: 'bg-danger/15 text-danger-texto', rotulo: 'Tentativa não passou' },
   mensagem_enviada: { Icone: IconSend, classe: 'bg-paper/[0.07] text-silver', rotulo: 'Mensagem enviada' },
   escolha: { Icone: IconClock, classe: 'bg-orange/15 text-orange', rotulo: 'Aguardando você' },
-  risco_grave: { Icone: IconAlert, classe: 'bg-danger/15 text-[#f08a80]', rotulo: 'Risco grave' },
+  risco_grave: { Icone: IconAlert, classe: 'bg-danger/15 text-danger-texto', rotulo: 'Risco grave' },
   estorno: { Icone: IconUndo, classe: 'bg-paper/[0.07] text-silver', rotulo: 'Estorno' },
 }
 
@@ -342,7 +342,7 @@ export function SeloSaude({ geral, compacto = false }: { geral: ReturnType<typeo
     <span
       className={cx(
         'inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-rotulo font-[520] whitespace-nowrap',
-        geral === 'ok' ? 'border-ok/45 text-ok' : 'border-danger/50 text-[#f08a80]',
+        geral === 'ok' ? 'border-ok/45 text-ok' : 'border-danger/50 text-danger-texto',
       )}
     >
       {compacto ? (
@@ -480,7 +480,7 @@ export function ExtratoDoMes({
           </p>
         ) : null}
         {erroDoArquivo ? (
-          <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-[#f5a29a]">
+          <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-danger-aviso">
             {erroDoArquivo}
           </p>
         ) : null}

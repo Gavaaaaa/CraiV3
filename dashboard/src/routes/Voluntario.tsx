@@ -40,8 +40,8 @@ function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
   const ultimo = xs[xs.length - 1]
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="h-11 w-full" role="img" aria-label="Valor mantido por dia nos últimos 30 dias">
-      <path d={caminho} fill="none" stroke="var(--color-ink)" strokeOpacity={0.55} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={ultimo.x} cy={ultimo.y} r={4} fill="var(--color-ink)" />
+      <path d={caminho} fill="none" stroke="var(--color-sobre-destaque)" strokeOpacity={0.55} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={ultimo.x} cy={ultimo.y} r={4} fill="var(--color-sobre-destaque)" />
     </svg>
   )
 }

@@ -59,12 +59,12 @@ export function PainelOQueAApiFaz({ onFechar }: { onFechar: () => void }) {
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={O_QUE_A_API_FAZ.titulo}>
       {/* O fundo é um botão: clicar fora do painel fecha */}
-      <button type="button" aria-label="Fechar a explicação" onClick={onFechar} className="absolute inset-0 bg-ink/60 backdrop-blur-[2px]" />
+      <button type="button" aria-label="Fechar a explicação" onClick={onFechar} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
       <motion.aside
         initial={reduzido ? false : { x: 40, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className="scroll-fino absolute inset-y-0 right-0 w-full max-w-[520px] overflow-y-auto border-l border-line bg-card shadow-[0_0_80px_rgba(0,0,0,0.6)]"
+        className="scroll-fino absolute inset-y-0 right-0 w-full max-w-[520px] overflow-y-auto border-l border-line bg-card shadow-painel"
       >
         <div className="flex flex-col gap-5 p-6">
           <header className="flex items-start justify-between gap-4">

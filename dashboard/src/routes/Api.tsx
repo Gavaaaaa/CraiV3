@@ -191,7 +191,7 @@ export function PaginaApi() {
                           size="sm"
                           disabled={revogando === c.id}
                           onClick={() => void revogar(c)}
-                          className="border border-danger/60 !bg-danger/20 !text-[#f5a29a] hover:!bg-danger/30"
+                          className="border border-danger/60 !bg-danger/20 !text-danger-aviso hover:!bg-danger/30"
                         >
                           {revogando === c.id ? 'Revogando…' : 'Confirmar'}
                         </Button>

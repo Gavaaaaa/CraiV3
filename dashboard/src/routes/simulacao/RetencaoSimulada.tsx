@@ -15,7 +15,7 @@ import { pareceDadoReal } from './FormularioCliente'
 const NOMES = ['Loja Ponto Certo', 'Café Aroma', 'Studio Pilates Move', 'Clínica Bem Viver', 'Escola de Idiomas Fala', 'Oficina do Bairro', 'Pet Shop Amigo']
 
 const FAIXA = {
-  grave: { rotulo: 'Grave', classe: 'border-danger/50 text-[#f08a80]', ponto: 'bg-danger' },
+  grave: { rotulo: 'Grave', classe: 'border-danger/50 text-danger-texto', ponto: 'bg-danger' },
   preocupante: { rotulo: 'Preocupante', classe: 'border-warn/50 text-warn', ponto: 'bg-warn' },
   sem_risco: { rotulo: 'Sem risco', classe: 'border-ok/45 text-ok', ponto: 'bg-ok' },
 }
@@ -74,7 +74,7 @@ export function RetencaoSimulada() {
     setResultado(null)
   }
 
-  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
+  const campo = 'h-10 w-full rounded-[10px] border border-campo bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
   const faixa = resultado ? FAIXA[resultado.faixa] : null
   const quemDecidiu = resultado?.decidido_por === 'modelo' ? 'pelo modelo de IA' : 'pela régua'
   const houveOferta = !!resultado && resultado.oferta !== null
@@ -157,7 +157,7 @@ export function RetencaoSimulada() {
               </div>
               <p className="t-apoio mt-1.5 text-silver">{resultado.porque}</p>
               <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-line pt-3">
-                <span className={cx('text-normal font-[640]', resultado.aceitou ? 'text-ok' : 'text-[#f08a80]')}>
+                <span className={cx('text-normal font-[640]', resultado.aceitou ? 'text-ok' : 'text-danger-texto')}>
                   {resultado.aceitou ? 'Cliente aceitou a oferta' : 'Cliente recusou a oferta'}
                 </span>
                 {resultado.aceitou ? <span className="tabular text-[17px] font-[680] text-paper">{fmt.brl(resultado.valor_mantido_liquido)} mantidos</span> : null}
@@ -243,7 +243,7 @@ export function RetencaoSimulada() {
                   ] as const
                 ).map(([k, r]) => (
                   <label key={k} className="flex cursor-pointer items-center gap-3 rounded-[10px] border border-line bg-ink/30 px-3 py-2.5 text-apoio text-paper has-[:checked]:border-orange/50">
-                    <input type="checkbox" checked={sinais[k]} onChange={(e) => setSinais({ ...sinais, [k]: e.target.checked })} className="h-4 w-4 accent-[#ef9311]" />
+                    <input type="checkbox" checked={sinais[k]} onChange={(e) => setSinais({ ...sinais, [k]: e.target.checked })} className="h-4 w-4 accent-marca" />
                     {r}
                   </label>
                 ))}
@@ -264,12 +264,12 @@ export function RetencaoSimulada() {
                       <span className="text-apoio text-paper">{OFERTA[o]}</span>
                       <span className="tabular text-apoio font-[600] text-amber">{propensao[o]}%</span>
                     </span>
-                    <input type="range" min={0} max={100} step={5} value={propensao[o]} onChange={(e) => setPropensao({ ...propensao, [o]: Number(e.target.value) })} className="mt-1.5 w-full accent-[#ef9311]" />
+                    <input type="range" min={0} max={100} step={5} value={propensao[o]} onChange={(e) => setPropensao({ ...propensao, [o]: Number(e.target.value) })} className="mt-1.5 w-full accent-marca" />
                   </label>
                 ))}
               </div>
             </fieldset>
-            {erro ? <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">{erro}</p> : null}
+            {erro ? <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-danger-aviso">{erro}</p> : null}
             <Button type="submit" disabled={ocupado} className="w-full">
               {ocupado ? 'Avaliando…' : 'Criar cliente em risco'}
             </Button>

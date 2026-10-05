@@ -48,7 +48,8 @@ export function CartaoPix({ cliente, empresa, idRecorrencia, proximaCobranca, vi
 
   const frente = (
     <Face className="justify-between">
-      <div className="flex items-start justify-between gap-3">
+      {/* `flex-wrap`: a 390 px o cartão tem 240 px, e o selo desce para a linha de baixo em vez de vazar */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="t-label tracking-[0.08em] whitespace-nowrap text-silver uppercase">Pix Automático</div>
           <div className="mt-0.5 text-rotulo text-muted">Autorização de débito recorrente</div>

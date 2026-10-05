@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex" />
     <title>CRAI · Painel</title>
+    <!-- O tema guardado (chave crai_tema, valor claro ou escuro) é aplicado ANTES da primeira
+         pintura, para a tela não piscar escura ao abrir no claro. O escuro é o padrão. -->
+    <script>
+      try {
+        if (localStorage.getItem('crai_tema') === 'claro') document.documentElement.setAttribute('data-tema', 'claro')
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

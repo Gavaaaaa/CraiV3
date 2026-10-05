@@ -41,19 +41,19 @@ function Divisao({ inv, vol }: { inv: number; vol: number | null }) {
   return (
     <div className="mt-5">
       <div className="flex h-2 w-full gap-[2px] overflow-hidden rounded-full" aria-hidden="true">
-        <span className="h-full rounded-l-full bg-ink/70" style={{ width: `${pInv}%` }} />
-        {vol !== null ? <span className="h-full flex-1 rounded-r-full bg-ink/25" /> : null}
+        <span className="h-full rounded-l-full bg-sobre-destaque/70" style={{ width: `${pInv}%` }} />
+        {vol !== null ? <span className="h-full flex-1 rounded-r-full bg-sobre-destaque/25" /> : null}
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-3 text-ink">
+      <dl className="mt-3 grid grid-cols-2 gap-3 text-sobre-destaque">
         <div>
-          <dt className="t-label flex items-center gap-1.5 text-ink/75">
-            <span className="h-2 w-2 rounded-[2px] bg-ink/70" aria-hidden="true" /> Recuperado (involuntário)
+          <dt className="t-label flex items-center gap-1.5 text-sobre-destaque">
+            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/70" aria-hidden="true" /> Recuperado (involuntário)
           </dt>
           <dd className="mt-0.5 text-[17px] font-[640] tracking-[-0.01em]">{fmt.brlInteiro(inv)}</dd>
         </div>
         <div>
-          <dt className="t-label flex items-center gap-1.5 text-ink/75">
-            <span className="h-2 w-2 rounded-[2px] bg-ink/25" aria-hidden="true" /> Retido (voluntário)
+          <dt className="t-label flex items-center gap-1.5 text-sobre-destaque">
+            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/25" aria-hidden="true" /> Retido (voluntário)
           </dt>
           <dd className="mt-0.5 text-[17px] font-[640] tracking-[-0.01em]">{vol !== null ? fmt.brlInteiro(vol) : 'Plano premium'}</dd>
         </div>

@@ -90,16 +90,20 @@ describe('o sino do topo', () => {
     expect(sino().querySelectorAll('span').length).toBe(0)
   })
 
-  it('mostra o número do backend e leva à lista de quem espera a escolha', async () => {
-    const chamadas = ligarBackendFalso({ 'GET /metrics/involuntario/mes': mes({ aguardando_escolha: 3 }), 'GET /ciclos': lista([LINHA_DO_CICLO]) })
+  it('mostra o número do backend e leva à aba Mensagens, com quem espera a escolha', async () => {
+    // Tema e botões (1.2): o sino passou a levar à aba Mensagens do Involuntário (antes, ao
+    // filtro "Aguardando escolha" da lista), e rola a página para o topo.
+    window.scrollTo = vi.fn() as unknown as typeof window.scrollTo
+    const chamadas = ligarBackendFalso({ 'GET /metrics/involuntario/mes': mes({ aguardando_escolha: 3 }), 'GET /ciclos': lista([LINHA_DO_CICLO]), 'GET /ciclos/2': DETALHE_DO_CICLO })
     abrir('/api')
     await waitFor(() => expect(document.querySelector('[data-pendentes]')?.textContent).toBe('3'), ESPERA)
     expect(sino().getAttribute('aria-label')).toBe('3 cobranças esperando a sua escolha de mensagem')
 
     fireEvent.click(sino())
-    await waitFor(() => expect(endereco()).toBe('/involuntario?filtro=aguardando_escolha'), ESPERA)
-    const filtro = await screen.findByRole('tab', { name: /Aguardando escolha/ }, ESPERA)
-    expect(filtro.getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => expect(endereco()).toBe('/involuntario?aba=mensagens'), ESPERA)
+    expect(window.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 }))
+    const abaMensagens = await screen.findByRole('tab', { name: /^Mensagens/ }, ESPERA)
+    expect(abaMensagens.getAttribute('aria-selected')).toBe('true')
     await waitFor(() => expect(chamadas.some((c) => c.startsWith('GET /ciclos?') && c.includes('aguardando_escolha=true'))).toBe(true), ESPERA)
     expect(await screen.findByText('Clínica Horizonte (fictícia)', {}, ESPERA)).toBeTruthy()
   })

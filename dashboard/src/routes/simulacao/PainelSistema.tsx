@@ -97,7 +97,7 @@ export function PainelSistema({ estado, ocupado, onAvancar, onAvancarAteAcao, on
         <ol className="relative mt-4 ml-1.5 flex flex-col gap-4 border-l border-line pl-5">
           {estado.linha_do_tempo.map((e, i) => (
             <li key={i} className="relative">
-              <span aria-hidden="true" className={cx('absolute top-1.5 -left-[25px] h-2.5 w-2.5 rounded-full ring-4 ring-[#1f1710]', TOM[e.tom ?? 'neutro'])} />
+              <span aria-hidden="true" className={cx('absolute top-1.5 -left-[25px] h-2.5 w-2.5 rounded-full ring-4 ring-card', TOM[e.tom ?? 'neutro'])} />
               <div className="t-label text-muted">{fmt.dataHora(e.em)}</div>
               <div className="text-apoio font-[560] text-paper">{e.titulo}</div>
               {e.detalhe ? <div className="t-apoio text-silver">{e.detalhe}</div> : null}
@@ -156,7 +156,7 @@ function Pensando({ linhas, chance, contribuicoes }: { linhas: string[]; chance:
                     {contribuicoes.map((c) => (
                       <li key={c.fator} className="flex items-baseline justify-between gap-3 text-rotulo">
                         <span className="text-paper">{c.fator}</span>
-                        {c.efeito ? <span className={cx('shrink-0 text-right font-[560]', /^Reduziu/.test(c.efeito) ? 'text-[#f08a80]' : 'text-ok')}>{c.efeito}</span> : null}
+                        {c.efeito ? <span className={cx('shrink-0 text-right font-[560]', /^Reduziu/.test(c.efeito) ? 'text-danger-texto' : 'text-ok')}>{c.efeito}</span> : null}
                       </li>
                     ))}
                   </ul>

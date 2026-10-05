@@ -60,7 +60,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
     onSimular({ nome: n, mensalidade: Math.round(valor * 100) / 100, perfil, verdade: { dias_ate_saldo: dias, chance_pagar: chance / 100, vai_revogar: revoga } })
   }
 
-  const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
+  const campo = 'h-10 w-full rounded-[10px] border border-campo bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
 
   return (
     <form onSubmit={enviar} className="flex flex-col gap-5" aria-label="Cliente fictício">
@@ -123,7 +123,7 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
       </fieldset>
 
       {erro ? (
-        <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">
+        <p role="alert" className="rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-danger-aviso">
           {erro}
         </p>
       ) : null}
@@ -156,7 +156,7 @@ function Faixa({ rotulo, valor, min, max, passo = 1, atual, onChange }: { rotulo
         step={passo}
         value={atual}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-2 w-full accent-[#ef9311]"
+        className="mt-2 w-full accent-marca"
       />
     </label>
   )

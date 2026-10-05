@@ -227,7 +227,7 @@ export function Assistente() {
                   onKeyDown={teclado}
                   rows={1}
                   placeholder="Escreva a sua pergunta"
-                  className="scroll-fino max-h-32 min-h-[44px] w-full resize-none rounded-[12px] border border-line bg-ink/40 px-4 py-2.5 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
+                  className="scroll-fino max-h-32 min-h-[44px] w-full resize-none rounded-[12px] border border-campo bg-ink/40 px-4 py-2.5 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
                 />
               </label>
               <Button type="submit" size="md" disabled={!texto.trim() || pensando} aria-label="Enviar pergunta">

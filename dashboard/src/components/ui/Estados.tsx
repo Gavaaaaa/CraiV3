@@ -7,7 +7,7 @@ import { Button } from './Button'
 export function ErroCarregar({ mensagem, onTentar, className }: { mensagem: string; onTentar: () => void; className?: string }) {
   return (
     <div role="alert" className={cx('flex flex-col items-center justify-center gap-3 rounded-[14px] border border-danger/40 bg-danger/[0.06] p-6 text-center', className)}>
-      <span className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-danger/15 text-[#f5a29a]">
+      <span className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-danger/15 text-danger-aviso">
         <IconAlert width={20} height={20} />
       </span>
       <div>

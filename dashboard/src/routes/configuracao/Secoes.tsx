@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { IconArrowRight, IconCheck, IconClose, IconDownload, IconRefresh, IconShield, IconTable } from '../../components/icons/Icons'
+import { IconArrowRight, IconCheck, IconClose, IconDownload, IconMoon, IconRefresh, IconShield, IconSun, IconTable } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import type { AnonimizacaoTitular, ExportacaoTitular, MarcaNaoContatar } from '../../data/adaptadores'
@@ -10,6 +10,7 @@ import type { Canal, Configuracao, EmpresaDetalhe, ExplicacaoDecisao, Integracao
 import { INTERVALO_ENTRE_OFERTAS, INTERVALO_PADRAO_ENTRE_OFERTAS } from '../../data/adaptadores'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { type Tema, useTema } from '../../lib/tema'
 import { paragrafosComNegrito, semMarcasDeNegrito } from '../../lib/textoComNegrito'
 import { Aviso, Bloco, Interruptor, Rotulo, Secao, campo, seletor } from './comuns'
 
@@ -187,7 +188,7 @@ export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
           />
         </label>
         {!intervaloValido ? (
-          <p role="alert" className="mt-2 text-apoio text-[#f5a29a]">
+          <p role="alert" className="mt-2 text-apoio text-danger-aviso">
             Digite um número inteiro de {INTERVALO_ENTRE_OFERTAS.minimo} a {INTERVALO_ENTRE_OFERTAS.maximo}.
           </p>
         ) : null}
@@ -296,12 +297,8 @@ export function SecaoEquipe({ membros, papelAtual, onMudar }: { membros: Membro[
             </tbody>
           </table>
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" disabled title="Os convites são feitos no site da CRAI">
-            Convidar pessoa
-          </Button>
-          <span className="t-label text-muted">Os convites são feitos no site da CRAI, no cadastro da empresa.</span>
-        </div>
+        {/* Sem botão de convite: convidar exige o cadastro do site, que o painel não tem. A frase diz onde é. */}
+        <p className="t-label mt-4 text-muted">Para convidar uma pessoa, use o site da CRAI, no cadastro da empresa.</p>
       </Bloco>
       <Bloco titulo="O que cada papel pode fazer">
         <ul className="grid gap-3 sm:grid-cols-3">
@@ -520,7 +517,7 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
                 Anonimizar
               </Button>
             ) : (
-              <Button size="sm" disabled={anonimizando} onClick={anonimizar} className="border border-danger/60 !bg-danger/20 !text-[#f5a29a] hover:!bg-danger/30">
+              <Button size="sm" disabled={anonimizando} onClick={anonimizar} className="border border-danger/60 !bg-danger/20 !text-danger-aviso hover:!bg-danger/30">
                 {anonimizando ? 'Anonimizando…' : 'Confirmar: não dá para desfazer'}
               </Button>
             )}
@@ -609,7 +606,7 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
                 {explicacao.fatores.map((f) => (
                   <li key={f.fator} className="flex items-center justify-between gap-3 text-apoio">
                     <span className="text-paper">{f.fator}</span>
-                    <span className={cx('tabular font-[560]', f.pontos >= 0 ? 'text-ok' : 'text-[#f08a80]')}>{f.pontos >= 0 ? '+' : ''}{f.pontos} pts</span>
+                    <span className={cx('tabular font-[560]', f.pontos >= 0 ? 'text-ok' : 'text-danger-texto')}>{f.pontos >= 0 ? '+' : ''}{f.pontos} pts</span>
                   </li>
                 ))}
               </ul>
@@ -648,7 +645,7 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
             tabIndex={0}
             aria-busy={politica === null && !erroPolitica}
             aria-label="Texto para a política de privacidade"
-            className={cx('scroll-fino w-full overflow-y-auto rounded-[12px] border border-line bg-ink/40 p-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none', MODO_REAL ? 'max-h-[380px] min-h-[220px]' : 'max-h-[260px] min-h-[140px]')}
+            className={cx('scroll-fino w-full overflow-y-auto rounded-[12px] border border-campo bg-ink/40 p-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none', MODO_REAL ? 'max-h-[380px] min-h-[220px]' : 'max-h-[260px] min-h-[140px]')}
           >
             {paragrafosComNegrito(politica ?? '').map((paragrafo, i) => (
               <p key={i} className={i ? 'mt-3' : undefined}>
@@ -718,6 +715,67 @@ export function SecaoNotificacoes({ config, onSalvar, podeEditar }: PropsConfig)
           <Interruptor ligado={n.risco_grave} disabled={!podeEditar} onChange={(v) => setN({ ...n, risco_grave: v })} rotulo="Um cliente entrou em risco grave" apoio="Na hora, com o motivo em uma frase." />
           <Interruptor ligado={n.resumo_semanal} disabled={!podeEditar} onChange={(v) => setN({ ...n, resumo_semanal: v })} rotulo="Resumo semanal" apoio="Segunda de manhã: recuperado, mantido, ciclos abertos e o que precisa de você." />
         </div>
+      </Bloco>
+    </Secao>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Aparência: o tema do painel                                         */
+/* ------------------------------------------------------------------ */
+
+const TEMAS: { valor: Tema; rotulo: string; texto: string; Icone: typeof IconSun }[] = [
+  { valor: 'escuro', rotulo: 'Escuro', texto: 'O padrão, a cara do site. Fundo escuro, texto claro.', Icone: IconMoon },
+  { valor: 'claro', rotulo: 'Claro', texto: 'Papel claro, texto escuro, o mesmo laranja de destaque.', Icone: IconSun },
+]
+
+/**
+ * O tema do painel. É preferência de quem olha, não configuração da empresa: qualquer papel
+ * troca, vale na hora, nada vai ao backend e a escolha fica só neste navegador (`lib/tema.ts`).
+ */
+export function SecaoAparencia() {
+  const [tema, definir] = useTema()
+  // Setas do teclado trocam a opção (o padrão de acessibilidade para "radiogroup").
+  function teclado(e: KeyboardEvent<HTMLDivElement>) {
+    const i = TEMAS.findIndex((t) => t.valor === tema)
+    let j = i
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % TEMAS.length
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + TEMAS.length) % TEMAS.length
+    else return
+    e.preventDefault()
+    definir(TEMAS[j].valor)
+    ;(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[j] ?? null)?.focus()
+  }
+  return (
+    <Secao titulo="Aparência" apoio="Escolha como o painel aparece neste navegador.">
+      <Bloco titulo="Tema" apoio="A troca vale na hora, para qualquer papel. Nada é enviado à CRAI.">
+        <div role="radiogroup" aria-label="Tema do painel" onKeyDown={teclado} className="grid gap-3 sm:grid-cols-2">
+          {TEMAS.map(({ valor, rotulo, texto, Icone }) => {
+            const sel = tema === valor
+            return (
+              <button
+                key={valor}
+                type="button"
+                role="radio"
+                aria-checked={sel}
+                tabIndex={sel ? 0 : -1}
+                data-tema-opcao={valor}
+                onClick={() => definir(valor)}
+                className={cx('rounded-[12px] border p-4 text-left transition-colors', sel ? 'border-orange/60 bg-orange/[0.07]' : 'border-line hover:border-graphite')}
+              >
+                <span className="flex items-center gap-2">
+                  <span className={cx('flex h-4 w-4 items-center justify-center rounded-full border', sel ? 'border-orange' : 'border-graphite')} aria-hidden="true">
+                    {sel ? <span className="h-2 w-2 rounded-full bg-orange" /> : null}
+                  </span>
+                  <span className="font-[600] text-paper">{rotulo}</span>
+                  <Icone width={16} height={16} className="ml-auto text-silver" />
+                </span>
+                <span className="t-apoio mt-2 block text-silver">{texto}</span>
+              </button>
+            )
+          })}
+        </div>
+        <p className="t-label mt-3 text-muted">A escolha fica guardada só neste navegador. Em outro computador ou navegador, o painel abre no tema escuro até você escolher de novo.</p>
       </Bloco>
     </Secao>
   )

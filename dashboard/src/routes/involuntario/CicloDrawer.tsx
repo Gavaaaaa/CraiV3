@@ -19,7 +19,7 @@ export const ABORDAGEM: Record<Abordagem, string> = {
   urgencia_com_respeito: 'Urgência com respeito',
 }
 
-const CANAL: Record<Sugestao['canal'], string> = {
+export const CANAL: Record<Sugestao['canal'], string> = {
   whatsapp: 'WhatsApp',
   email: 'E-mail',
   sms: 'SMS',
@@ -43,8 +43,12 @@ export function textoDoPrazo(escolhaAte: string, agora: Date): string {
   return m === 0 ? `Envio automático em ${h} h` : `Envio automático em ${h} h ${m} min`
 }
 
-/** Painel lateral com a linha do tempo de um ciclo. */
-export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+/**
+ * Painel lateral com a linha do tempo de um ciclo. Com `irParaEscolha` (a aba Mensagens), o
+ * painel abre já nas mensagens sugeridas: a seção delas é rolada para a vista e o primeiro
+ * botão "Enviar esta" recebe o foco.
+ */
+export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number; onClose: () => void; irParaEscolha?: boolean }) {
   const [ciclo, setCiclo] = useState<CicloDetalhe | null>(null)
   const [config, setConfig] = useState<Configuracao | null>(null)
   const [sugestoes, setSugestoes] = useState<SugestaoDoCiclo[]>([])
@@ -137,14 +141,24 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
     return () => window.removeEventListener('keydown', esc)
   }, [onClose])
 
+  // Aberto pela aba Mensagens: assim que o ciclo chega, a escolha fica à vista (uma vez só).
+  const secaoDaEscolha = useRef<HTMLElement>(null)
+  const jaFoi = useRef(false)
+  useEffect(() => {
+    if (!irParaEscolha || jaFoi.current || ciclo === null || !secaoDaEscolha.current) return
+    jaFoi.current = true
+    secaoDaEscolha.current.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' })
+    secaoDaEscolha.current.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus({ preventScroll: true })
+  }, [irParaEscolha, ciclo, reduced])
+
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Detalhe do ciclo">
-      <button type="button" aria-label="Fechar" onClick={onClose} className="absolute inset-0 bg-ink/60 backdrop-blur-[2px]" />
+      <button type="button" aria-label="Fechar" onClick={onClose} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
       <motion.aside
         initial={reduced ? false : { x: 40, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className="scroll-fino absolute inset-y-0 right-0 w-full max-w-[560px] overflow-y-auto border-l border-line bg-card shadow-[0_0_80px_rgba(0,0,0,0.6)]"
+        className="scroll-fino absolute inset-y-0 right-0 w-full max-w-[560px] overflow-y-auto border-l border-line bg-card shadow-painel"
       >
         {erro ? (
           <div className="p-6">
@@ -191,7 +205,7 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
                     <li key={`${c.fator}-${i}`} className="flex items-center justify-between gap-3 text-apoio">
                       <span className="text-paper">{c.fator}</span>
                       {c.efeito ? (
-                        <span className={cx('text-right font-[560]', c.efeito.startsWith('Aumentou') ? 'text-ok' : c.efeito.startsWith('Reduziu') ? 'text-[#f08a80]' : 'text-silver')}>
+                        <span className={cx('text-right font-[560]', c.efeito.startsWith('Aumentou') ? 'text-ok' : c.efeito.startsWith('Reduziu') ? 'text-danger-texto' : 'text-silver')}>
                           {c.efeito}
                         </span>
                       ) : null}
@@ -205,7 +219,7 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
 
             {/* As 3 sugestões: enquanto o ciclo espera a escolha, e depois, para ver qual saiu */}
             {daRodada.length ? (
-              <section>
+              <section ref={secaoDaEscolha} data-secao="escolha" className="scroll-mt-6">
                 <div className="flex items-baseline justify-between gap-3">
                   <h3 className="t-h3 text-paper">Mensagens sugeridas{rodada > 1 ? <span className="t-label ml-2 text-silver">{rodada}ª rodada</span> : null}</h3>
                   {aguardando && ciclo.escolha_ate ? <span className="t-label text-warn">{textoDoPrazo(ciclo.escolha_ate, agoraDaTela())}</span> : null}
@@ -218,7 +232,7 @@ export function CicloDrawer({ id, onClose }: { id: number; onClose: () => void }
                       : 'A recomendada será enviada automaticamente. Para escolher, mude o modo na configuração.'}
                 </p>
                 {erroAcao ? (
-                  <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-[#f5a29a]">
+                  <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-danger-aviso">
                     {erroAcao}
                   </p>
                 ) : null}

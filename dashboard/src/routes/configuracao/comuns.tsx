@@ -28,7 +28,7 @@ export function Bloco({ titulo, apoio, children, className }: { titulo: string; 
   )
 }
 
-export const campo = 'h-10 w-full rounded-[10px] border border-line bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none disabled:opacity-60'
+export const campo = 'h-10 w-full rounded-[10px] border border-campo bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none disabled:opacity-60'
 export const seletor = cx(campo, 'seletor')
 
 export function Rotulo({ children, apoio }: { children: ReactNode; apoio?: string }) {

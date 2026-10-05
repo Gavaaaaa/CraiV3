@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/Button'
 import { Vazio } from '../../components/ui/Estados'
 import { ErroApi, agoraDaTela, api } from '../../data/api'
 import type { BaseClientes, ClienteRisco, ComparacaoReguaModelo, FaixaRisco, ResultadoImportacao } from '../../data/tipos'
+import { baixarCsv } from '../../lib/csv'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
 
@@ -13,7 +14,7 @@ import { fmt } from '../../lib/format'
 /* ------------------------------------------------------------------ */
 
 export const FAIXA: Record<FaixaRisco, { rotulo: string; classe: string; ponto: string; ordem: number }> = {
-  grave: { rotulo: 'Grave', classe: 'border-danger/50 text-[#f08a80]', ponto: 'bg-danger', ordem: 0 },
+  grave: { rotulo: 'Grave', classe: 'border-danger/50 text-danger-texto', ponto: 'bg-danger', ordem: 0 },
   preocupante: { rotulo: 'Preocupante', classe: 'border-warn/50 text-warn', ponto: 'bg-warn', ordem: 1 },
   sem_risco: { rotulo: 'Sem risco', classe: 'border-ok/45 text-ok', ponto: 'bg-ok', ordem: 2 },
   sem_dado: { rotulo: 'Sem dado suficiente', classe: 'border-line text-silver', ponto: 'bg-graphite', ordem: 3 },
@@ -191,6 +192,39 @@ export function QuemDecidiu({ por }: { por: 'modelo' | 'regua' }) {
 
 const ORIGEM_DA_BASE = { api: 'Pela API', anexo: 'Por anexo' }
 
+/**
+ * As colunas que a importação aceita, na ordem do contrato (`crai/churn_voluntary/importacao.py`
+ * e `docs/CONTRATO_CLIENTES_API.md`): as três obrigatórias primeiro, depois as opcionais.
+ */
+export const COLUNAS_DA_PLANILHA = [
+  'customer_id_externo',
+  'mrr',
+  'billing_profile',
+  'days_since_last',
+  'features_used_30d',
+  'email',
+  'id_recorrencia',
+  'logins_7d',
+  'logins_30d',
+  'avg_session_min',
+  'api_calls_7d',
+  'tickets_30d',
+  'failed_pay_90d',
+  'nps_last',
+  'seats',
+  'tenure_days',
+  'telefone',
+  'nome',
+]
+/** Uma linha de exemplo, inventada, no formato que o backend lê (número em pt-BR, perfil CLT, PJ ou freelancer). */
+export const EXEMPLO_DA_PLANILHA = ['cli-001', '480,00', 'PJ', '3', '5', 'contato@exemplo.com.br', 'RN_exemplo_001', '4', '15', '12,5', '0', '1', '0', '8', '3', '400', '+5511999990000', 'Cliente de exemplo (apague esta linha)']
+export const NOME_DA_PLANILHA = 'modelo-base-de-clientes.csv'
+
+/** A planilha modelo é montada no navegador: o cabeçalho que a importação aceita e uma linha de exemplo. */
+export function baixarPlanilhaModelo() {
+  baixarCsv(NOME_DA_PLANILHA, COLUNAS_DA_PLANILHA, [EXEMPLO_DA_PLANILHA])
+}
+
 export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImportar?: () => void }) {
   const [arrastando, setArrastando] = useState(false)
   const [enviando, setEnviando] = useState(false)
@@ -235,9 +269,9 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
           <Dado rotulo="Última atualização" valor={base ? fmt.relativo(base.atualizada_em, agoraDaTela()).replace(/^./, (c) => c.toUpperCase()) : '—'} apoio={base ? (base.origem ? ORIGEM_DA_BASE[base.origem] : 'Origem não registrada') : ''} />
           <Dado rotulo="O que a base precisa ter" valor="Id do cliente e mensalidade" apoio="Opcional: id da recorrência (liga ao involuntário), e-mail, telefone, uso, chamados" pequeno />
         </dl>
-        <a href="#" onClick={(e) => e.preventDefault()} className="t-label mt-4 inline-flex items-center gap-1.5 text-silver hover:text-paper">
-          <IconDownload width={14} height={14} /> Baixar planilha modelo (em breve)
-        </a>
+        <button type="button" onClick={baixarPlanilhaModelo} className="t-label mt-4 inline-flex items-center gap-1.5 text-silver underline-offset-4 hover:text-paper hover:underline">
+          <IconDownload width={14} height={14} /> Baixar planilha modelo
+        </button>
       </div>
 
       <div>
@@ -266,7 +300,7 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
             Os dados ficam só na sua conta. A CRAI usa a base para avaliar risco e falar com o cliente em seu nome; nunca para treinar modelos de outras empresas.
           </p>
         </div>
-        {erro ? <p role="alert" className="mt-3 rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-[#f5a29a]">{erro}</p> : null}
+        {erro ? <p role="alert" className="mt-3 rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-danger-aviso">{erro}</p> : null}
         {resultado ? (
           <div role="status" className="mt-3 rounded-[14px] border border-ok/40 bg-ok/[0.06] p-4">
             <div className="flex items-center gap-2 text-apoio font-[600] text-ok">

@@ -21,7 +21,7 @@ export function StatTile({ rotulo, valor, apoio, icone, tone = 'glass', hero = f
   return (
     <Card tone={tone} className={cx('flex flex-col justify-between p-5', className)}>
       <div className="flex items-start justify-between gap-3">
-        <span className={cx('t-label', escuro ? 'text-ink/75' : 'text-silver')}>
+        <span className={cx('t-label', escuro ? 'text-sobre-destaque' : 'text-silver')}>
           {rotulo}
           {demo ? <Badge tone={escuro ? 'ink' : 'amber'} className="ml-2 align-middle">Demonstração</Badge> : null}
         </span>
@@ -29,15 +29,15 @@ export function StatTile({ rotulo, valor, apoio, icone, tone = 'glass', hero = f
           <span
             className={cx(
               'flex h-8 w-8 items-center justify-center rounded-[10px]',
-              escuro ? 'bg-ink/15 text-ink' : 'bg-paper/[0.06] text-amber',
+              escuro ? 'bg-sobre-destaque/15 text-sobre-destaque' : 'bg-paper/[0.06] text-amber',
             )}
           >
             {icone}
           </span>
         ) : null}
       </div>
-      <div className={cx('mt-4', hero ? 't-hero' : 't-number', escuro ? 'text-ink' : 'text-paper')}>{valor}</div>
-      {apoio ? <div className={cx('t-apoio mt-2', escuro ? 'text-ink/75' : 'text-silver')}>{apoio}</div> : null}
+      <div className={cx('mt-4', hero ? 't-hero' : 't-number', escuro ? 'text-sobre-destaque' : 'text-paper')}>{valor}</div>
+      {apoio ? <div className={cx('t-apoio mt-2', escuro ? 'text-sobre-destaque' : 'text-silver')}>{apoio}</div> : null}
     </Card>
   )
 }
