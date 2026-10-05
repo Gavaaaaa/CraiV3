@@ -1,0 +1,23 @@
+Importing plotly failed. Interactive plots will not work.
+[EXPERIMENTO-RN] classificador: 120000 cobranças | treino 76673 | validação 19238 | teste 24089 (6636 clientes)
+[CLASSIFIER] artefato treinado com fonte=sintetico_calibrado, n_amostras=120000
+[CLASSIFIER] Modelos carregados de E:\Crai\app\models/
+[EXPERIMENTO-RN]   produção (artefato): AUC 0.7096
+[EXPERIMENTO-RN]   rede (treino cheio): AUC 0.7043
+[EXPERIMENTO-RN]   atual retreinado: AUC 0.7093 | rede: AUC 0.7025
+[EXPERIMENTO-RN] GroupKFold por cliente...
+[EXPERIMENTO-RN]   dobra 1/5: atual 0.7088 | rede 0.7010
+[EXPERIMENTO-RN]   dobra 2/5: atual 0.7066 | rede 0.6998
+[EXPERIMENTO-RN]   dobra 3/5: atual 0.7104 | rede 0.7053
+[EXPERIMENTO-RN]   dobra 4/5: atual 0.7146 | rede 0.7084
+[EXPERIMENTO-RN]   dobra 5/5: atual 0.7113 | rede 0.7076
+[EXPERIMENTO-RN] teste de permutação do rótulo...
+[PAYDAY] artefato treinado com fonte=sintetico_calibrado, n_amostras=10000
+[PAYDAY] LSTM + 3 Prophets carregados de E:\Crai\app\models/
+[EXPERIMENTO-RN] liquidez: 8000 clientes de treino | 2000 de teste
+[EXPERIMENTO-RN] montando as janelas de treino (as mesmas da LSTM)...
+[EXPERIMENTO-RN] treinando a rede de regressão em 135733 janelas...
+[EXPERIMENTO-RN] classificador: A diferença de AUC na validação cruzada (-0.0059) não passa do desvio (0.0039): pela regra, fica o modelo atual.
+[EXPERIMENTO-RN] liquidez: Pela regra, o Prophet fica: nem a LSTM sozinha nem a rede de regressão ficou igual ou melhor que o conjunto atual em todos os cortes (histórico completo e pouco histórico).
+[EXPERIMENTO-RN] tempo total: 161.9 s
+codigo de saida: 0

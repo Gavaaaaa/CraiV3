@@ -1,0 +1,1113 @@
+{
+  "gerado_em": "2026-10-05T11:04:43",
+  "rapido": false,
+  "nada_foi_promovido": true,
+  "regra_de_decisao": [
+    "A rede só é recomendada para substituir o modelo atual se vencer por mais que o desvio da validação cruzada, sem piorar o recall no limiar nem a calibração.",
+    "O Prophet só é recomendado para sair se a LSTM sozinha, ou a rede nova, for igual ou melhor no erro em dias e no acerto de ±1 dia, inclusive para o cliente com pouco histórico.",
+    "Empate ou vantagem dentro do desvio: fica o modelo atual. Ele se explica pelo TreeSHAP, que é exato, e a rede precisaria de um método aproximado (pesa no Art. 20)."
+  ],
+  "base": {
+    "pasta": "app/data/v2",
+    "semente": 42,
+    "fonte": "sintetico_calibrado",
+    "sha256_conferidos": true
+  },
+  "versoes": {
+    "python": "3.11.9",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cpu",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "joblib": "1.4.2",
+    "shap": "0.46.0",
+    "prophet": "1.4.0"
+  },
+  "classificador": {
+    "features": [
+      "tenure_months",
+      "day_of_month",
+      "invoice_amount",
+      "avg_ticket",
+      "payment_history_score",
+      "failure_count_90d",
+      "hour_of_day",
+      "day_of_week",
+      "attempt_count",
+      "gateway_error_code",
+      "metodo_pagamento"
+    ],
+    "n_features": 11,
+    "particoes": {
+      "n_linhas": 120000,
+      "n_treino_cheio": 95911,
+      "n_treino": 76673,
+      "n_validacao": 19238,
+      "n_teste": 24089,
+      "n_clientes_teste": 6636,
+      "semente": 42,
+      "fracao_de_teste": 0.2,
+      "fracao_de_validacao_dentro_do_treino": 0.2
+    },
+    "rede": {
+      "biblioteca": "scikit-learn MLPClassifier",
+      "camadas_ocultas": [
+        64,
+        32
+      ],
+      "epocas_treinadas": 30,
+      "preparacao": "StandardScaler nos números e OneHotEncoder nas categorias, dentro do Pipeline, ajustados só no treino",
+      "versao_em_pytorch": "não feita (a instrução pedia só se sobrasse tempo)"
+    },
+    "holdout_como_em_producao": {
+      "modelo_de_producao": {
+        "auc": 0.7096,
+        "brier": 0.2102,
+        "erro_de_calibracao": 0.0194,
+        "limiar_escolhido_na_validacao": 0.3,
+        "no_limiar_escolhido": {
+          "limiar": 0.3,
+          "recall": 0.8864,
+          "precisao": 0.4827,
+          "recuperaveis_perdidos": 1108
+        },
+        "no_limiar_em_uso": {
+          "limiar": 0.25,
+          "recall": 0.9379,
+          "precisao": 0.462,
+          "recuperaveis_perdidos": 606
+        },
+        "auc_declarada_no_treino": 0.7096
+      },
+      "rede": {
+        "auc": 0.7043,
+        "brier": 0.2114,
+        "erro_de_calibracao": 0.0078,
+        "limiar_escolhido_na_validacao": 0.25,
+        "no_limiar_escolhido": {
+          "limiar": 0.25,
+          "recall": 0.9165,
+          "precisao": 0.4687,
+          "recuperaveis_perdidos": 815
+        },
+        "no_limiar_em_uso": {
+          "limiar": 0.25,
+          "recall": 0.9165,
+          "precisao": 0.4687,
+          "recuperaveis_perdidos": 815
+        }
+      }
+    },
+    "holdout_com_validacao_nao_vista": {
+      "modelo_atual_retreinado": {
+        "auc": 0.7093,
+        "brier": 0.2103,
+        "erro_de_calibracao": 0.019,
+        "limiar_escolhido_na_validacao": 0.25,
+        "no_limiar_escolhido": {
+          "limiar": 0.25,
+          "recall": 0.9356,
+          "precisao": 0.4622,
+          "recuperaveis_perdidos": 628
+        },
+        "no_limiar_em_uso": {
+          "limiar": 0.25,
+          "recall": 0.9356,
+          "precisao": 0.4622,
+          "recuperaveis_perdidos": 628
+        }
+      },
+      "rede": {
+        "auc": 0.7025,
+        "brier": 0.2126,
+        "erro_de_calibracao": 0.0236,
+        "limiar_escolhido_na_validacao": 0.2,
+        "no_limiar_escolhido": {
+          "limiar": 0.2,
+          "recall": 0.9337,
+          "precisao": 0.4602,
+          "recuperaveis_perdidos": 647
+        },
+        "no_limiar_em_uso": {
+          "limiar": 0.25,
+          "recall": 0.8806,
+          "precisao": 0.4809,
+          "recuperaveis_perdidos": 1165
+        }
+      }
+    },
+    "validacao_cruzada": {
+      "dobras": 5,
+      "auc_atual_por_dobra": [
+        0.7088,
+        0.7066,
+        0.7104,
+        0.7146,
+        0.7113
+      ],
+      "auc_rede_por_dobra": [
+        0.701,
+        0.6998,
+        0.7053,
+        0.7084,
+        0.7076
+      ],
+      "auc_atual_media": 0.7104,
+      "auc_atual_desvio": 0.003,
+      "auc_rede_media": 0.7044,
+      "auc_rede_desvio": 0.0039,
+      "diferenca_media_rede_menos_atual": -0.0059,
+      "diferenca_desvio": 0.0016,
+      "desvio_de_referencia": 0.0039
+    },
+    "permutacao_do_rotulo": {
+      "auc_atual_com_rotulo_embaralhado": 0.526,
+      "auc_rede_com_rotulo_embaralhado": 0.5046
+    },
+    "teto_de_bayes": {
+      "no_holdout": 0.7106,
+      "sorteios": 400,
+      "da_base_inteira_declarado": 0.7249,
+      "fonte_do_declarado": "docs/RELATORIO_BASE_V2.md"
+    },
+    "recomendacao": {
+      "recomenda_trocar": false,
+      "vence_por_mais_que_o_desvio": false,
+      "vantagem_de_auc": -0.0059,
+      "desvio": 0.0039,
+      "sem_piorar_o_recall_no_limiar": false,
+      "sem_piorar_a_calibracao": false,
+      "frase": "A diferença de AUC na validação cruzada (-0.0059) não passa do desvio (0.0039): pela regra, fica o modelo atual."
+    },
+    "tempo_segundos": 79.5
+  },
+  "liquidez": {
+    "janela_em_dias": 30,
+    "horizonte_em_dias": 14,
+    "features_por_dia": 5,
+    "n_janelas_de_teste": 20000,
+    "n_janelas_com_resposta": 16924,
+    "n_janelas_de_treino_da_rede": 135733,
+    "rede": {
+      "biblioteca": "scikit-learn MLPRegressor",
+      "camadas_ocultas": [
+        128,
+        64
+      ],
+      "epocas_treinadas": 77,
+      "entrada": "a janela de 30 dias x 5 features, achatada; StandardScaler ajustado só no treino",
+      "saida": "dias até o primeiro dia com saldo (arredondado, de 0 a 13)"
+    },
+    "pouco_historico": {
+      "definicao": "a janela só tem os últimos N dias reais; os outros entram zerados, para a LSTM e para a rede",
+      "cortes_em_dias": [
+        30,
+        14,
+        7,
+        0
+      ]
+    },
+    "reproducao_do_meta": {
+      "erro_em_dias_medido": 0.609,
+      "erro_em_dias_no_meta": 0.609,
+      "auc_do_conjunto_medida": 0.9639,
+      "auc_do_conjunto_no_meta": 0.9639,
+      "n_clientes_de_treino": 8000,
+      "n_clientes_de_treino_no_meta": 8000,
+      "n_clientes_de_teste": 2000,
+      "n_clientes_de_teste_na_base": 2000,
+      "confere": true
+    },
+    "por_historico": {
+      "historico_completo": {
+        "lstm_sozinha": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.617,
+            "acerto_exato": 0.8441,
+            "acerto_1_dia": 0.9063
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.179,
+            "acerto_exato": 0.9306,
+            "acerto_1_dia": 0.9713
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.9,
+            "acerto_exato": 0.7237,
+            "acerto_1_dia": 0.8602
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.521,
+            "acerto_exato": 0.7523,
+            "acerto_1_dia": 0.7777
+          }
+        },
+        "prophet_sozinho": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.969,
+            "acerto_exato": 0.6374,
+            "acerto_1_dia": 0.7092
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 1.322,
+            "acerto_exato": 0.8182,
+            "acerto_1_dia": 0.8248
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.715,
+            "acerto_exato": 0.1511,
+            "acerto_1_dia": 0.3992
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.514,
+            "acerto_exato": 0.763,
+            "acerto_1_dia": 0.788
+          }
+        },
+        "rede_de_regressao": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.579,
+            "acerto_exato": 0.7794,
+            "acerto_1_dia": 0.8793
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.277,
+            "acerto_exato": 0.8699,
+            "acerto_1_dia": 0.9423
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.918,
+            "acerto_exato": 0.6179,
+            "acerto_1_dia": 0.8065
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.005,
+            "acerto_exato": 0.7314,
+            "acerto_1_dia": 0.7924
+          }
+        },
+        "heuristica_por_perfil": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 4.857,
+            "acerto_exato": 0.1095,
+            "acerto_1_dia": 0.1389
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 5.42,
+            "acerto_exato": 0.1288,
+            "acerto_1_dia": 0.155
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.61,
+            "acerto_exato": 0.081,
+            "acerto_1_dia": 0.1148
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 4.884,
+            "acerto_exato": 0.0916,
+            "acerto_1_dia": 0.1238
+          }
+        },
+        "conjunto_60_40": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.609,
+            "acerto_exato": 0.8439,
+            "acerto_1_dia": 0.9059
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.168,
+            "acerto_exato": 0.9436,
+            "acerto_1_dia": 0.9721
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.908,
+            "acerto_exato": 0.6954,
+            "acerto_1_dia": 0.8547
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.503,
+            "acerto_exato": 0.7514,
+            "acerto_1_dia": 0.7802
+          }
+        },
+        "conjunto_80_20": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.61,
+            "acerto_exato": 0.8447,
+            "acerto_1_dia": 0.9069
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.174,
+            "acerto_exato": 0.9359,
+            "acerto_1_dia": 0.972
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.887,
+            "acerto_exato": 0.7156,
+            "acerto_1_dia": 0.8602
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.519,
+            "acerto_exato": 0.7511,
+            "acerto_1_dia": 0.7786
+          }
+        },
+        "conjunto_90_10": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.609,
+            "acerto_exato": 0.8444,
+            "acerto_1_dia": 0.9066
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.171,
+            "acerto_exato": 0.9337,
+            "acerto_1_dia": 0.9715
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.883,
+            "acerto_exato": 0.7197,
+            "acerto_1_dia": 0.8614
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.524,
+            "acerto_exato": 0.7505,
+            "acerto_1_dia": 0.7767
+          }
+        },
+        "prophet_so_sem_historico": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 0.617,
+            "acerto_exato": 0.8441,
+            "acerto_1_dia": 0.9063
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.179,
+            "acerto_exato": 0.9306,
+            "acerto_1_dia": 0.9713
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 0.9,
+            "acerto_exato": 0.7237,
+            "acerto_1_dia": 0.8602
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.521,
+            "acerto_exato": 0.7523,
+            "acerto_1_dia": 0.7777
+          }
+        }
+      },
+      "historico_de_14_dias": {
+        "lstm_sozinha": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.455,
+            "acerto_exato": 0.7561,
+            "acerto_1_dia": 0.7908
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.675,
+            "acerto_exato": 0.8502,
+            "acerto_1_dia": 0.8796
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.069,
+            "acerto_exato": 0.5566,
+            "acerto_1_dia": 0.6043
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.566,
+            "acerto_exato": 0.7492,
+            "acerto_1_dia": 0.7814
+          }
+        },
+        "prophet_sozinho": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.969,
+            "acerto_exato": 0.6374,
+            "acerto_1_dia": 0.7092
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 1.322,
+            "acerto_exato": 0.8182,
+            "acerto_1_dia": 0.8248
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.715,
+            "acerto_exato": 0.1511,
+            "acerto_1_dia": 0.3992
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.514,
+            "acerto_exato": 0.763,
+            "acerto_1_dia": 0.788
+          }
+        },
+        "rede_de_regressao": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.067,
+            "acerto_exato": 0.6705,
+            "acerto_1_dia": 0.7532
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.751,
+            "acerto_exato": 0.7526,
+            "acerto_1_dia": 0.818
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 1.718,
+            "acerto_exato": 0.4622,
+            "acerto_1_dia": 0.6022
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.121,
+            "acerto_exato": 0.7108,
+            "acerto_1_dia": 0.767
+          }
+        },
+        "heuristica_por_perfil": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 4.857,
+            "acerto_exato": 0.1095,
+            "acerto_1_dia": 0.1389
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 5.42,
+            "acerto_exato": 0.1288,
+            "acerto_1_dia": 0.155
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.61,
+            "acerto_exato": 0.081,
+            "acerto_1_dia": 0.1148
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 4.884,
+            "acerto_exato": 0.0916,
+            "acerto_1_dia": 0.1238
+          }
+        },
+        "conjunto_60_40": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.074,
+            "acerto_exato": 0.7673,
+            "acerto_1_dia": 0.8307
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.387,
+            "acerto_exato": 0.8687,
+            "acerto_1_dia": 0.9222
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.195,
+            "acerto_exato": 0.5591,
+            "acerto_1_dia": 0.6702
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.58,
+            "acerto_exato": 0.7502,
+            "acerto_1_dia": 0.7783
+          }
+        },
+        "conjunto_80_20": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.296,
+            "acerto_exato": 0.759,
+            "acerto_1_dia": 0.7993
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.587,
+            "acerto_exato": 0.8536,
+            "acerto_1_dia": 0.8822
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.633,
+            "acerto_exato": 0.5607,
+            "acerto_1_dia": 0.633
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.574,
+            "acerto_exato": 0.7489,
+            "acerto_1_dia": 0.7802
+          }
+        },
+        "conjunto_90_10": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.411,
+            "acerto_exato": 0.7577,
+            "acerto_1_dia": 0.7924
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.662,
+            "acerto_exato": 0.8509,
+            "acerto_1_dia": 0.8764
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.924,
+            "acerto_exato": 0.561,
+            "acerto_1_dia": 0.6174
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.57,
+            "acerto_exato": 0.7495,
+            "acerto_1_dia": 0.7814
+          }
+        },
+        "prophet_so_sem_historico": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.455,
+            "acerto_exato": 0.7561,
+            "acerto_1_dia": 0.7908
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.675,
+            "acerto_exato": 0.8502,
+            "acerto_1_dia": 0.8796
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.069,
+            "acerto_exato": 0.5566,
+            "acerto_1_dia": 0.6043
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.566,
+            "acerto_exato": 0.7492,
+            "acerto_1_dia": 0.7814
+          }
+        }
+      },
+      "historico_de_7_dias": {
+        "lstm_sozinha": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.286,
+            "acerto_exato": 0.7445,
+            "acerto_1_dia": 0.7817
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.594,
+            "acerto_exato": 0.8335,
+            "acerto_1_dia": 0.8658
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.739,
+            "acerto_exato": 0.5457,
+            "acerto_1_dia": 0.5925
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.355,
+            "acerto_exato": 0.7514,
+            "acerto_1_dia": 0.7899
+          }
+        },
+        "prophet_sozinho": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.969,
+            "acerto_exato": 0.6374,
+            "acerto_1_dia": 0.7092
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 1.322,
+            "acerto_exato": 0.8182,
+            "acerto_1_dia": 0.8248
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.715,
+            "acerto_exato": 0.1511,
+            "acerto_1_dia": 0.3992
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.514,
+            "acerto_exato": 0.763,
+            "acerto_1_dia": 0.788
+          }
+        },
+        "rede_de_regressao": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.1,
+            "acerto_exato": 0.6491,
+            "acerto_1_dia": 0.7411
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.806,
+            "acerto_exato": 0.7312,
+            "acerto_1_dia": 0.8026
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 1.729,
+            "acerto_exato": 0.4284,
+            "acerto_1_dia": 0.5913
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.118,
+            "acerto_exato": 0.7061,
+            "acerto_1_dia": 0.7627
+          }
+        },
+        "heuristica_por_perfil": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 4.857,
+            "acerto_exato": 0.1095,
+            "acerto_1_dia": 0.1389
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 5.42,
+            "acerto_exato": 0.1288,
+            "acerto_1_dia": 0.155
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.61,
+            "acerto_exato": 0.081,
+            "acerto_1_dia": 0.1148
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 4.884,
+            "acerto_exato": 0.0916,
+            "acerto_1_dia": 0.1238
+          }
+        },
+        "conjunto_60_40": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.002,
+            "acerto_exato": 0.7566,
+            "acerto_1_dia": 0.8248
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.433,
+            "acerto_exato": 0.8458,
+            "acerto_1_dia": 0.906
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 1.942,
+            "acerto_exato": 0.5649,
+            "acerto_1_dia": 0.6737
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.407,
+            "acerto_exato": 0.7533,
+            "acerto_1_dia": 0.7902
+          }
+        },
+        "conjunto_80_20": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.119,
+            "acerto_exato": 0.7525,
+            "acerto_1_dia": 0.8
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.54,
+            "acerto_exato": 0.8391,
+            "acerto_1_dia": 0.881
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.188,
+            "acerto_exato": 0.5649,
+            "acerto_1_dia": 0.6316
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.376,
+            "acerto_exato": 0.7511,
+            "acerto_1_dia": 0.7896
+          }
+        },
+        "conjunto_90_10": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.214,
+            "acerto_exato": 0.7474,
+            "acerto_1_dia": 0.7846
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.582,
+            "acerto_exato": 0.8333,
+            "acerto_1_dia": 0.8641
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.484,
+            "acerto_exato": 0.5577,
+            "acerto_1_dia": 0.6073
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.359,
+            "acerto_exato": 0.7511,
+            "acerto_1_dia": 0.7905
+          }
+        },
+        "prophet_so_sem_historico": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.286,
+            "acerto_exato": 0.7445,
+            "acerto_1_dia": 0.7817
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 0.594,
+            "acerto_exato": 0.8335,
+            "acerto_1_dia": 0.8658
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 2.739,
+            "acerto_exato": 0.5457,
+            "acerto_1_dia": 0.5925
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.355,
+            "acerto_exato": 0.7514,
+            "acerto_1_dia": 0.7899
+          }
+        }
+      },
+      "historico_de_0_dias": {
+        "lstm_sozinha": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 11.413,
+            "acerto_exato": 0.0233,
+            "acerto_1_dia": 0.0317
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 11.678,
+            "acerto_exato": 0.0271,
+            "acerto_1_dia": 0.0285
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 10.782,
+            "acerto_exato": 0.0227,
+            "acerto_1_dia": 0.0405
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 11.486,
+            "acerto_exato": 0.0131,
+            "acerto_1_dia": 0.0291
+          }
+        },
+        "prophet_sozinho": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.969,
+            "acerto_exato": 0.6374,
+            "acerto_1_dia": 0.7092
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 1.322,
+            "acerto_exato": 0.8182,
+            "acerto_1_dia": 0.8248
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.715,
+            "acerto_exato": 0.1511,
+            "acerto_1_dia": 0.3992
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.514,
+            "acerto_exato": 0.763,
+            "acerto_1_dia": 0.788
+          }
+        },
+        "rede_de_regressao": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 4.555,
+            "acerto_exato": 0.0287,
+            "acerto_1_dia": 0.0756
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 4.663,
+            "acerto_exato": 0.0325,
+            "acerto_1_dia": 0.076
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 4.281,
+            "acerto_exato": 0.0289,
+            "acerto_1_dia": 0.0882
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 4.607,
+            "acerto_exato": 0.0172,
+            "acerto_1_dia": 0.0572
+          }
+        },
+        "heuristica_por_perfil": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 4.857,
+            "acerto_exato": 0.1095,
+            "acerto_1_dia": 0.1389
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 5.42,
+            "acerto_exato": 0.1288,
+            "acerto_1_dia": 0.155
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.61,
+            "acerto_exato": 0.081,
+            "acerto_1_dia": 0.1148
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 4.884,
+            "acerto_exato": 0.0916,
+            "acerto_1_dia": 0.1238
+          }
+        },
+        "conjunto_60_40": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 5.9,
+            "acerto_exato": 0.1633,
+            "acerto_1_dia": 0.2308
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 5.072,
+            "acerto_exato": 0.2303,
+            "acerto_1_dia": 0.2781
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 4.583,
+            "acerto_exato": 0.128,
+            "acerto_1_dia": 0.2719
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 10.115,
+            "acerto_exato": 0.0138,
+            "acerto_1_dia": 0.036
+          }
+        },
+        "conjunto_80_20": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 8.203,
+            "acerto_exato": 0.0358,
+            "acerto_1_dia": 0.0784
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 8.059,
+            "acerto_exato": 0.0317,
+            "acerto_1_dia": 0.0693
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 6.58,
+            "acerto_exato": 0.0618,
+            "acerto_1_dia": 0.1328
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 10.819,
+            "acerto_exato": 0.0128,
+            "acerto_1_dia": 0.0316
+          }
+        },
+        "conjunto_90_10": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 8.553,
+            "acerto_exato": 0.0361,
+            "acerto_1_dia": 0.0563
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 8.47,
+            "acerto_exato": 0.0317,
+            "acerto_1_dia": 0.0436
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 6.563,
+            "acerto_exato": 0.0627,
+            "acerto_1_dia": 0.1041
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 11.486,
+            "acerto_exato": 0.0131,
+            "acerto_1_dia": 0.0291
+          }
+        },
+        "prophet_so_sem_historico": {
+          "todos": {
+            "n_janelas": 16924,
+            "erro_em_dias": 1.969,
+            "acerto_exato": 0.6374,
+            "acerto_1_dia": 0.7092
+          },
+          "CLT": {
+            "n_janelas": 9405,
+            "erro_em_dias": 1.322,
+            "acerto_exato": 0.8182,
+            "acerto_1_dia": 0.8248
+          },
+          "PJ": {
+            "n_janelas": 4321,
+            "erro_em_dias": 3.715,
+            "acerto_exato": 0.1511,
+            "acerto_1_dia": 0.3992
+          },
+          "freelancer": {
+            "n_janelas": 3198,
+            "erro_em_dias": 1.514,
+            "acerto_exato": 0.763,
+            "acerto_1_dia": 0.788
+          }
+        }
+      }
+    },
+    "recomendacao": {
+      "recomenda_tirar_o_prophet": false,
+      "candidatos": {
+        "lstm_sozinha": {
+          "igual_ou_melhor_em_tudo": false,
+          "por_corte": [
+            {
+              "corte": "historico_completo",
+              "erro_igual_ou_melhor": false,
+              "acerto_1_dia_igual_ou_melhor": true
+            },
+            {
+              "corte": "historico_de_14_dias",
+              "erro_igual_ou_melhor": false,
+              "acerto_1_dia_igual_ou_melhor": false
+            },
+            {
+              "corte": "historico_de_7_dias",
+              "erro_igual_ou_melhor": false,
+              "acerto_1_dia_igual_ou_melhor": false
+            }
+          ]
+        },
+        "rede_de_regressao": {
+          "igual_ou_melhor_em_tudo": false,
+          "por_corte": [
+            {
+              "corte": "historico_completo",
+              "erro_igual_ou_melhor": true,
+              "acerto_1_dia_igual_ou_melhor": false
+            },
+            {
+              "corte": "historico_de_14_dias",
+              "erro_igual_ou_melhor": true,
+              "acerto_1_dia_igual_ou_melhor": false
+            },
+            {
+              "corte": "historico_de_7_dias",
+              "erro_igual_ou_melhor": false,
+              "acerto_1_dia_igual_ou_melhor": false
+            }
+          ]
+        }
+      },
+      "frase": "Pela regra, o Prophet fica: nem a LSTM sozinha nem a rede de regressão ficou igual ou melhor que o conjunto atual em todos os cortes (histórico completo e pouco histórico)."
+    },
+    "tempo_segundos": 82.2
+  },
+  "tempo_total_segundos": 161.9
+}
