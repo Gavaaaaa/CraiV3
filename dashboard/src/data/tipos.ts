@@ -392,6 +392,12 @@ export interface ResultadoRetencaoSimulada {
   /** O risco que o sistema calculou (0 a 1) e o corte abaixo do qual ele não intervém. */
   risco: number | null
   corte_de_intervencao: number
+  /**
+   * Por que não houve oferta, na frase do backend. Só vem quando o MODELO DE IA decidiu o risco:
+   * aí o corte fixo não vale (o sistema intervém por intenção explícita ou pela posição na base).
+   * null quando houve oferta, ou quando a régua decidiu (a tela explica pelo corte).
+   */
+  sem_oferta_porque: string | null
   /** null: sem risco, o sistema não faz oferta. */
   oferta: OfertaRetencao | null
   oferta_legivel: string | null

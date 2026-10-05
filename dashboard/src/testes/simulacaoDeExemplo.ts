@@ -1262,3 +1262,51 @@ export const RETENCAO_SEM_RISCO = {
   "prazo_estorno_dias": 30,
   "simulado": true
 } as unknown as RetencaoSimuladaApi
+
+/**
+ * A mesma rota com o MODELO DE IA decidindo o risco (capturadas do backend em 05/10/2026, com o
+ * modelo v3 ativo). O corte fixo não vale (`corte_de_intervencao` nulo): quem abre a página de
+ * cancelamento recebe oferta por intenção explícita; os outros, só pela posição na base.
+ */
+export const RETENCAO_PELO_MODELO_COM_OFERTA = {
+  "faixa": "sem_risco",
+  "motivo": "Abriu a página de cancelamento, sem login há 24 dias, usa 1 funcionalidade nos últimos 30 dias, MRR R$ 1.200,00 — fora dos 30% de maior risco da sua base, pelo modelo",
+  "decidido_por": "modelo",
+  "risco": 0.21,
+  "corte_de_intervencao": null,
+  "regra_de_intervencao": "intencao_explicita",
+  "intensidade": "oferta_mais_leve",
+  "sem_oferta_porque": null,
+  "oferta": "pix_boleto_flash",
+  "oferta_legivel": "troca para Pix ou boleto em 1 clique",
+  "canal": "popup",
+  "canal_legivel": "aviso dentro do produto",
+  "porque": "O cliente mostrou intenção explícita de sair. Nesse caso o sistema age sempre, por regra, qualquer que seja o risco calculado. Como o caso não é grave, o sistema escolheu a oferta de menor custo entre as que considerou nesta rodada (chance de aceite aprendida até aqui: 33%).",
+  "aceitou": true,
+  "valor_mantido_liquido": 1020.0,
+  "sem_crai": "Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.",
+  "meses_de_mrr": 1,
+  "prazo_estorno_dias": 30,
+  "simulado": true
+} as unknown as RetencaoSimuladaApi
+export const RETENCAO_PELO_MODELO_SEM_OFERTA = {
+  "faixa": "sem_risco",
+  "motivo": "Sem login há 24 dias, usa 1 funcionalidade nos últimos 30 dias, MRR R$ 1.200,00 — fora dos 30% de maior risco da sua base, pelo modelo",
+  "decidido_por": "modelo",
+  "risco": 0.2,
+  "corte_de_intervencao": null,
+  "regra_de_intervencao": "fora_das_faixas",
+  "intensidade": null,
+  "sem_oferta_porque": "Quem decidiu o risco foi o modelo de IA. Pela posição na base, este cliente não está entre os graves nem os preocupantes (ou não tem sinal de abandono: 7 dias sem entrar, ou nenhuma funcionalidade usada), e não houve evento de intenção explícita. O sistema não interveio: oferecer desconto a quem não ia sair só custa margem.",
+  "oferta": null,
+  "oferta_legivel": null,
+  "canal": null,
+  "canal_legivel": null,
+  "porque": null,
+  "aceitou": null,
+  "valor_mantido_liquido": 0.0,
+  "sem_crai": "O sistema não interveio: com ou sem a CRAI, este cliente segue como está.",
+  "meses_de_mrr": 1,
+  "prazo_estorno_dias": 30,
+  "simulado": true
+} as unknown as RetencaoSimuladaApi

@@ -49,9 +49,15 @@ aconteceu.
   suficiente. O motivo aparece em uma frase na página Voluntário.
 - **Quem decide o risco:** o modelo de IA, quando ele está ativo e o cliente tem dados de
   uso; senão, uma régua de regras fixas. A página mostra quem decidiu para cada cliente.
-- Quando o risco passa do corte, o sistema escolhe uma **oferta** entre quatro: desconto de
-  10% por 3 meses, desconto de 20% por 3 meses, pausa de 1 mês na assinatura, ou troca para
-  Pix ou boleto. Ele aprende com cada aceite e cada recusa qual oferta funciona melhor.
+- **Quando o sistema faz uma oferta.** Se quem decidiu o risco foi o modelo de IA: sempre
+  que o cliente mostra intenção explícita de sair (abre a página de cancelamento ou clica
+  em rebaixar o plano) e, nos outros casos, quando ele está como grave ou preocupante pela
+  posição na base. Se quem decidiu foi a régua: quando o risco passa do corte.
+- A **oferta** é uma entre quatro: desconto de 10% por 3 meses, desconto de 20% por 3
+  meses, pausa de 1 mês na assinatura, ou troca para Pix ou boleto. O sistema aprende com
+  cada aceite e cada recusa qual oferta funciona melhor. Com o modelo de IA decidindo, o
+  caso grave leva a oferta que o sistema escolheu, e os outros levam a de menor custo entre
+  as que ele considerou.
 - **Valor mantido:** quando o cliente aceita a oferta, conta a mensalidade dele pelo número
   de meses em "meses_de_mensalidade_contados", menos o desconto concedido. Se ele cancelar
   dentro do prazo de estorno, o valor sai da conta.

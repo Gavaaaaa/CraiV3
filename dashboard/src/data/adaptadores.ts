@@ -1135,7 +1135,12 @@ export interface RetencaoSimuladaApi {
   motivo: string
   decidido_por: 'modelo' | 'regua'
   risco?: number | null
-  corte_de_intervencao?: number
+  /** null quando o modelo de IA decidiu o risco: o corte fixo não vale nesse caso. */
+  corte_de_intervencao?: number | null
+  /** Só quando o modelo de IA decidiu: a regra de intervenção, a intensidade e o porquê de não haver oferta. */
+  regra_de_intervencao?: string | null
+  intensidade?: string | null
+  sem_oferta_porque?: string | null
   oferta: string | null
   oferta_legivel: string | null
   canal: string | null
@@ -1158,6 +1163,7 @@ export function adaptarRetencaoSimulada(r: RetencaoSimuladaApi): ResultadoRetenc
     decidido_por: r.decidido_por,
     risco: numero(r.risco),
     corte_de_intervencao: numero(r.corte_de_intervencao) ?? 0.6,
+    sem_oferta_porque: typeof r.sem_oferta_porque === 'string' && r.sem_oferta_porque.trim() ? maiuscula(r.sem_oferta_porque) : null,
     oferta,
     oferta_legivel: r.oferta_legivel ? maiuscula(r.oferta_legivel) : null,
     canal_legivel: r.canal_legivel,

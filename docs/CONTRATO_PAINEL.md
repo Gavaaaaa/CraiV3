@@ -520,7 +520,7 @@ padrão (sem telefone, no site) continua dando `popup`.
 | `risk_score` | number 0–1 | não | |
 | `criticality` | string | não | `critico` \| `alto` \| `padrao` |
 | `profile` | string | não | |
-| `offer_type` | string | **sim** | a oferta escolhida pelo bandit; `null` quando o risco ficou abaixo de 0,60 e o sistema decidiu não abordar |
+| `offer_type` | string | **sim** | a oferta escolhida; `null` quando o sistema decidiu não abordar (com a régua decidindo o risco: abaixo de 0,60; com o modelo v3: sem evento de intenção explícita e fora das faixas grave e preocupante). Com o modelo v3 e um caso que não é grave, é a de menor custo entre as candidatas, e as candidatas trazem `motivo_codigo` `menor_custo` ou `custo_maior_que_a_escolhida` |
 | `offer_label` | string | não | `--` quando não há oferta |
 | `channel` | string | sim | `whatsapp` \| `popup` \| `email`; `null` sem abordagem |
 | `canais_considerados` | array | não (pode ser `[]`) | ver 6.1; `[]` sem abordagem |

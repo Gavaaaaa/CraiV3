@@ -461,17 +461,31 @@ async def avancar(tenant_id: str, dias: Optional[int], ate_proxima_acao: bool) -
             return
 
 
-def _motivo(cliente: dict, props: dict, user_id: str, risco, criticidade: str) -> str:
+def _motivo(cliente: dict, props: dict, user_id: str, risco, criticidade: str,
+            posicao_do_modelo: dict | None = None) -> str:
     """O motivo em uma frase: os dados que o sistema recebeu, ditos. Sem dado
-    de uso, a frase é a do evento (e não um "sem login há N dias" inventado)."""
+    de uso, a frase é a do evento (e não um "sem login há N dias" inventado).
+
+    `posicao_do_modelo` (a `posicao` da saída da decisão de risco) só vem
+    quando o MODELO v3 decidiu: aí a frase é a da posição na base, a mesma do
+    ranking. A frase da régua diria "crítico pelo valor da conta, não pelo
+    risco" de quem é grave pela posição, o que não é verdade."""
     partes = []
     if cliente["sinais"]["abriu_cancelamento"]:
         partes.append("abriu a página de cancelamento")
     if "days_since_last" in props:
-        partes.append(batch_scoring.explicar(
-            {"customer_id_externo": user_id, "mrr": cliente["mrr"],
-             "days_since_last": props["days_since_last"],
-             "features_used_30d": props["features_used_30d"]}, risco, criticidade, None))
+        linha = {"customer_id_externo": user_id, "mrr": cliente["mrr"],
+                 "days_since_last": props["days_since_last"],
+                 "features_used_30d": props["features_used_30d"]}
+        if posicao_do_modelo is not None:
+            posicao = posicao_do_modelo.get("na_base")
+            faixas = batch_scoring.faixas_de_posicao()
+            promovido = (criticidade == "critico" and posicao is not None
+                         and posicao < 1 - faixas[0] / 100)
+            partes.append(batch_scoring._explicar_pelo_modelo(
+                linha, posicao, criticidade, faixas, promovido=promovido))
+        else:
+            partes.append(batch_scoring.explicar(linha, risco, criticidade, None))
     else:
         partes.append("sem dado de uso")
     if "tickets_30d" in props:
@@ -480,6 +494,42 @@ def _motivo(cliente: dict, props: dict, user_id: str, risco, criticidade: str) -
         partes.append(f"{props['failed_pay_90d']} pagamentos que falharam nos últimos 90 dias")
     frase = ", ".join(partes)
     return frase[:1].upper() + frase[1:]
+
+
+# Quando o MODELO v3 decide o risco, a oferta não depende do corte fixo: a
+# resposta diz qual regra decidiu (conserto de 05/10/2026). No caminho da régua
+# estas frases não são usadas, e a resposta é a de antes.
+_PORQUE_DA_REGRA = {
+    voluntary_agent.REGRA_INTENCAO_EXPLICITA:
+        "O cliente mostrou intenção explícita de sair. Nesse caso o sistema age sempre, por "
+        "regra, qualquer que seja o risco calculado. ",
+    voluntary_agent.REGRA_POSICAO_NA_BASE:
+        "Pela posição na base, o cliente está entre os de maior risco e tem sinal de abandono. ",
+}
+_SEM_OFERTA_PELA_REGRA = {
+    voluntary_agent.SEM_INTERVENCAO_FORA_DAS_FAIXAS:
+        "Quem decidiu o risco foi o modelo de IA. Pela posição na base, este cliente não está "
+        "entre os graves nem os preocupantes (ou não tem sinal de abandono: 7 dias sem entrar, "
+        "ou nenhuma funcionalidade usada), e não houve evento de intenção explícita. O sistema "
+        "não interveio: oferecer desconto a quem não ia sair só custa margem.",
+    voluntary_agent.SEM_INTERVENCAO_SEM_REFERENCIA:
+        "Quem decidiu o risco foi o modelo de IA, e não há referência de posição na base para "
+        "comparar este cliente. Sem evento de intenção explícita, o sistema não interveio.",
+}
+
+
+def _porque_da_oferta(regra, intensidade, estimada) -> str:
+    """Por que esta oferta, em uma ou duas frases. Sem `regra` (a régua decidiu
+    o risco), a frase de sempre."""
+    chance = (f" (chance de aceite aprendida até aqui: {round(estimada * 100)}%)."
+              if estimada is not None else ".")
+    if intensidade == voluntary_agent.INTENSIDADE_MAIS_LEVE:
+        return (_PORQUE_DA_REGRA.get(regra, "")
+                + "Como o caso não é grave, o sistema escolheu a oferta de menor custo entre as "
+                  "que considerou nesta rodada" + chance)
+    return (_PORQUE_DA_REGRA.get(regra, "")
+            + "O sistema sorteia a partir do que já aprendeu sobre cada oferta para este "
+              "perfil. Nesta rodada, esta teve o maior retorno esperado" + chance)
 
 
 # ── As rotas ──────────────────────────────────────────────────────────────
@@ -582,9 +632,12 @@ async def simular_retencao(corpo: dict = Body(...), conta: dict = Depends(get_co
     marcado vira o dado que o sistema receberia de um cliente de verdade, e o
     sistema avalia o risco (pelo modelo ou pela régua, como estiver), decide se
     intervém e escolhe a oferta e o canal (com uma cópia separada do bandit).
-    O aceite vem da propensão escondida, não do bandit. Se o risco calculado
-    ficar abaixo do corte de intervenção, não há oferta: a resposta diz isso,
-    com o risco. Exige `owner` ou `admin`."""
+    O aceite vem da propensão escondida, não do bandit. Quando a régua decide o
+    risco, não há oferta abaixo do corte de intervenção (`corte_de_intervencao`).
+    Quando o modelo de IA decide, o corte não vale (`corte_de_intervencao` vem
+    nulo): o sistema intervém por intenção explícita ou pela posição na base
+    (`regra_de_intervencao`), e `sem_oferta_porque` diz por que não interveio.
+    Exige `owner` ou `admin`."""
     exigir_papel(conta, "owner", "admin")
     tenant_id = conta["tenant_id"]
     try:
@@ -606,7 +659,11 @@ async def simular_retencao(corpo: dict = Body(...), conta: dict = Depends(get_co
         decisao_de_risco = next((d for d in final.get("decisoes") or []
                                  if d.get("tipo_decisao") == retention_log.TIPO_RISCO), {})
         por_modelo = decisao_de_risco.get("modelo") not in (None, retention_log.MODELO_REGRA)
-        motivo = _motivo(cliente, props, user_id, risco, criticidade)
+        # Só existe quando o modelo v3 decidiu o risco (ver `voluntary_agent`).
+        regra = (decisao_de_risco.get("saida") or {}).get("regra_de_intervencao")
+        intensidade = final.get("intensidade_da_oferta") if regra else None
+        motivo = _motivo(cliente, props, user_id, risco, criticidade,
+                         (decisao_de_risco.get("saida") or {}).get("posicao") if regra else None)
         aceitou = None
         valores = None
         if oferta and final.get("offer_sent"):
@@ -623,24 +680,27 @@ async def simular_retencao(corpo: dict = Body(...), conta: dict = Depends(get_co
             aceitou=None if aceitou is None else int(aceitou))
         consideradas = final.get("ofertas_consideradas") or []
         config = configuracao.ler(tenant_id)
-    estimada = consideradas[0].get("p_estimado") if consideradas else None
+    escolhida = next((c for c in consideradas if c.get("offer") == oferta),
+                     consideradas[0] if consideradas else None)
+    estimada = escolhida.get("p_estimado") if escolhida else None
     return {
         "faixa": faixa,
         "motivo": motivo,
         "decidido_por": "modelo" if por_modelo else "regua",
         # O risco que o sistema calculou (0 a 1) e o corte abaixo do qual ele
-        # não intervém: é o que explica um "sem oferta".
+        # não intervém: é o que explica um "sem oferta" QUANDO A RÉGUA DECIDE.
+        # Quando o modelo de IA decide, o corte não vale (vem nulo), e quem
+        # explica é a regra de intervenção.
         "risco": None if risco is None else round(float(risco), 2),
-        "corte_de_intervencao": voluntary_agent.CORTE_DE_INTERVENCAO,
+        "corte_de_intervencao": None if regra else voluntary_agent.CORTE_DE_INTERVENCAO,
+        "regra_de_intervencao": regra,
+        "intensidade": intensidade,
+        "sem_oferta_porque": None if oferta else _SEM_OFERTA_PELA_REGRA.get(regra),
         "oferta": oferta,
         "oferta_legivel": retention_log.ROTULOS_DE_OFERTA.get(oferta) if oferta else None,
         "canal": canal,
         "canal_legivel": retention_log.ROTULOS_DE_CANAL.get(canal, canal) if canal else None,
-        "porque": (None if not oferta else
-                   "O sistema sorteia a partir do que já aprendeu sobre cada oferta para este "
-                   "perfil. Nesta rodada, esta teve o maior retorno esperado"
-                   + (f" (chance de aceite aprendida até aqui: {round(estimada * 100)}%)."
-                      if estimada is not None else ".")),
+        "porque": None if not oferta else _porque_da_oferta(regra, intensidade, estimada),
         "aceitou": aceitou,
         "valor_mantido_liquido": valores["liquido"] if valores else 0.0,
         "sem_crai": ("O sistema não interveio: com ou sem a CRAI, este cliente segue como está."

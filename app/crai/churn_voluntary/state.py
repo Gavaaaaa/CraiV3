@@ -43,6 +43,14 @@ class ChurnVoluntaryState(TypedDict):
     # ou descartado.
     canais_considerados: Optional[list]
 
+    # Só quando o MODELO v3 decidiu o risco (conserto de 05/10/2026): a regra
+    # que decide a intervenção (`intencao_explicita`, `posicao_na_base`, ou um
+    # dos dois motivos de não intervir) e, havendo oferta, a intensidade
+    # (`oferta_do_bandit` ou `oferta_mais_leve`). None quando a régua decidiu:
+    # aí vale o corte fixo. Ver `voluntary_agent.regra_de_intervencao`.
+    regra_de_intervencao: Optional[str]
+    intensidade_da_oferta: Optional[str]
+
     # Por que o sistema NÃO fez oferta mesmo com o risco no corte: hoje, só
     # `limite_de_contato` (Rodada 3, S5). None quando houve oferta, ou quando o
     # risco ficou abaixo do corte.

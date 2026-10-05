@@ -574,8 +574,10 @@ describe('dashboard em modo real contra o backend local', () => {
     expect([retencao.faixa, retencao.decidido_por, retencao.risco]).toEqual(['grave', 'regua', 0.9])
     expect(retencao.oferta).not.toBeNull()
     expect(retencao.aceitou).toBe(true)
-    // Com dado de uso, decide o modelo de IA (se estiver ativo) ou a régua. Nos dois casos a
-    // regra é a mesma: só há oferta com o risco no corte de intervenção ou acima dele.
+    // Com dado de uso, decide o modelo de IA (se estiver ativo) ou a régua, e a regra da oferta
+    // depende de quem decidiu. Régua: só há oferta com o risco no corte de intervenção ou acima
+    // dele. Modelo: o corte fixo não vale; sem evento de intenção explícita, só há oferta para
+    // quem está como grave ou preocupante pela posição na base, e o backend diz por que não houve.
     const comUso = await api.simularRetencao({
       nome: 'Café Aroma',
       mrr: 1200,
@@ -583,11 +585,30 @@ describe('dashboard em modo real contra o backend local', () => {
       propensao: aceitaTudo,
     })
     expect(comUso.risco).not.toBeNull()
-    expect(comUso.oferta !== null).toBe(comUso.risco! >= comUso.corte_de_intervencao)
+    if (comUso.decidido_por === 'regua') {
+      expect(comUso.oferta !== null).toBe(comUso.risco! >= comUso.corte_de_intervencao)
+      expect(comUso.faixa).toBe('preocupante')
+      expect(comUso.sem_oferta_porque).toBeNull()
+    } else {
+      expect(comUso.oferta !== null).toBe(comUso.faixa !== 'sem_risco')
+      expect(comUso.sem_oferta_porque === null).toBe(comUso.oferta !== null)
+      if (comUso.oferta === null) expect(comUso.sem_oferta_porque).toMatch(/^Quem decidiu o risco foi o modelo de IA\./)
+    }
     expect(comUso.aceitou).toBe(comUso.oferta === null ? null : true)
-    if (comUso.decidido_por === 'regua') expect(comUso.faixa).toBe('preocupante')
+    // Com o modelo de IA ativo, quem tem dado de uso E abre a página de cancelamento recebe oferta
+    // sempre (intenção explícita), mesmo com o risco calculado abaixo do corte antigo.
+    const intencao = await api.simularRetencao({
+      nome: 'Estúdio Vale',
+      mrr: 1200,
+      sinais: { abriu_cancelamento: true, uso_caiu: true, tickets: false, atraso: false },
+      propensao: aceitaTudo,
+    })
+    expect(intencao.oferta).not.toBeNull()
+    expect(intencao.aceitou).toBe(true)
+    expect(intencao.sem_oferta_porque).toBeNull()
+    if (intencao.decidido_por === 'modelo') expect(intencao.porque).toMatch(/^O cliente mostrou intenção explícita de sair\./)
     expect((await api.clientesRecentes({ limite: 50 })).some((c) => c.simulado)).toBe(false)
-    expect((await api.clientesRecentes({ limite: 50, incluirSimulados: true })).filter((c) => c.simulado).map((c) => c.nome).sort()).toEqual(['Café Aroma', 'Loja Ponto Certo'])
+    expect((await api.clientesRecentes({ limite: 50, incluirSimulados: true })).filter((c) => c.simulado).map((c) => c.nome).sort()).toEqual(['Café Aroma', 'Estúdio Vale', 'Loja Ponto Certo'])
 
     // O membro lê a simulação, e não avança nem apaga.
     trocarPapelDeDesenvolvimento('membro')

@@ -421,7 +421,7 @@ export function simularRetencao(c: ClienteRiscoFicticio): ResultadoRetencaoSimul
   if (faixa === 'preocupante' && sinais >= 2 && mrrAlto) motivo += ' Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.'
 
   const risco = faixa === 'grave' ? 0.9 : faixa === 'preocupante' ? 0.8 : 0.1
-  const base = { faixa, motivo, decidido_por: 'regua', risco, corte_de_intervencao: 0.6, meses_de_mrr: 1, prazo_estorno_dias: 30 } as const
+  const base = { faixa, motivo, decidido_por: 'regua', risco, corte_de_intervencao: 0.6, sem_oferta_porque: null, meses_de_mrr: 1, prazo_estorno_dias: 30 } as const
   if (faixa === 'sem_risco') {
     return { ...base, oferta: null, oferta_legivel: null, canal_legivel: null, porque: null, aceitou: null, valor_mantido_liquido: 0, sem_crai: 'O sistema não interveio: com ou sem a CRAI, este cliente segue como está.' }
   }

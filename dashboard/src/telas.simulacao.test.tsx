@@ -19,6 +19,8 @@ import { corposEnviados, ligarBackendFalso, prepararJsdom } from './testes/modoR
 import {
   CICLO_SIMULADO,
   RETENCAO_ACEITA,
+  RETENCAO_PELO_MODELO_COM_OFERTA,
+  RETENCAO_PELO_MODELO_SEM_OFERTA,
   RETENCAO_SEM_RISCO,
   SIM_COBRADA,
   SIM_ENVIADA,
@@ -215,6 +217,38 @@ describe('cliente em risco (voluntário) em modo real', () => {
     // A tela diz por que não houve oferta, com o risco e o corte que o backend informou.
     expect(screen.getByText(/Risco calculado: 0%\. Abaixo de 60% o sistema não intervém: nenhuma oferta\./)).toBeTruthy()
     expect(screen.getByText('O sistema não interveio: com ou sem a CRAI, este cliente segue como está.')).toBeTruthy()
+  })
+
+  it('com o modelo de IA decidindo e sem oferta, a tela mostra a frase do backend, e não o corte de 60%', async () => {
+    ligarBackendFalso({ 'POST /simulacao/retencao': RETENCAO_PELO_MODELO_SEM_OFERTA })
+    abrir('/simulacao?aba=retencao')
+    fireEvent.submit(await screen.findByRole('form', { name: 'Cliente fictício em risco' }, ESPERA))
+    expect(await screen.findByText('Como o sistema decidiu', {}, ESPERA)).toBeTruthy()
+    expect(screen.getByText('Decidido pelo modelo de IA')).toBeTruthy()
+    expect(screen.queryByText('O que o sistema fez')).toBeNull()
+    expect(screen.getByText(/Risco calculado: 20%\. Quem decidiu o risco foi o modelo de IA\. Pela posição na base, este cliente não está entre os graves nem os preocupantes/)).toBeTruthy()
+    expect(screen.queryByText(/Abaixo de 60%/)).toBeNull()
+  })
+
+  it('com o modelo de IA decidindo, quem abre a página de cancelamento recebe oferta, e a tela diz a regra', async () => {
+    ligarBackendFalso({ 'POST /simulacao/retencao': RETENCAO_PELO_MODELO_COM_OFERTA })
+    abrir('/simulacao?aba=retencao')
+    fireEvent.submit(await screen.findByRole('form', { name: 'Cliente fictício em risco' }, ESPERA))
+    expect(await screen.findByText('Como o sistema decidiu', {}, ESPERA)).toBeTruthy()
+    expect(screen.getByText('Decidido pelo modelo de IA')).toBeTruthy()
+    expect(screen.getByText('O que o sistema fez')).toBeTruthy()
+    expect(screen.getByText(/Troca para Pix ou boleto em 1 clique · por aviso dentro do produto/)).toBeTruthy()
+    expect(screen.getAllByText(/O cliente mostrou intenção explícita de sair\. Nesse caso o sistema age sempre, por regra/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Risco calculado: 21%\. Oferta escolhida: troca para pix ou boleto em 1 clique\./)).toBeTruthy()
+    expect(screen.getByText('Cliente aceitou a oferta')).toBeTruthy()
+    expect(screen.queryByText(/Abaixo de 60%/)).toBeNull()
+  })
+
+  it('o formulário diz quando o sistema age com o modelo de IA decidindo', async () => {
+    ligarBackendFalso()
+    abrir('/simulacao?aba=retencao')
+    const formulario = await screen.findByRole('form', { name: 'Cliente fictício em risco' }, ESPERA)
+    expect(within(formulario).getByText(/Quando o modelo decide, o sistema age sempre que houver intenção explícita \(a página de cancelamento\) e, nos outros casos, quando o cliente está entre os de maior risco da base\./)).toBeTruthy()
   })
 
   it('erro do backend: o formulário volta com a frase', async () => {

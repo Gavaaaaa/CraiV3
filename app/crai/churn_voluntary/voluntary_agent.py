@@ -43,6 +43,7 @@ from .state import ChurnVoluntaryState
 from . import batch_scoring
 from . import retention_log as trilha
 from .risk_scorer import (
+    CONTRATO_V3,
     EVENTO_DADO_ESTATICO,
     FIXED_RISK,
     REGRA_DE_RISCO,
@@ -176,6 +177,12 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         state.get("tenant_id"), risk, _props.get("mrr"), _props.get("days_since_last"),
         _props.get("features_used_30d"), avaliacao["modelo"] != trilha.MODELO_REGRA)
     criticality = posicionamento["criticality"]
+    # Quando o MODELO v3 decide o risco, intervir ou não deixa de ser o corte
+    # fixo: é intenção explícita ou posição na base (ver `regra_de_intervencao`).
+    # Com a régua (ou o modelo legado) fica None, e vale o corte de sempre.
+    regra = (regra_de_intervencao(state["event"], criticality,
+                                  posicionamento["posicao_na_base"])
+             if avaliacao.get("contrato") == CONTRATO_V3 else None)
     print(f"[CHURN-VOL] {state['user_id']} | evento: {state['event']} | risco: {risk:.2f} "
           f"| perfil: {profile} | criticidade: {criticality}")
     # Trilha do Art. 20: a decisão de risco, com as features que ela viu —
@@ -194,6 +201,9 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         saida["posicao"] = {"na_base": posicionamento["posicao_na_base"],
                             "referencia": posicionamento["origem_da_posicao"],
                             "mrr_no_topo": posicionamento["mrr_no_topo"]}
+        if regra is not None:
+            # A regra que decide se o sistema intervém, dita na trilha e na frase.
+            saida["regra_de_intervencao"] = regra
     dec = trilha.decisao(
         state.get("tenant_id"), state["user_id"], trilha.DOMINIO_VOLUNTARIO,
         trilha.TIPO_RISCO, modelo, modelo_versao=versao,
@@ -206,7 +216,8 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
                   **entradas_comportamentais(props)},
         saida=saida, contribuicoes=avaliacao["contribuicoes"])
     return trilha.anotar_decisao(
-        {**state, "risk_score": risk, "profile": profile, "criticality": criticality}, dec)
+        {**state, "risk_score": risk, "profile": profile, "criticality": criticality,
+         "regra_de_intervencao": regra, "intensidade_da_oferta": None}, dec)
 
 
 async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -224,19 +235,34 @@ async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # que `choose_offer` devolveria com a mesma semente.
     rodada = _bandit_em_uso().classificar_ofertas(tenant, state["profile"], state["risk_score"],
                                                   mrr=mrr)
-    offer = rodada[0]["offer"]
-    p_estimado = rodada[0]["p_estimado"]
-    print(f"[CHURN-VOL] Oferta escolhida (Thompson Sampling): {offer} "
+    escolhida, intensidade = rodada[0], None
+    regra = state.get("regra_de_intervencao")
+    if regra in REGRAS_QUE_INTERVEM:
+        # O modelo v3 decidiu o risco: a faixa define a intensidade. Grave leva a
+        # oferta do bandit; o resto, a mais leve entre as que ele considerou.
+        intensidade = intensidade_da_faixa(state.get("criticality"))
+        if intensidade == INTENSIDADE_MAIS_LEVE:
+            escolhida = oferta_mais_leve(rodada[:N_CANDIDATAS])
+    offer = escolhida["offer"]
+    p_estimado = escolhida["p_estimado"]
+    como = ("a mais leve entre as consideradas" if intensidade == INTENSIDADE_MAIS_LEVE
+            else "Thompson Sampling")
+    print(f"[CHURN-VOL] Oferta escolhida ({como}): {offer} "
           f"| P(aceite) posterior: {p_estimado:.1%}")
     dec = decisao_de_oferta(tenant, state["user_id"], state["profile"],
-                            state["risk_score"], mrr, rodada)
+                            state["risk_score"], mrr, rodada, escolhida=escolhida,
+                            regra=regra if regra in REGRAS_QUE_INTERVEM else None,
+                            intensidade=intensidade)
     return trilha.anotar_decisao(
         {**state, "offer_type": offer,
          "ofertas_consideradas": rodada[:N_CANDIDATAS],
+         "intensidade_da_oferta": intensidade,
          "is_critical": is_critical_risk(state["risk_score"])}, dec)
 
 
-def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list) -> dict:
+def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list,
+                      escolhida: dict | None = None, regra: str | None = None,
+                      intensidade: str | None = None) -> dict:
     """A linha da trilha para a escolha do bandit. Compartilhada com o
     disparo em lote, que chama o bandit direto.
 
@@ -244,16 +270,27 @@ def decisao_de_oferta(tenant_id, user_id, profile, risk_score, mrr, rodada: list
     probabilidade APRENDIDA de cada candidata). NÃO entram `alpha`/`beta`:
     o estado do posterior é segredo comercial (Art. 20 §1º) e
     `_sem_dado_cru` os tira de qualquer jeito.
+
+    `escolhida`, `regra` e `intensidade` só vêm quando o MODELO v3 decidiu o
+    risco no pipeline de eventos: a oferta que saiu (a do bandit, ou a mais
+    leve entre as consideradas), a regra que levou à intervenção e a
+    intensidade. Sem eles, a linha é a de sempre: `rodada[0]`, sem chave nova.
     """
+    escolhida = escolhida or rodada[0]
+    saida = {"offer_type": escolhida["offer"],
+             "p_estimado": escolhida.get("p_estimado"),
+             "ofertas_consideradas": [{"offer": r["offer"], "p_estimado": r.get("p_estimado")}
+                                      for r in rodada[:N_CANDIDATAS]]}
+    if intensidade is not None:
+        saida["intensidade"] = intensidade
+    if regra is not None:
+        saida["regra_de_intervencao"] = regra
     return trilha.decisao(
         tenant_id, user_id, trilha.DOMINIO_VOLUNTARIO, trilha.TIPO_OFERTA,
         "offer_bandit",
         entradas={"profile": profile, "risk_score": round(float(risk_score), 4),
                   "mrr": trilha._num(mrr)},
-        saida={"offer_type": rodada[0]["offer"],
-               "p_estimado": rodada[0].get("p_estimado"),
-               "ofertas_consideradas": [{"offer": r["offer"], "p_estimado": r.get("p_estimado")}
-                                        for r in rodada[:N_CANDIDATAS]]})
+        saida=saida)
 
 
 async def choose_channel(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -598,6 +635,9 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
     criticality = state.get("criticality", "padrao")
     escolhida = state["offer_type"]
     rodada = list(state.get("ofertas_consideradas") or [])
+    # Só no caminho do modelo v3 fora da faixa grave: venceu a de menor custo,
+    # e não a de maior e-Profit amostrado (ver `oferta_mais_leve`).
+    mais_leve = state.get("intensidade_da_oferta") == INTENSIDADE_MAIS_LEVE
 
     if not any(linha.get("offer") == escolhida for linha in rodada):
         tenant = state.get("tenant_id") or TENANT_PADRAO
@@ -638,7 +678,13 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
             "eprofit_amostrado": linha.get("eprofit_amostrado"),
             "escolhida": vencedora,
             "origem_texto": origem_c,
-            "motivo": ("maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
+            "motivo": (("a oferta de menor custo entre as consideradas nesta rodada: o caso "
+                        "não é grave, e a faixa pede a oferta mais leve"
+                        if vencedora else
+                        f"considerada nesta rodada (posição {posicao} em e-Profit amostrado), "
+                        "mas não é a de menor custo")
+                       if mais_leve else
+                       "maior e-Profit com a taxa amostrada nesta rodada (Thompson Sampling)"
                        if vencedora else
                        f"e-Profit amostrado abaixo da escolhida nesta rodada (posição {posicao})"),
             # Os campos abaixo sao a MESMA informacao dos de cima na forma de
@@ -646,7 +692,9 @@ def montar_candidatas(state: ChurnVoluntaryState, texto_vencedora: str,
             # leitor. `texto_codigo` so existe quando o texto veio de MODELO
             # (conjunto fechado: "critico" ou "padrao"); texto gerado pela
             # Claude API nao tem codigo e e exibido como chegou.
-            "motivo_codigo": "maior_eprofit" if vencedora else "abaixo_da_escolhida",
+            "motivo_codigo": (("menor_custo" if vencedora else "custo_maior_que_a_escolhida")
+                              if mais_leve else
+                              "maior_eprofit" if vencedora else "abaixo_da_escolhida"),
             "motivo_params": {} if vencedora else {"posicao": posicao},
             # `texto_codigo` diz QUAL modelo se aplica a esta candidata. Ele
             # existe sempre que um modelo pode ser preciso -- inclusive quando
@@ -860,6 +908,70 @@ async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
 CORTE_DE_INTERVENCAO = 0.60
 
 
+# ── Quando o MODELO v3 decide o risco: intenção explícita ou posição na base ──
+#
+# O corte de 0,60 nasceu com a régua, que tem escala absoluta (página de
+# cancelamento = 0,90; 0,75 exige uns 19 dias sem login). O score do modelo v3
+# não está nessa escala: na referência de treino dele o p90 é 0,32. Medido em
+# 04/10/2026 em 56 combinações de evento, mensalidade e sinais: o risco do
+# modelo ficou entre 0,07 e 0,40, e NENHUMA passou do corte, nem a de quem
+# abriu a página de cancelamento. Por isso, quando o modelo v3 decide:
+#
+#   1. Evento de intenção explícita (os de `FIXED_RISK`: página de cancelamento,
+#      clique em rebaixar o plano): o sistema intervém SEMPRE, por regra. O
+#      risco do modelo continua calculado e gravado; só não é ele que decide.
+#   2. Nos outros eventos: intervém quem está como grave ou preocupante pela
+#      posição na base — a criticidade de `batch_scoring.criticidade_do_evento`,
+#      a mesma do lote e do SDK, que já exige o sinal absoluto de abandono. Sem
+#      referência de posição, não intervém.
+#   3. A faixa define a intensidade: grave leva a oferta do bandit; o resto, a
+#      mais leve entre as que o bandit considerou (`oferta_mais_leve`).
+#
+# O intervalo mínimo entre ofertas e o "não contatar" valem nos dois casos, como
+# antes. Quando a RÉGUA decide (sem modelo, sem dado para o modelo, ou modelo
+# legado), nada disto se aplica: `regra_de_intervencao` fica None no estado e o
+# corte de 0,60 continua.
+EVENTOS_DE_INTENCAO = frozenset(FIXED_RISK)
+REGRA_INTENCAO_EXPLICITA = "intencao_explicita"
+REGRA_POSICAO_NA_BASE = "posicao_na_base"
+SEM_INTERVENCAO_FORA_DAS_FAIXAS = "fora_das_faixas"
+SEM_INTERVENCAO_SEM_REFERENCIA = "sem_referencia_de_posicao"
+REGRAS_QUE_INTERVEM = (REGRA_INTENCAO_EXPLICITA, REGRA_POSICAO_NA_BASE)
+FAIXAS_QUE_INTERVEM = ("critico", "alto")          # grave e preocupante
+INTENSIDADE_DO_BANDIT = "oferta_do_bandit"
+INTENSIDADE_MAIS_LEVE = "oferta_mais_leve"
+
+
+def regra_de_intervencao(event: str, criticality: str, posicao_na_base) -> str:
+    """A regra que decide a intervenção quando o MODELO v3 decidiu o risco.
+
+    Devolve uma das duas regras que intervêm (`REGRAS_QUE_INTERVEM`) ou um dos
+    dois motivos de não intervir. É o valor gravado na trilha, na chave
+    `regra_de_intervencao` da saída da decisão de risco."""
+    if event in EVENTOS_DE_INTENCAO:
+        return REGRA_INTENCAO_EXPLICITA
+    if posicao_na_base is None:
+        return SEM_INTERVENCAO_SEM_REFERENCIA
+    if criticality in FAIXAS_QUE_INTERVEM:
+        return REGRA_POSICAO_NA_BASE
+    return SEM_INTERVENCAO_FORA_DAS_FAIXAS
+
+
+def intensidade_da_faixa(criticality: str) -> str:
+    """Grave leva a oferta que o bandit escolheu. Qualquer outra faixa que
+    chegue a receber oferta (preocupante; ou, por intenção explícita, quem não
+    é grave nem preocupante pela posição) leva a mais leve."""
+    return INTENSIDADE_DO_BANDIT if criticality == "critico" else INTENSIDADE_MAIS_LEVE
+
+
+def oferta_mais_leve(consideradas: list) -> dict:
+    """A de MENOR CUSTO para a empresa entre as ofertas que o bandit
+    considerou nesta rodada (`custo`, de `offer_bandit.offer_cost`, já na
+    linha). Empate fica com a mais bem colocada pelo bandit. Continua sendo
+    uma das candidatas do bandit: ele só deixa de escolher a ordem."""
+    return min(consideradas, key=lambda linha: linha["custo"])
+
+
 # ── O limite de contato (Rodada 3, S5) ────────────────────────────────────
 #
 # Um cliente final recebe no máximo UMA oferta de retenção a cada
@@ -949,6 +1061,14 @@ def frase_do_limite(recente: dict) -> str:
             f"{recente.get('intervalo_minimo_ofertas_dias')} dias")
 
 
+def _regra_que_pedia(state: dict) -> dict:
+    """`{"regra_de_intervencao": ...}` quando o modelo v3 decidiu o risco e uma
+    das duas regras pedia a intervenção; vazio no caminho da régua (a linha da
+    trilha fica como sempre foi)."""
+    regra = state.get("regra_de_intervencao")
+    return {"regra_de_intervencao": regra} if regra in REGRAS_QUE_INTERVEM else {}
+
+
 async def respeitar_nao_contatar(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     """O risco pede intervenção, mas o cliente pediu para não ser contatado:
     nenhuma oferta, por canal nenhum. Vai para a trilha do Art. 20 como decisão
@@ -960,7 +1080,7 @@ async def respeitar_nao_contatar(state: ChurnVoluntaryState) -> ChurnVoluntarySt
         trilha.MODELO_REGRA,
         entradas={"risk_score": round(float(state["risk_score"]), 4)},
         saida={"offer_type": "nenhuma oferta", "regra": REGRA_DO_NAO_CONTATAR,
-               "motivo_da_regra": FRASE_DO_NAO_CONTATAR})
+               "motivo_da_regra": FRASE_DO_NAO_CONTATAR, **_regra_que_pedia(state)})
     return trilha.anotar_decisao({**state, "sem_oferta_por": MOTIVO_NAO_CONTATAR}, dec)
 
 
@@ -976,14 +1096,26 @@ async def respeitar_intervalo(state: ChurnVoluntaryState) -> ChurnVoluntaryState
         trilha.MODELO_REGRA,
         entradas={"risk_score": round(float(state["risk_score"]), 4)},
         saida={"offer_type": "nenhuma oferta agora", "regra": REGRA_DO_LIMITE_DE_CONTATO,
-               "motivo_da_regra": frase_do_limite(recente)})
+               "motivo_da_regra": frase_do_limite(recente), **_regra_que_pedia(state)})
     return trilha.anotar_decisao({**state, "sem_oferta_por": MOTIVO_LIMITE_DE_CONTATO}, dec)
 
 
 def route_after_risk(state: ChurnVoluntaryState) -> str:
-    if state["risk_score"] < CORTE_DE_INTERVENCAO:
-        print(f"[CHURN-VOL] Risco baixo ({state['risk_score']:.2f}) — não intervém")
+    regra = state.get("regra_de_intervencao")
+    if regra is None:
+        # A régua decidiu o risco (ou o modelo legado): o corte de sempre.
+        if state["risk_score"] < CORTE_DE_INTERVENCAO:
+            print(f"[CHURN-VOL] Risco baixo ({state['risk_score']:.2f}) — não intervém")
+            return "update_crm"
+    elif regra not in REGRAS_QUE_INTERVEM:
+        # O modelo v3 decidiu: sem intenção explícita e fora das faixas (ou sem
+        # referência de posição), não intervém. O corte fixo não entra aqui.
+        print(f"[CHURN-VOL] Modelo decidiu o risco ({state['risk_score']:.2f}); "
+              f"{regra} — não intervém")
         return "update_crm"
+    else:
+        print(f"[CHURN-VOL] Modelo decidiu o risco ({state['risk_score']:.2f}); "
+              f"intervém por {regra}")
     tenant = state.get("tenant_id") or TENANT_PADRAO
     if pediu_para_nao_ser_contatado(tenant, state["user_id"]):
         return "respeitar_nao_contatar"

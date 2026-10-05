@@ -853,6 +853,31 @@ ROTULOS_DE_SAIDA = {
     "origem_texto":    lambda v: ROTULOS_DE_ORIGEM_TEXTO.get(v, f"texto de origem {v}"),
     "criticidade":     lambda v: f"criticidade {v}",
     "canal":           lambda v: f"canal lembrado {ROTULOS_DE_CANAL.get(v, v)}",
+    # Só quando o modelo v3 decidiu o risco no pipeline de eventos (conserto de
+    # 05/10/2026): a regra que decide a intervenção e a intensidade da oferta.
+    "regra_de_intervencao": lambda v: ROTULOS_DE_REGRA_DE_INTERVENCAO.get(
+        v, f"regra de intervenção {v}"),
+    "intensidade":     lambda v: ROTULOS_DE_INTENSIDADE.get(v, f"intensidade {v}"),
+}
+
+# Copiados de `voluntary_agent` (este módulo é importado por ele). Há teste que
+# confere que todo valor que o agente grava tem rótulo aqui.
+ROTULOS_DE_REGRA_DE_INTERVENCAO = {
+    "intencao_explicita": ("regra de intervenção: intenção explícita (o evento mostra que o "
+                           "cliente quer cancelar ou reduzir o plano; nesse caso o sistema age "
+                           "sempre, qualquer que seja a pontuação de risco)"),
+    "posicao_na_base": ("regra de intervenção: posição na base (o cliente está entre os de "
+                        "maior risco da base e tem sinal de abandono)"),
+    "fora_das_faixas": ("sem intervenção: pela posição na base o cliente não está entre os "
+                        "graves nem os preocupantes, ou não tem sinal de abandono, e o evento "
+                        "não é de intenção explícita"),
+    "sem_referencia_de_posicao": ("sem intervenção: não há referência de posição na base para "
+                                  "comparar este cliente, e o evento não é de intenção explícita"),
+}
+ROTULOS_DE_INTENSIDADE = {
+    "oferta_do_bandit": "intensidade: a oferta escolhida pelo algoritmo, por ser um caso grave",
+    "oferta_mais_leve": ("intensidade: a oferta de menor custo entre as consideradas, por não "
+                         "ser um caso grave"),
 }
 
 ROTULOS_DE_ORIGEM_TEXTO = {"template": "texto de modelo pronto (não gerado)",

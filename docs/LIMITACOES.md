@@ -855,13 +855,14 @@ agendador e as mesmas rotas de escolha de mensagem.
 9. **Na retenção simulada, cada sinal marcado vira um dado, e o não marcado não vira nada.**
    "Abriu a página de cancelamento" é o evento do SDK; "uso em queda" são 24 dias sem entrar
    e 1 funcionalidade usada; "chamados" e "pagamentos com falha" são as duas colunas da
-   base. O sistema decide como decidiria com um cliente de verdade: **com dado de uso e o
-   modelo v3 ativo, quem decide é o modelo, e o risco que ele dá fica abaixo do corte de
-   intervenção (0,60) em todas as combinações testadas** (o máximo medido foi 0,40, com uso em
-   queda, chamados, pagamentos com falha e a página de cancelamento aberta). Nesse caso a
-   resposta é "sem oferta", com o risco e o corte. Sem dado de uso, decide a régua: a página
-   de cancelamento dá 0,90 e há oferta. Não é defeito da simulação: é o comportamento do
-   modelo v3 promovido, e está registrado como pendência da rodada.
+   base. O sistema decide como decidiria com um cliente de verdade. Sem dado de uso, decide
+   a régua: a página de cancelamento dá 0,90 e há oferta, e abaixo do corte de 0,60 não há.
+   **Com dado de uso e o modelo v3 ativo, quem decide é o modelo, e o corte de 0,60 não
+   vale** (desde 05/10/2026; ver a seção "Quando o modelo v3 decide o risco", no fim deste
+   arquivo): há oferta sempre que o evento é de intenção explícita e, nos outros casos, para
+   quem está como grave ou preocupante pela posição na base. A resposta diz qual regra
+   decidiu, e por que não houve oferta. Até 04/10 o risco do modelo era comparado com 0,60 e
+   nenhuma das combinações testadas recebia oferta (o máximo medido foi 0,40).
 
 10. **O aceite simulado vem da propensão escondida, e o bandit de verdade não aprende.** A
     simulação usa uma cópia do bandit da empresa (nasce do que ele sabe agora, aprende só
@@ -1082,3 +1083,100 @@ contato do pipeline voluntário (`churn_voluntary/voluntary_agent.py`).
    para aparecer. A consulta para com a aba do navegador escondida, não mostra o estado de
    "carregando" e, se falhar, mantém o que já estava na tela. Com muitas abas abertas, cada
    uma faz as suas consultas.
+
+### Quando o modelo v3 decide o risco: intenção explícita ou posição na base (05/10/2026)
+
+**O que mudou.** Até 04/10, o pipeline de eventos do voluntário (webhook do Segment,
+`POST /eventos` e a simulação) só fazia oferta com `risk_score >= 0,60`, viesse o número da
+régua ou do modelo. O corte nasceu com a régua, que tem escala absoluta. O score do modelo
+v3 não está nessa escala (na referência de treino dele, 90% dos clientes ficam abaixo de
+0,32). Medido em 56 combinações de evento, mensalidade e sinais, com o modelo v3 de
+`app/models/`: o risco ficou entre 0,07 e 0,40 e **nenhuma** recebia oferta, nem a de quem
+abriu a página de cancelamento. Agora, quando o modelo v3 decide o risco
+(`voluntary_agent.regra_de_intervencao`):
+
+| Caso | O que o sistema faz |
+|---|---|
+| Evento de intenção explícita (`Cancellation Page Viewed`, `Downgrade Clicked`) | Intervém **sempre**, por regra. O risco do modelo continua calculado e gravado; só não é ele que decide |
+| Outros eventos, cliente grave ou preocupante pela posição na base | Intervém. É a criticidade de `batch_scoring.criticidade_do_evento`, a mesma do lote e do SDK: posição do score entre os 10% (grave) ou os 20% seguintes (preocupante), **e** sinal absoluto de abandono (7 dias sem entrar, ou nenhuma funcionalidade usada) |
+| Outros eventos, fora das faixas, ou sem referência de posição | Não intervém |
+| A régua decidiu (sem modelo, sem dado de uso para o modelo, ou modelo legado) | **Nada mudou:** o corte de 0,60 continua |
+
+As mesmas 56 combinações, depois: **36 recebem oferta** (as 32 de intenção explícita e 4
+pela posição na base), e 20 não (evento de sessão fora das faixas). O intervalo mínimo
+entre ofertas e o "não contatar" seguram a oferta nos dois casos, como antes.
+
+**O que isto declara:**
+
+1. **"A oferta mais leve" é a de menor custo para a empresa entre as três que o bandit
+   considerou na rodada** (`voluntary_agent.oferta_mais_leve`; o custo é o de
+   `offer_bandit.offer_cost`). Grave leva a primeira do bandit; quem não é grave leva a
+   mais leve. A tabela 2.4 do plano diz "oferta mais leve" sem dizer qual: esta definição
+   foi escolhida na implementação. Na prática, quando a troca para Pix ou boleto está entre
+   as três, ela é a mais leve (custa R$ 2); senão, costuma ser o desconto de 10%.
+
+2. **Por intenção explícita, quem não é grave nem preocupante pela posição também leva a
+   mais leve.** A instrução define a intensidade para grave e para preocupante; para o
+   cliente "sem risco" que abre a página de cancelamento, foi adotada a mais leve (a leitura
+   conservadora: a faixa define a intensidade, e ele não é grave). Se a decisão for dar a
+   oferta do bandit a todo evento de intenção, é uma linha em
+   `voluntary_agent.intensidade_da_faixa`.
+
+3. **O disparo em lote não mudou.** Ele já decide pela faixa (grave e preocupante) e continua
+   dando a primeira oferta do bandit às duas. A intensidade pela faixa vale só no pipeline
+   de eventos, e só quando o modelo v3 decide. Alinhar o lote é trocar uma linha (a função
+   é a mesma).
+
+4. **A referência de posição pode não ser a base da empresa.** Um evento sozinho é
+   posicionado contra a base da empresa se ela foi pontuada **neste processo** e tem pelo
+   menos 30 clientes com dado; senão, contra os quantis de treino gravados no meta do
+   modelo. Sem nenhuma das duas, ninguém é grave nem preocupante, e só a intenção explícita
+   gera oferta. A referência da empresa mora na memória do processo: depois de um reinício,
+   vale a de treino até a base ser pontuada de novo (alguém abrir o painel de risco, por
+   exemplo). A frase do motivo diz "da sua base" nos dois casos; a trilha registra qual
+   referência foi usada (`posicao.referencia`).
+
+5. **A trilha diz a regra; o dataset de ciclos, não.** A chave `regra_de_intervencao` entra
+   na saída da decisão de risco (as duas regras que intervêm e os dois motivos de não
+   intervir) e, quando há oferta, na decisão de oferta, junto de `intensidade`. As decisões
+   "limite de contato" e "não contatar" também dizem qual regra pedia a intervenção. A
+   frase da explicação diz isso em português. **O schema, o encadeamento e o índice da
+   trilha não mudaram** (são chaves novas dentro do JSON de `saida`, só em decisões novas).
+   `ciclos_retencao` não ganhou coluna: para saber por que um ciclo teve oferta, lê-se a
+   trilha.
+
+6. **No caminho da régua a trilha não ganha chave nenhuma** e a oferta é sempre a primeira
+   do bandit, como antes. Há teste com uma grade de eventos nos dois lados do corte.
+
+7. **`risk_score` abaixo de 0,60 com oferta enviada passou a ser normal** quando o modelo
+   decide. Qualquer análise do dataset que tome 0,60 como fronteira de "quem foi abordado"
+   precisa olhar `offer_type`, e não o número.
+
+8. **A resposta de `POST /simulacao/retencao` mudou de forma quando o modelo decide:**
+   `corte_de_intervencao` vem nulo, e entram `regra_de_intervencao`, `intensidade` e
+   `sem_oferta_porque`. Quando a régua decide, `corte_de_intervencao` é 0,60 e as três
+   chaves novas vêm nulas.
+
+**Achados deste conserto, não consertados (fora do pedido):**
+
+9. **Um segundo evento do mesmo cliente, no mesmo processo, regrava na trilha as decisões
+   do primeiro.** O estado do grafo fica guardado por cliente (`MemorySaver`), e a lista
+   `decisoes` do evento anterior não é zerada no começo do seguinte: `update_crm` grava de
+   novo as decisões antigas, junto com as novas. Medido no caminho da régua, sem este
+   conserto: dois eventos do mesmo cliente deixam 8 linhas na trilha, e não 5. A cadeia
+   continua íntegra (as linhas repetidas são acrescentadas, não alteradas) e o dataset de
+   ciclos não é afetado, mas a trilha fica com decisões duplicadas, e o número cresce a cada
+   evento. É anterior a esta rodada. O conserto provável é uma linha (zerar `decisoes` na
+   entrada do grafo); não foi feito porque muda o que a trilha grava no caminho da régua,
+   que este conserto se comprometeu a não tocar.
+
+10. **Na lista "Clientes em risco", o motivo de um cliente que veio por evento pode dizer
+    "crítico pelo valor da conta, não pelo risco" sem ser verdade.** A frase é montada
+    depois, a partir do ciclo gravado (`insights_unificados._linha_do_sdk`), com a lógica da
+    régua: grave com risco abaixo de 0,90 só podia ser "pelo valor". Com o modelo, grave
+    pela posição tem risco baixo na escala antiga. O ciclo gravado não guarda quem decidiu
+    nem a posição; a trilha guarda. Na simulação do gateway a frase já foi corrigida (ali a
+    posição está à mão).
+
+11. **`app/README.md` ainda desenha o fluxo com "[risco >= 0.60?]".** O arquivo não pode ser
+    tocado nesta rodada.

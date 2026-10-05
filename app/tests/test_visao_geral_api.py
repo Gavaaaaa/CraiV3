@@ -391,7 +391,9 @@ class TestAtividade:
 
     def test_estorno_e_escolha_pendente(self, cenario):
         ciclo = cc.ciclo_da_cobranca(A, "cob-RN_ana")
-        cc.registrar_estorno(ciclo["id"], "D1", 200.0, 30, _agora())
+        # O estorno acontece AGORA, e nao "hoje ao meio-dia": antes do meio-dia esse
+        # instante estaria no futuro, e a atividade (certa) nao lista o que ainda nao houve.
+        cc.registrar_estorno(ciclo["id"], "D1", 200.0, 30, datas.agora_local())
         esperando, aberto = _ciclo(A, "RN_espera", 90.0, dias_atras=1)
         cc.transicionar(esperando, cc.AGUARDANDO_ESCOLHA, aberto + timedelta(hours=1))
         ci.cancelar(A, "c-ana")

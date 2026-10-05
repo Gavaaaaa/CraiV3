@@ -81,9 +81,12 @@ export function RetencaoSimulada() {
   const meses = resultado?.meses_de_mrr ?? 1
   const pct = (v: number) => `${Math.round(v * 100)}%`
   const riscoCalculado = resultado && resultado.risco !== null ? `Risco calculado: ${pct(resultado.risco)}. ` : ''
-  // Sem oferta: o sistema diz por quê, com o número que ele usou.
+  // Sem oferta: o sistema diz por quê, com o número que ele usou. Quando o modelo de IA decide o
+  // risco, o corte fixo não vale, e a frase é a do backend (intenção explícita ou posição na base).
   const semOferta = !resultado
     ? ''
+    : resultado.sem_oferta_porque
+      ? `${riscoCalculado}${resultado.sem_oferta_porque}`
     : resultado.risco !== null && resultado.risco < resultado.corte_de_intervencao
       ? `${riscoCalculado}Abaixo de ${pct(resultado.corte_de_intervencao)} o sistema não intervém: nenhuma oferta. Oferecer desconto a quem não ia sair só custa margem.`
       : `${riscoCalculado}O sistema não fez oferta para este cliente.`
@@ -247,7 +250,7 @@ export function RetencaoSimulada() {
               </div>
               {MODO_REAL ? (
                 <p className="t-label mt-2 text-muted">
-                  Cada sinal marcado vira um dado que o sistema recebe; o que não é marcado, ele não fica sabendo. Com dado de uso, quem decide é o modelo de IA, se estiver ativo; sem ele, a régua.
+                  Cada sinal marcado vira um dado que o sistema recebe; o que não é marcado, ele não fica sabendo. Com dado de uso, quem decide é o modelo de IA, se estiver ativo; sem ele, a régua. Quando o modelo decide, o sistema age sempre que houver intenção explícita (a página de cancelamento) e, nos outros casos, quando o cliente está entre os de maior risco da base.
                 </p>
               ) : null}
             </fieldset>

@@ -9,6 +9,8 @@ import { adaptarCiclo, adaptarRetencaoSimulada, adaptarSimulacao, type Simulacao
 import {
   CICLO_SIMULADO,
   RETENCAO_ACEITA,
+  RETENCAO_PELO_MODELO_COM_OFERTA,
+  RETENCAO_PELO_MODELO_SEM_OFERTA,
   RETENCAO_RECUSADA,
   RETENCAO_SEM_RISCO,
   SIM_COBRADA,
@@ -192,6 +194,31 @@ describe('adaptarRetencaoSimulada', () => {
     // Backend anterior, sem o risco na resposta: a tela não inventa um número.
     const { risco: _r, corte_de_intervencao: _c, ...antigo } = RETENCAO_SEM_RISCO
     expect(adaptarRetencaoSimulada(antigo).risco).toBeNull()
+  })
+
+  it('com o modelo de IA decidindo, o porquê de não haver oferta é a frase do backend', () => {
+    // O corte fixo não vale quando o modelo decide: o backend manda nulo e explica pela regra.
+    expect(RETENCAO_PELO_MODELO_SEM_OFERTA.corte_de_intervencao).toBeNull()
+    const sem = adaptarRetencaoSimulada(RETENCAO_PELO_MODELO_SEM_OFERTA)
+    expect(sem.decidido_por).toBe('modelo')
+    expect(sem.oferta).toBeNull()
+    expect(sem.sem_oferta_porque).toBe(RETENCAO_PELO_MODELO_SEM_OFERTA.sem_oferta_porque)
+    expect(sem.sem_oferta_porque).toMatch(/^Quem decidiu o risco foi o modelo de IA\./)
+    expect(sem.risco).toBe(RETENCAO_PELO_MODELO_SEM_OFERTA.risco)
+
+    // Intenção explícita: há oferta mesmo com o risco baixo e a faixa "sem risco" pela posição.
+    const com = adaptarRetencaoSimulada(RETENCAO_PELO_MODELO_COM_OFERTA)
+    expect(com.decidido_por).toBe('modelo')
+    expect(com.faixa).toBe('sem_risco')
+    expect(com.oferta).toBe(RETENCAO_PELO_MODELO_COM_OFERTA.oferta)
+    expect(com.sem_oferta_porque).toBeNull()
+    expect(com.porque).toMatch(/^O cliente mostrou intenção explícita de sair\./)
+    expect(com.risco! < 0.6).toBe(true)
+  })
+
+  it('quando a régua decide, não há frase do backend para o "sem oferta" (a tela explica pelo corte)', () => {
+    for (const r of [RETENCAO_ACEITA, RETENCAO_RECUSADA, RETENCAO_SEM_RISCO]) expect(adaptarRetencaoSimulada(r).sem_oferta_porque).toBeNull()
+    expect(adaptarRetencaoSimulada({ ...RETENCAO_SEM_RISCO, sem_oferta_porque: '   ' }).sem_oferta_porque).toBeNull()
   })
 
   it('oferta ou faixa que a tela não conhece não vira outra coisa', () => {
