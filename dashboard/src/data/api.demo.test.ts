@@ -176,6 +176,9 @@ describe('o mapa único', () => {
         'naoContatar',
         'textoParaPolitica',
         'voltarAContatar',
+        // Rodada 4, Fase 2: a busca do topo e o extrato em arquivo
+        'buscar',
+        'extratoCsv',
       ].sort(),
     )
     for (const nome of Object.keys(ROTAS_REAIS)) {

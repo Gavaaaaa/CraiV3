@@ -364,6 +364,7 @@ const cr = (
   posicao_na_base,
   abordagem: abordagem ? { oferta: OFERTA_DEMO[abordagem.oferta], canal: CANAL_DEMO[abordagem.canal], status: abordagem.status } : null,
   atualizado_em: new Date(AGORA.getTime() - horasAtras * 3_600_000).toISOString(),
+  nao_contatar: false,
   simulado,
 })
 
@@ -411,6 +412,7 @@ export const configuracaoPadrao: Configuracao = {
   prazo_escolha_horas: 8,
   janela_contato: { inicio: 8, fim: 20 },
   canais: ['whatsapp', 'email', 'sms'],
+  intervalo_minimo_ofertas_dias: 30,
   notificacoes: { resumo_semanal: true, risco_grave: true, escolha_pendente: true },
   retencao_dias: { mensagens: 90, ciclos_meses: 24, base_meses_apos_contrato: 6, trilha_anos: 5 },
 }

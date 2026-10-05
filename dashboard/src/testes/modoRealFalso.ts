@@ -39,6 +39,7 @@ const RESPOSTAS: Record<string, unknown> = {
       janela_contato_inicio: '08:00',
       janela_contato_fim: '20:00',
       canais_permitidos: ['whatsapp', 'email'],
+      intervalo_minimo_ofertas_dias: 30,
       retencao_mensagens_dias: 90,
       retencao_ciclos_meses: 24,
       retencao_base_meses_apos_contrato: 6,
@@ -124,6 +125,12 @@ const RESPOSTAS: Record<string, unknown> = {
   },
 }
 
+// Rodada 4, Fase 2: a busca do topo sem nada achado, e o extrato em arquivo só com o cabeçalho e o total.
+RESPOSTAS['GET /busca'] = { q: '', clientes: [], ciclos: [], limite: 8 }
+RESPOSTAS['GET /extrato/csv'] = {
+  __texto: '\uFEFFData;Cliente;Identificador;Origem;O que aconteceu;Valor (R$);Taxa da CRAI (R$);Líquido para você (R$);Situação;Demonstração\r\n;Total;;;;0,00;0,00;0,00;;\r\n',
+}
+
 /** O texto fixo do assistente, como o backend responde sem o LLM. */
 RESPOSTAS['POST /assistente'] = {
   texto: 'O assistente está indisponível agora. Os números continuam certos nas páginas do painel: Visão geral, Involuntário e Voluntário.',
@@ -161,8 +168,10 @@ export function ligarBackendFalso(outras: Record<string, unknown> = {}): string[
       if (typeof init.body === 'string') corpos.push({ chave, corpo: JSON.parse(init.body) })
       if (!(chave in respostas)) throw new Error(`o backend de mentira não conhece ${chave}`)
       // `{ __status, corpo }` responde com erro (o 403 do membro no extrato, por exemplo).
-      const r = respostas[chave] as { __status?: number; corpo?: unknown } | null
+      const r = respostas[chave] as { __status?: number; corpo?: unknown; __texto?: string } | null
       if (r && typeof r === 'object' && typeof r.__status === 'number') return new Response(JSON.stringify(r.corpo ?? {}), { status: r.__status })
+      // `{ __texto }` responde com texto puro (o extrato em CSV), e não com JSON.
+      if (r && typeof r === 'object' && typeof r.__texto === 'string') return new Response(r.__texto, { status: 200, headers: { 'Content-Type': 'text/csv; charset=utf-8' } })
       return new Response(JSON.stringify(respostas[chave]), { status: 200 })
     }),
   )

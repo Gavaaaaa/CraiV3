@@ -15,9 +15,9 @@ import {
 } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
-import { MOSTRAR_DEMONSTRACAO, agoraDaTela } from '../../data/api'
+import { ErroApi, MOSTRAR_DEMONSTRACAO, agoraDaTela, api } from '../../data/api'
 import type { Atividade, Funil, ItemDesempenho, LinhaExtrato, OQueFunciona, SaudeSistema, TipoAtividade } from '../../data/tipos'
-import { baixarCsv } from '../../lib/csv'
+import { baixarCsv, baixarCsvPronto } from '../../lib/csv'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
 
@@ -388,8 +388,21 @@ const ORIGEM = {
   voluntario: { rotulo: 'Voluntário', cor: 'var(--color-serie-vol)' },
 }
 
-export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: string }) {
+export function ExtratoDoMes({
+  linhas,
+  mes,
+  incluirSimulados = false,
+  piloto = false,
+}: {
+  linhas: LinhaExtrato[]
+  mes: string
+  incluirSimulados?: boolean
+  /** A empresa está em período de piloto agora (quem define é a CRAI). */
+  piloto?: boolean
+}) {
   const [todas, setTodas] = useState(false)
+  const [baixando, setBaixando] = useState(false)
+  const [erroDoArquivo, setErroDoArquivo] = useState<string | null>(null)
   const visiveis = todas ? linhas : linhas.slice(0, 6)
   // Na demonstração o estorno é a própria linha, zerada. No backend é uma linha à parte, com
   // os valores negativos, no mês em que aconteceu: o total é a soma simples das linhas.
@@ -399,8 +412,29 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
     { base: 0, taxa: 0, liquido: 0 },
   )
   const situacao = (l: LinhaExtrato) => (l.tipo === 'estorno' ? 'Estorno' : l.estornado ? 'Estornado' : 'Confirmado')
+  // A coluna "Taxa fora do piloto" aparece para a empresa em piloto e, depois dele, nos meses que
+  // ainda têm linha de piloto. Em todo o resto o extrato é o de sempre.
+  const dePiloto = (l: LinhaExtrato) => typeof l.taxa_fora_do_piloto === 'number'
+  const comPiloto = piloto || linhas.some(dePiloto)
+  const totalFora = linhas.reduce((t, l) => t + (l.taxa_fora_do_piloto ?? 0), 0)
+  const colunas = comPiloto ? 7 : 6
 
-  function exportar() {
+  // Com o backend ligado, o arquivo é o do backend (a mesma conta do extrato, e o download fica
+  // no registro de acesso). Na demonstração não há backend: o arquivo sai das linhas da tela.
+  async function exportar() {
+    setErroDoArquivo(null)
+    setBaixando(true)
+    try {
+      const pronto = await api.extratoCsv({ incluirSimulados })
+      if (pronto !== null) baixarCsvPronto(`crai-extrato-${mes}.csv`, pronto)
+      else exportarDaTela()
+    } catch (e) {
+      setErroDoArquivo(e instanceof ErroApi ? e.message : 'Não deu para baixar o extrato agora. Tente de novo.')
+    }
+    setBaixando(false)
+  }
+
+  function exportarDaTela() {
     baixarCsv(
       `crai-extrato-${mes}.csv`,
       [
@@ -435,14 +469,24 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
           titulo={`Extrato de ${fmt.mesPorExtenso(mes)}`}
           apoio="Cada valor recuperado ou mantido, com a taxa da CRAI. É a memória de cálculo da sua fatura."
           direita={
-            <Button variant="ghost" size="sm" onClick={exportar} disabled={linhas.length === 0}>
-              <IconDownload width={15} height={15} /> Exportar CSV
+            <Button variant="ghost" size="sm" onClick={exportar} disabled={linhas.length === 0 || baixando}>
+              <IconDownload width={15} height={15} /> {baixando ? 'Baixando…' : 'Exportar CSV'}
             </Button>
           }
         />
+        {piloto ? (
+          <p className="t-label mt-2 text-silver" data-piloto>
+            Período de piloto: sem taxa
+          </p>
+        ) : null}
+        {erroDoArquivo ? (
+          <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-[#f5a29a]">
+            {erroDoArquivo}
+          </p>
+        ) : null}
       </div>
       <div className="scroll-fino mt-4 overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-apoio">
+        <table className={cx('w-full text-left text-apoio', comPiloto ? 'min-w-[900px]' : 'min-w-[760px]')}>
           <thead>
             <tr className="t-label text-silver">
               <th className="px-5 py-2.5 font-[500]">Data</th>
@@ -450,13 +494,14 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
               <th className="px-3 py-2.5 font-[500]">O que aconteceu</th>
               <th className="px-3 py-2.5 text-right font-[500]">Valor</th>
               <th className="px-3 py-2.5 text-right font-[500]">Taxa da CRAI</th>
+              {comPiloto ? <th className="px-3 py-2.5 text-right font-[500] whitespace-nowrap">Taxa fora do piloto</th> : null}
               <th className="px-5 py-2.5 text-right font-[500] whitespace-nowrap">Líquido para você</th>
             </tr>
           </thead>
           <tbody>
             {visiveis.length === 0 ? (
               <tr className="border-t border-line">
-                <td colSpan={6} className="px-5 py-10 text-center text-silver">
+                <td colSpan={colunas} className="px-5 py-10 text-center text-silver">
                   Nenhum valor recuperado ou mantido neste mês ainda.
                 </td>
               </tr>
@@ -488,6 +533,11 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
                   <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">
                     {l.taxa > 0 ? `− ${fmt.brl(l.taxa)}` : l.taxa < 0 ? `+ ${fmt.brl(-l.taxa)}` : '—'}
                   </td>
+                  {comPiloto ? (
+                    <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">
+                      {!dePiloto(l) ? '—' : (l.taxa_fora_do_piloto ?? 0) < 0 ? `− ${fmt.brl(-(l.taxa_fora_do_piloto ?? 0))}` : fmt.brl(l.taxa_fora_do_piloto ?? 0)}
+                    </td>
+                  ) : null}
                   <td className="tabular px-5 py-3 text-right font-[600] whitespace-nowrap text-paper">
                     {l.liquido < 0 ? `− ${fmt.brl(-l.liquido)}` : fmt.brl(l.liquido)}
                   </td>
@@ -506,7 +556,10 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
                   ) : null}
                 </td>
                 <td className="tabular px-3 py-3 text-right text-silver">{fmt.brl(total.base)}</td>
-                <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">{total.taxa < 0 ? `+ ${fmt.brl(-total.taxa)}` : `− ${fmt.brl(total.taxa)}`}</td>
+                <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">
+                  {total.taxa < 0 ? `+ ${fmt.brl(-total.taxa)}` : total.taxa === 0 && comPiloto ? fmt.brl(0) : `− ${fmt.brl(total.taxa)}`}
+                </td>
+                {comPiloto ? <td className="tabular px-3 py-3 text-right whitespace-nowrap text-silver">{totalFora < 0 ? `− ${fmt.brl(-totalFora)}` : fmt.brl(totalFora)}</td> : null}
                 <td className="tabular px-5 py-3 text-right font-[680] whitespace-nowrap text-paper">{total.liquido < 0 ? `− ${fmt.brl(-total.liquido)}` : fmt.brl(total.liquido)}</td>
               </tr>
             </tfoot>
@@ -516,6 +569,7 @@ export function ExtratoDoMes({ linhas, mes }: { linhas: LinhaExtrato[]; mes: str
       <p className="t-label px-5 pt-1 pb-5 text-muted">
         Voluntário: conta a mensalidade de quem aceitou a oferta, menos o desconto dado. Se o cliente cancelar dentro do prazo, o valor é
         estornado no mês do cancelamento.
+        {comPiloto ? ' Taxa fora do piloto: o que a CRAI cobraria fora do período de piloto. Esse valor não é cobrado.' : ''}
       </p>
     </div>
   )

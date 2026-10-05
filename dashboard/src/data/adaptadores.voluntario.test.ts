@@ -55,8 +55,10 @@ describe('clientes recentes', () => {
       posicao_na_base: 3,
       abordagem: { oferta: 'Pausa de 1 mês na assinatura, sem custo', canal: 'E-mail', status: 'enviada' },
       atualizado_em: '2026-10-04T09:00:00-03:00',
+      nao_contatar: false, // Rodada 4: o campo novo; ausente na resposta, é falso
       simulado: false,
     })
+    expect(adaptarClienteRecente({ ...GRAVE, nao_contatar: true }).nao_contatar).toBe(true)
   })
 
   it('sem nome mostra o id; sem mensalidade, sem avaliação e sem oferta chegam como null', () => {

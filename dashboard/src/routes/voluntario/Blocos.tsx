@@ -42,8 +42,16 @@ const STATUS_OFERTA = {
 
 type Filtro = FaixaRisco | 'todos'
 
-export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] | null; total: number | null }) {
+interface PropsDaTabela {
+  clientes: ClienteRisco[] | null
+  total: number | null
+  /** O cliente que a busca do topo pediu: vai para o topo da lista, destacado. */
+  buscado?: ClienteRisco | null
+}
+
+export function TabelaClientes({ clientes: recentes, total, buscado = null }: PropsDaTabela) {
   const [filtro, setFiltro] = useState<Filtro>('todos')
+  const clientes = recentes === null ? null : buscado ? [buscado, ...recentes.filter((c) => c.id !== buscado.id)] : recentes
   const lista = (clientes ?? []).filter((c) => filtro === 'todos' || c.faixa === filtro)
   const contagem = (f: Filtro) => (clientes ?? []).filter((c) => f === 'todos' || c.faixa === f).length
   const filtros: { valor: Filtro; rotulo: string }[] = [
@@ -113,10 +121,16 @@ export function TabelaClientes({ clientes, total }: { clientes: ClienteRisco[] |
               </tr>
             ) : (
               lista.map((c) => (
-                <tr key={c.id} className="border-t border-line align-top transition-colors hover:bg-paper/[0.035]">
+                <tr key={c.id} data-buscado={buscado?.id === c.id || undefined} className={cx('border-t border-line align-top transition-colors hover:bg-paper/[0.035]', buscado?.id === c.id && 'bg-amber/[0.07]')}>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-[560] text-paper">{c.nome}</span>
+                      {buscado?.id === c.id ? <Badge tone="orange">Buscado</Badge> : null}
+                      {c.nao_contatar ? (
+                        <span title="Pediu para não receber mensagens, ou foi marcado pela empresa. Nenhuma mensagem sai para este cliente.">
+                          <Badge tone="amber">Não contatar</Badge>
+                        </span>
+                      ) : null}
                       {c.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
                     </div>
                     {c.atualizado_em ? <div className="t-label text-muted">Atualizado {fmt.relativo(c.atualizado_em, agoraDaTela())}</div> : null}

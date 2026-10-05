@@ -20,6 +20,7 @@ import {
   CICLO_SIMULADO,
   RETENCAO_ACEITA,
   RETENCAO_PELO_MODELO_COM_OFERTA,
+  RETENCAO_PELO_MODELO_MAIS_LEVE,
   RETENCAO_PELO_MODELO_SEM_OFERTA,
   RETENCAO_SEM_RISCO,
   SIM_COBRADA,
@@ -237,11 +238,25 @@ describe('cliente em risco (voluntário) em modo real', () => {
     expect(await screen.findByText('Como o sistema decidiu', {}, ESPERA)).toBeTruthy()
     expect(screen.getByText('Decidido pelo modelo de IA')).toBeTruthy()
     expect(screen.getByText('O que o sistema fez')).toBeTruthy()
-    expect(screen.getByText(/Troca para Pix ou boleto em 1 clique · por aviso dentro do produto/)).toBeTruthy()
+    // Rodada 4: por intenção explícita sai a oferta do bandit (antes, a de menor custo, que era a troca para Pix ou boleto).
+    expect(screen.getByText(/Pausa de 1 mês na assinatura, sem custo · por aviso dentro do produto/)).toBeTruthy()
     expect(screen.getAllByText(/O cliente mostrou intenção explícita de sair\. Nesse caso o sistema age sempre, por regra/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/Risco calculado: 21%\. Oferta escolhida: troca para pix ou boleto em 1 clique\./)).toBeTruthy()
+    expect(screen.getByText(/Risco calculado: 21%\. Oferta escolhida: pausa de 1 mês na assinatura, sem custo\./)).toBeTruthy()
+    expect(screen.getAllByText(/Nesta rodada, esta teve o maior retorno esperado/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/menor custo/)).toBeNull()
     expect(screen.getByText('Cliente aceitou a oferta')).toBeTruthy()
     expect(screen.queryByText(/Abaixo de 60%/)).toBeNull()
+  })
+
+  it('com o modelo de IA decidindo, o preocupante pela posição na base leva a oferta de retenção de menor custo', async () => {
+    ligarBackendFalso({ 'POST /simulacao/retencao': RETENCAO_PELO_MODELO_MAIS_LEVE })
+    abrir('/simulacao?aba=retencao')
+    fireEvent.submit(await screen.findByRole('form', { name: 'Cliente fictício em risco' }, ESPERA))
+    expect(await screen.findByText('Como o sistema decidiu', {}, ESPERA)).toBeTruthy()
+    expect(screen.getByText('Preocupante')).toBeTruthy()
+    expect(screen.getByText(/Desconto de 10% por 3 meses · por e-mail/)).toBeTruthy()
+    expect(screen.getAllByText(/Como o caso é preocupante, e não grave, o sistema escolheu a oferta de retenção de menor custo/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Troca para Pix ou boleto em 1 clique · por/)).toBeNull()
   })
 
   it('o formulário diz quando o sistema age com o modelo de IA decidindo', async () => {

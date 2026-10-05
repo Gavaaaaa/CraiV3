@@ -9,6 +9,7 @@ import { FaixaDemonstracao } from '../components/ui/Demonstracao'
 import { ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
 import { MODO_REAL, api, etiquetaDeDemonstracao } from '../data/api'
+import type { ClienteRisco } from '../data/tipos'
 import type { BaseClientes, PontoSerie } from '../data/tipos'
 import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
@@ -77,6 +78,16 @@ export function Voluntario() {
   )
   const [clientes, serie, resumo, base, comparacao] = carga.dados ?? [null, null, null, null, null]
   const semBase = carga.dados !== null && base === null
+
+  // A busca do topo leva a `?aba=clientes&cliente=<id>`: aquele cliente é lido à parte (ele pode
+  // não estar entre os 10 mais recentes) e vai para o topo da lista.
+  const idBuscado = params.get('cliente')?.trim() || null
+  const cargaDoBuscado = useCarregar<ClienteRisco | 'nao_encontrado' | null>(
+    () => (idBuscado ? api.clientesRecentes({ cliente: idBuscado, limite: 1, incluirSimulados: sim }).then((l) => l[0] ?? 'nao_encontrado') : Promise.resolve(null)),
+    [idBuscado, sim],
+  )
+  const buscado = idBuscado ? cargaDoBuscado.dados : null
+  const limparBusca = () => setParams({ aba: 'clientes' }, { replace: true })
 
   if (empresa && !premium) {
     return (
@@ -173,7 +184,19 @@ export function Voluntario() {
             <FaixaDemonstracao de={['clientesRecentes', 'serieVoluntario', 'baseClientes', 'comparacaoReguaModelo']} />
             {aba === 'clientes' ? (
               <Card className="p-0">
-                {carga.erro ? <div className="p-4"><ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} /></div> : <TabelaClientes clientes={clientes} total={base?.total ?? null} />}
+                {idBuscado && buscado ? (
+                  <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-amber/[0.05] px-5 py-3 text-apoio text-paper">
+                    <span>
+                      {buscado === 'nao_encontrado'
+                        ? 'O cliente buscado não está na base da sua empresa.'
+                        : 'O cliente buscado está no topo da lista, antes dos mais recentes.'}
+                    </span>
+                    <button type="button" onClick={limparBusca} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">
+                      Limpar a busca
+                    </button>
+                  </div>
+                ) : null}
+                {carga.erro ? <div className="p-4"><ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} /></div> : <TabelaClientes clientes={clientes} total={base?.total ?? null} buscado={buscado && buscado !== 'nao_encontrado' ? buscado : null} />}
               </Card>
             ) : aba === 'mantido' ? (
               <Card className="p-5 md:p-6">

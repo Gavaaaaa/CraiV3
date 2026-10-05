@@ -48,7 +48,9 @@ describe('os cartões', () => {
       risco_grave_com_oferta: 1,
       taxa_recuperacao: 0.6,
       ciclos_com_desfecho: 5,
+      piloto: false, // Rodada 4: o campo novo; ausente na resposta, a empresa não está em piloto
     })
+    expect(adaptarVisaoGeral({ ...VISAO, piloto: true }).piloto).toBe(true)
     expect(JSON.stringify(adaptarVisaoGeral({ ...VISAO, fee: 240 } as VisaoGeralApi))).not.toContain('fee')
   })
 
@@ -136,8 +138,17 @@ describe('o extrato', () => {
 
   it('a fee do backend é a taxa da tela (é a única rota em que ela vem)', () => {
     expect(adaptarExtrato({ mes: '2026-10', linhas: [linha] })).toEqual([
-      { id: 'rec-7', data: '2026-10-04T09:00:00-03:00', cliente: 'Ana Prado', origem: 'involuntario', tipo: 'recuperacao', descricao: 'Recuperado na 1ª tentativa', valor_base: 200, taxa: 30, liquido: 170, estornado: false, simulado: false },
+      { id: 'rec-7', data: '2026-10-04T09:00:00-03:00', cliente: 'Ana Prado', origem: 'involuntario', tipo: 'recuperacao', descricao: 'Recuperado na 1ª tentativa', valor_base: 200, taxa: 30, taxa_fora_do_piloto: null, liquido: 170, estornado: false, simulado: false },
     ])
+  })
+
+  it('em linha de piloto, a taxa é zero e a que seria cobrada vem ao lado', () => {
+    const [dePiloto] = adaptarExtrato({ mes: '2026-10', linhas: [{ ...linha, fee: 0, liquido: 200, fee_fora_do_piloto: 30 }] })
+    expect([dePiloto.taxa, dePiloto.liquido, dePiloto.taxa_fora_do_piloto]).toEqual([0, 200, 30])
+    const [estorno] = adaptarExtrato({ mes: '2026-10', linhas: [{ ...linha, tipo: 'estorno', valor_base: -200, fee: 0, liquido: -200, fee_fora_do_piloto: -30, estornado: true }] })
+    expect(estorno.taxa_fora_do_piloto).toBe(-30)
+    // Fora do piloto o backend manda null: não é uma taxa de zero reais.
+    expect(adaptarExtrato({ mes: '2026-10', linhas: [{ ...linha, fee_fora_do_piloto: null }] })[0].taxa_fora_do_piloto).toBeNull()
   })
 
   it('o estorno é uma linha negativa; sem nome, aparece o id que a empresa usa', () => {

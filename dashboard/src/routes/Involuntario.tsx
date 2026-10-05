@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { IconAlert, IconArrowRight, IconClock, IconRefresh, IconSpark } from '../components/icons/Icons'
 import { usePainel } from '../components/layout/Shell'
 import { Badge } from '../components/ui/Badge'
@@ -15,7 +16,8 @@ import { fmt } from '../lib/format'
 import { useCarregar } from '../lib/useCarregar'
 import { CicloDrawer } from './involuntario/CicloDrawer'
 
-type Filtro = StatusTela | 'todos'
+/** Os quatro status, mais o filtro para onde o sino leva: só quem espera a escolha da empresa. */
+type Filtro = StatusTela | 'todos' | 'aguardando_escolha'
 
 const nomeDoMes = new Intl.DateTimeFormat('pt-BR', { month: 'long' })
 /** "2026-09" vira "setembro". Sem o mês (ainda carregando), o texto de sempre. */
@@ -30,6 +32,7 @@ const FILTROS: { valor: Filtro; rotulo: string }[] = [
   { valor: 'em_processo', rotulo: STATUS.em_processo.rotulo },
   { valor: 'recuperado', rotulo: STATUS.recuperado.rotulo },
   { valor: 'encerrado', rotulo: 'Encerrado' },
+  { valor: 'aguardando_escolha', rotulo: 'Aguardando escolha' },
 ]
 
 /** Sparkline de 30 dias, na cor da série do involuntário; o último ponto em destaque. */
@@ -53,25 +56,56 @@ function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
 
 export function Involuntario() {
   const { modo } = usePainel()
-  const [filtro, setFiltro] = useState<Filtro>('todos')
+  // O endereço pode pedir um filtro (`?filtro=aguardando_escolha`, o caminho do sino) e um ciclo
+  // aberto (`?ciclo=12`, o caminho da busca do topo).
+  const [params, setParams] = useSearchParams()
+  const filtroPedido = params.get('filtro') === 'aguardando_escolha' ? 'aguardando_escolha' : 'todos'
+  const [filtro, setFiltro] = useState<Filtro>(filtroPedido)
   const [busca, setBusca] = useState('')
-  const [aberto, setAberto] = useState<number | null>(null)
+  const cicloPedido = Number(params.get('ciclo'))
+  const [aberto, setAberto] = useState<number | null>(Number.isInteger(cicloPedido) && cicloPedido > 0 ? cicloPedido : null)
+  useEffect(() => {
+    if (params.get('filtro') === 'aguardando_escolha') setFiltro('aguardando_escolha')
+    const c = Number(params.get('ciclo'))
+    if (Number.isInteger(c) && c > 0) setAberto(c)
+  }, [params])
+
+  function semParametro(nome: 'filtro' | 'ciclo') {
+    if (!params.has(nome)) return
+    const outros = new URLSearchParams(params)
+    outros.delete(nome)
+    setParams(outros, { replace: true })
+  }
+  function escolherFiltro(f: Filtro) {
+    setFiltro(f)
+    if (f !== 'aguardando_escolha') semParametro('filtro')
+  }
+  function fecharCiclo() {
+    setAberto(null)
+    semParametro('ciclo')
+  }
 
   const sim = modo === 'simulacao'
   const topo = useCarregar(() => Promise.all([api.metricasMes({ incluirSimulados: sim }), api.serie({ incluirSimulados: sim })]), [sim])
   const [metricas, serie] = topo.dados ?? [null, []]
-  const lista = useCarregar(() => api.ciclos({ status: filtro, busca, incluirSimulados: sim }), [filtro, busca, modo])
+  const soEsperando = filtro === 'aguardando_escolha'
+  const lista = useCarregar(
+    () => api.ciclos(soEsperando ? { status: 'todos', aguardandoEscolha: true, busca, incluirSimulados: sim } : { status: filtro, busca, incluirSimulados: sim }),
+    [filtro, busca, modo],
+  )
   const ciclos = lista.dados
   const semFiltro = filtro === 'todos' && !busca.trim()
 
   const contagem = useMemo(() => {
-    const c: Record<Filtro, number> = { todos: 0, em_analise: 0, em_processo: 0, recuperado: 0, encerrado: 0 }
+    const c: Record<Filtro, number> = { todos: 0, em_analise: 0, em_processo: 0, recuperado: 0, encerrado: 0, aguardando_escolha: 0 }
     for (const x of ciclos ?? []) {
       c.todos++
       c[x.status]++
     }
+    // O número deste filtro é o do backend (quem já escolheu e só espera o horário não conta).
+    c.aguardando_escolha = soEsperando ? (ciclos ?? []).length : (metricas?.aguardando_escolha ?? 0)
     return c
-  }, [ciclos])
+  }, [ciclos, metricas, soEsperando])
 
   return (
     <div className="flex flex-col gap-5">
@@ -120,8 +154,25 @@ export function Involuntario() {
         />
         <StatTile
           rotulo="Próxima ação do sistema"
-          valor={<span className="t-h3 text-paper">{metricas?.proxima_acao?.descricao ?? (MODO_REAL ? 'Ainda não informada pelo servidor' : 'Nada agendado')}</span>}
-          apoio={metricas?.proxima_acao ? `${fmt.dataCurta(metricas.proxima_acao.quando)}, ${fmt.relativo(metricas.proxima_acao.quando, agoraDaTela())}` : MODO_REAL ? 'Abra um ciclo para ver as tentativas agendadas' : ''}
+          valor={<span className="t-h3 text-paper">{metricas?.proxima_acao?.descricao ?? (metricas ? 'Nada agendado' : '—')}</span>}
+          apoio={
+            metricas?.proxima_acao ? (
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  {fmt.dataCurta(metricas.proxima_acao.quando)}, {fmt.relativo(metricas.proxima_acao.quando, agoraDaTela())}
+                </span>
+                {metricas.proxima_acao.ciclo_id ? (
+                  <button type="button" onClick={() => setAberto(metricas.proxima_acao?.ciclo_id ?? null)} className="font-[560] text-amber underline-offset-2 hover:underline">
+                    Ver o ciclo
+                  </button>
+                ) : null}
+              </span>
+            ) : metricas ? (
+              'Nenhuma tentativa de cobrança nem mensagem pendente agora'
+            ) : (
+              ''
+            )
+          }
           icone={<IconClock width={17} height={17} />}
           className="col-span-2 lg:col-span-3 xl:col-span-4"
         />
@@ -137,7 +188,7 @@ export function Involuntario() {
                 type="button"
                 role="tab"
                 aria-selected={filtro === f.valor}
-                onClick={() => setFiltro(f.valor)}
+                onClick={() => escolherFiltro(f.valor)}
                 className={cx(
                   'rounded-full border px-3 py-1.5 text-rotulo font-[520] transition-colors',
                   filtro === f.valor ? 'border-orange/60 bg-orange/10 text-orange' : 'border-line text-silver hover:border-graphite hover:text-paper',
@@ -201,7 +252,11 @@ export function Involuntario() {
                         icone={<IconRefresh width={22} height={22} />}
                       />
                     ) : (
-                      <Vazio titulo="Nenhum cliente neste filtro" texto="Tente outro status ou limpe a busca." acao={<button type="button" onClick={() => { setFiltro('todos'); setBusca('') }} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">Limpar filtros</button>} />
+                      <Vazio
+                        titulo={soEsperando && !busca.trim() ? 'Nenhuma cobrança esperando a sua escolha' : 'Nenhum cliente neste filtro'}
+                        texto={soEsperando && !busca.trim() ? 'Quando o sistema escrever as 3 mensagens de uma cobrança, ela aparece aqui para você escolher.' : 'Tente outro status ou limpe a busca.'}
+                        acao={<button type="button" onClick={() => { escolherFiltro('todos'); setBusca('') }} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">Limpar filtros</button>}
+                      />
                     )}
                   </td>
                 </tr>
@@ -252,7 +307,7 @@ export function Involuntario() {
       <AnimatePresence>
         {aberto !== null ? (
           <motion.div key="drawer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <CicloDrawer id={aberto} onClose={() => setAberto(null)} />
+            <CicloDrawer id={aberto} onClose={fecharCiclo} />
           </motion.div>
         ) : null}
       </AnimatePresence>

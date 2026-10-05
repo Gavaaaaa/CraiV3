@@ -47,6 +47,7 @@ import {
   adaptarAssistente,
   adaptarAtividade,
   adaptarBase,
+  adaptarBusca,
   adaptarChave,
   adaptarChaves,
   adaptarCiclo,
@@ -77,6 +78,7 @@ import {
   type AnonimizacaoTitular,
   type AssistenteApi,
   type AtividadeApi,
+  type BuscaApi,
   type BaseApi,
   type ChaveCriadaApi,
   type ChaveRevogadaApi,
@@ -110,7 +112,7 @@ import {
 } from './adaptadores'
 import { responder } from './assistente'
 import { ErroApi } from './erros'
-import { API_URL, MODO_REAL, chamar, definirEmpresaDev, definirPapelDev, definirPlanoDev, papelDev, planoDev } from './http'
+import { API_URL, MODO_REAL, chamar, chamarTexto, definirEmpresaDev, definirPapelDev, definirPlanoDev, papelDev, planoDev } from './http'
 import { avancar, diasAteProximaAcao, escolherMensagem, estadoVazio, iniciar, simularRetencao } from './simulador'
 import type {
   Abordagem,
@@ -124,6 +126,7 @@ import type {
   Papel,
   ResultadoTesteIntegracao,
   RespostaAssistente,
+  ResultadoBusca,
   BaseClientes,
   ClienteRisco,
   ComparacaoReguaModelo,
@@ -202,6 +205,9 @@ export const ROTAS_REAIS = {
   naoContatar: true, // POST /clientes/{id}/nao-contatar
   voltarAContatar: true, // DELETE /clientes/{id}/nao-contatar
   textoParaPolitica: true, // GET /titular/texto-para-politica
+  // Rodada 4, Fase 2: a busca do topo e o extrato em arquivo
+  buscar: true, // GET /busca?q=
+  extratoCsv: true, // GET /extrato/csv
 } as const
 
 type RotaReal = keyof typeof ROTAS_REAIS
@@ -251,6 +257,9 @@ export const trocarEmpresaDeDesenvolvimento = definirEmpresaDev
 /** O endereço da API que a aba "API" mostra: o mesmo `VITE_CRAI_API_URL`; na demonstração, um de exemplo. */
 export const ENDERECO_DA_API = MODO_REAL ? API_URL : 'https://api.exemplo-crai.com.br'
 
+/** A busca do topo só procura a partir de duas letras (a mesma regra do backend). */
+export const BUSCA_MINIMO_DE_LETRAS = 2
+
 /** O nome de uma chave: de 1 a 60 caracteres (a mesma regra do backend). */
 export const NOME_DA_CHAVE_MAX = 60
 
@@ -283,6 +292,8 @@ export interface FiltroCiclos {
   status?: StatusTela | 'todos'
   busca?: string
   incluirSimulados?: boolean
+  /** Só os ciclos que esperam a escolha da empresa agora (a lista para onde o sino leva). */
+  aguardandoEscolha?: boolean
 }
 
 /** Quantos ciclos uma chamada traz. A paginação por cursor do backend ainda não é usada pela tela. */
@@ -338,6 +349,8 @@ export const api = {
       if (filtro.status && filtro.status !== 'todos') parametros.set('status', statusParaApi(filtro.status))
       // A barra "Mostrar: Simulação" junta os ciclos da simulação do gateway desta empresa.
       if (filtro.incluirSimulados) parametros.set('incluir_simulados', 'true')
+      // A mesma conta do número "aguardando sua escolha": quem já escolheu não entra.
+      if (filtro.aguardandoEscolha) parametros.set('aguardando_escolha', 'true')
       const r = await chamar<ListaDeCiclosApi>('GET', `/ciclos?${parametros}`)
       // A busca por nome é feita aqui: o backend busca só pelo id da recorrência.
       return filtrarPorBusca(r.ciclos.map(adaptarCiclo), filtro.busca)
@@ -347,7 +360,8 @@ export const api = {
     return filtrarPorBusca(
       ciclos
         .filter((c) => (filtro.incluirSimulados ?? true) || !c.simulado)
-        .filter((c) => !filtro.status || filtro.status === 'todos' || c.status === filtro.status),
+        .filter((c) => !filtro.status || filtro.status === 'todos' || c.status === filtro.status)
+        .filter((c) => !filtro.aguardandoEscolha || c.estado === 'aguardando_escolha'),
       filtro.busca,
     ).sort((a, b) => (a.atualizado_em < b.atualizado_em ? 1 : -1))
   },
@@ -462,6 +476,16 @@ export const api = {
     return metricasMes
   },
 
+  /**
+   * Quantos ciclos esperam a escolha da empresa AGORA (o sino do topo). É o mesmo número de
+   * `GET /metrics/involuntario/mes`, numa chamada só.
+   */
+  async pendenciasDeEscolha(): Promise<number> {
+    if (real('metricasMes')) return (await chamar<MetricasMesApi>('GET', '/metrics/involuntario/mes')).aguardando_escolha
+    await espera(60)
+    return vazio ? 0 : metricasMes.aguardando_escolha
+  },
+
   /** GET /metrics/involuntario/serie?dias=30 */
   async serie(opcoes: { incluirSimulados?: boolean } = {}): Promise<PontoSerie[]> {
     if (real('serie')) return adaptarSerie(await chamar<SerieApi>('GET', `/metrics/involuntario/serie?dias=30${simulados(opcoes.incluirSimulados, '&')}`))
@@ -494,6 +518,7 @@ export const api = {
       risco_grave_com_oferta: vazio ? 0 : riscoGrave.com_oferta,
       taxa_recuperacao: vazio ? 0 : (metricasMes.taxa_recuperacao ?? 0),
       ciclos_com_desfecho: vazio ? 0 : metricasMes.recuperados + metricasMes.encerrados_sem_recuperacao,
+      piloto: false,
     }
   },
 
@@ -643,14 +668,47 @@ export const api = {
   },
 
   /** GET /clientes/recentes?limite=10 */
-  async clientesRecentes(opcoes: { incluirSimulados?: boolean; limite?: number } = {}): Promise<ClienteRisco[]> {
+  async clientesRecentes(opcoes: { incluirSimulados?: boolean; limite?: number; cliente?: string } = {}): Promise<ClienteRisco[]> {
     if (real('clientesRecentes')) {
-      const r = await chamar<ClientesRecentesApi>('GET', `/clientes/recentes?limite=${opcoes.limite ?? 10}${simulados(opcoes.incluirSimulados, '&')}`)
+      // `cliente`: só aquele cliente, esteja ou não entre os mais recentes (a busca do topo leva a ele).
+      const so = opcoes.cliente ? `&cliente=${encodeURIComponent(opcoes.cliente)}` : ''
+      const r = await chamar<ClientesRecentesApi>('GET', `/clientes/recentes?limite=${opcoes.limite ?? 10}${simulados(opcoes.incluirSimulados, '&')}${so}`)
       return r.clientes.map(adaptarClienteRecente)
     }
     await espera(200)
     if (vazio) return []
-    return clientesRisco.filter((c) => opcoes.incluirSimulados || !c.simulado).slice(0, opcoes.limite ?? 10)
+    return clientesRisco
+      .filter((c) => opcoes.incluirSimulados || !c.simulado)
+      .filter((c) => !opcoes.cliente || c.id === opcoes.cliente)
+      .slice(0, opcoes.limite ?? 10)
+  },
+
+  /** GET /busca?q= — clientes e ciclos da empresa, pelo nome ou pelo identificador (Rodada 4) */
+  async buscar(q: string): Promise<ResultadoBusca> {
+    const texto = q.trim()
+    if (texto.length < BUSCA_MINIMO_DE_LETRAS) return { clientes: [], ciclos: [] }
+    if (real('buscar')) return adaptarBusca(await chamar<BuscaApi>('GET', `/busca?q=${encodeURIComponent(texto)}`))
+    await espera(120)
+    const termo = texto.toLowerCase()
+    return {
+      clientes: clientesRisco
+        .filter((c) => !c.simulado && (c.nome.toLowerCase().includes(termo) || c.id.toLowerCase().startsWith(termo)))
+        .slice(0, 8)
+        .map((c) => ({ id: c.id, nome: c.nome, mrr: c.mrr, cancelado: false, nao_contatar: c.nao_contatar })),
+      ciclos: ciclos
+        .filter((c) => !c.simulado && ((c.cliente ?? '').toLowerCase().includes(termo) || c.id_recorrencia.toLowerCase().startsWith(termo)))
+        .slice(0, 8)
+        .map((c) => ({ id: c.id, cliente: c.cliente, id_recorrencia: c.id_recorrencia, status: c.status, valor_cobranca: c.valor_cobranca, causa_legivel: c.causa_legivel ?? null })),
+    }
+  },
+
+  /**
+   * GET /extrato/csv — o extrato do mês em arquivo, montado pelo backend (e gravado no registro
+   * de acesso). null na demonstração: sem backend, a tela monta o arquivo com as linhas que mostra.
+   */
+  async extratoCsv(opcoes: { incluirSimulados?: boolean } = {}): Promise<string | null> {
+    if (real('extratoCsv')) return chamarTexto(`/extrato/csv${simulados(opcoes.incluirSimulados, '?')}`)
+    return null
   },
 
   /** GET /metrics/voluntario/mes */

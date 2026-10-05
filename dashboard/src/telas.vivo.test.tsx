@@ -68,7 +68,11 @@ describe('telas em modo real', () => {
     for (const status of ['Em análise', 'Em processo', 'Recuperado', 'Encerrado sem recuperação']) {
       expect(screen.getAllByText(status).length, status).toBeGreaterThan(0)
     }
-    expect(screen.getByText('Ainda não informada pelo servidor')).toBeTruthy()
+    // A próxima ação vem da rota do mês: a semente deixa ciclos em processo, então há o que e quando.
+    expect(screen.queryByText('Ainda não informada pelo servidor')).toBeNull()
+    const proxima = screen.getByText('Próxima ação do sistema').closest('div')!.parentElement as HTMLElement
+    expect(within(proxima).getByText(/^(Tentativa \d+ de cobrança|Envio (automático )?da mensagem (escolhida|recomendada))$/)).toBeTruthy()
+    expect(within(proxima).getByRole('button', { name: 'Ver o ciclo' })).toBeTruthy()
     expect(etiquetas()).toHaveLength(0)
     // Nenhum contato na tela.
     expect(document.body.textContent).not.toMatch(/@exemplo\.com\.br|\+55119/)

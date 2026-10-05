@@ -202,6 +202,21 @@ async function erroDaResposta(r: Response): Promise<ErroApi> {
   }
 }
 
+/**
+ * Como `chamar`, para uma rota que devolve TEXTO em vez de JSON (o extrato em CSV): a mesma
+ * autenticação, a mesma segunda tentativa no 401 e o mesmo tratamento de erro.
+ */
+export async function chamarTexto(caminho: string): Promise<string> {
+  const enviar = async (): Promise<Response> => requisitar(caminho, { method: 'GET', headers: { Authorization: `Bearer ${await obterToken()}` } })
+  let resposta = await enviar()
+  if (resposta.status === 401) {
+    token = null
+    resposta = await enviar()
+  }
+  if (!resposta.ok) throw await erroDaResposta(resposta)
+  return resposta.text()
+}
+
 export interface OpcoesDeChamada {
   /** Rotas públicas (`/health`): não pedem nem enviam token. */
   semToken?: boolean

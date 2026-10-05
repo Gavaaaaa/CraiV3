@@ -746,9 +746,70 @@ describe('dashboard em modo real contra o backend local', () => {
     console.log(`[vivo] titular: exportado sem o valor dos contatos, não contatar ida e volta, anonimizado, texto da política com ${politica!.texto.length} caracteres`)
   })
 
+  it('rodada 4: a busca, o extrato em arquivo, a próxima ação e a lista do sino vêm do backend', async () => {
+    const todos = await api.ciclos()
+    expect(todos.length).toBeGreaterThan(0)
+    // A busca do topo: pelo começo do id da recorrência de um ciclo que existe.
+    const alvo = todos[0]
+    const achado = await api.buscar(alvo.id_recorrencia.slice(0, 8))
+    expect(achado.ciclos.some((c) => c.id === alvo.id)).toBe(true)
+    expect(JSON.stringify(achado)).not.toMatch(/@|\+55|"fee"/)
+    expect(await api.buscar('zzzzqqqq')).toEqual({ clientes: [], ciclos: [] })
+    expect(await api.buscar('a')).toEqual({ clientes: [], ciclos: [] }) // uma letra: nem consulta
+
+    // O extrato em arquivo: o cabeçalho é o do backend; o membro recebe 403.
+    const arquivo = await api.extratoCsv()
+    expect(arquivo).not.toBeNull()
+    expect(arquivo!.replace(String.fromCharCode(0xfeff), '').split('\r\n')[0]).toBe(
+      'Data;Cliente;Identificador;Origem;O que aconteceu;Valor (R$);Taxa da CRAI (R$);Líquido para você (R$);Situação;Demonstração',
+    )
+    trocarPapelDeDesenvolvimento('membro')
+    const negado = await erroDe(api.extratoCsv())
+    expect([negado.codigo, negado.status]).toEqual(['sem_permissao', 403])
+    trocarPapelDeDesenvolvimento('owner')
+
+    // A próxima ação (a semente deixa um ciclo com tentativas agendadas) e a lista do sino.
+    const mes = await api.metricasMes()
+    expect(mes.proxima_acao).not.toBeNull()
+    expect(mes.proxima_acao!.descricao.length).toBeGreaterThan(0)
+    expect(COM_FUSO.test(mes.proxima_acao!.quando)).toBe(true)
+    const esperando = await api.ciclos({ aguardandoEscolha: true })
+    expect(esperando.length).toBe(await api.pendenciasDeEscolha())
+    expect(esperando.length).toBe(mes.aguardando_escolha)
+    expect(esperando.every((c) => c.estado === 'aguardando_escolha')).toBe(true)
+
+    // O intervalo entre ofertas vem na configuração; a lista de clientes diz quem não quer contato.
+    expect((await api.configuracao()).intervalo_minimo_ofertas_dias).toBe(30)
+    const clientes = await api.clientesRecentes({ limite: 5 })
+    expect(clientes.every((c) => typeof c.nao_contatar === 'boolean')).toBe(true)
+    if (clientes.length) expect((await api.clientesRecentes({ cliente: clientes[0].id })).map((c) => c.id)).toEqual([clientes[0].id])
+    expect(await api.clientesRecentes({ cliente: 'cliente-que-nao-existe' })).toEqual([])
+    console.log(`[vivo] rodada 4: busca ${achado.ciclos.length} ciclo(s); próxima ação "${mes.proxima_acao!.descricao}"; ${esperando.length} esperando a escolha`)
+  })
+
+  it('rodada 4, modo piloto: a visão geral diz se a empresa está em piloto, e a linha de piloto do extrato não tem taxa cobrada', async () => {
+    const resumo = await api.resumoVisaoGeral()
+    expect(typeof resumo.piloto).toBe('boolean')
+    const linhas = await api.extrato()
+    for (const l of linhas) {
+      // A linha é de piloto (taxa zero, líquido inteiro, e a taxa que seria cobrada ao lado) ou não é (null).
+      if (typeof l.taxa_fora_do_piloto === 'number') {
+        expect(l.taxa).toBe(0)
+        expect(l.liquido).toBe(l.valor_base)
+      } else {
+        expect(l.taxa_fora_do_piloto).toBeNull()
+      }
+    }
+    // Nenhuma outra leitura traz a taxa que seria cobrada.
+    const fora = JSON.stringify([resumo, await api.metricasMes(), await api.ciclos(), await api.atividade()])
+    expect(fora).not.toContain('fora_do_piloto')
+    console.log(`[vivo] modo piloto: empresa ${resumo.piloto ? 'EM piloto' : 'fora do piloto'}; ${linhas.filter((l) => typeof l.taxa_fora_do_piloto === 'number').length} de ${linhas.length} linha(s) do extrato são de piloto`)
+  })
+
   it('o mapa de rotas reais é o desta etapa', () => {
     // 12 da Rodada 2, mais 6 da página do voluntário (Fase 1), 6 da visão geral (Fase 2), 7 da
     // simulação do gateway (Fase 3), o assistente (Fase 4) e 6 dos direitos do titular (Fase 6).
-    expect(Object.keys(ROTAS_REAIS)).toHaveLength(38)
+    // Rodada 4, Fase 2: mais a busca do topo e o extrato em arquivo.
+    expect(Object.keys(ROTAS_REAIS)).toHaveLength(40)
   })
 })

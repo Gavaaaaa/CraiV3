@@ -126,7 +126,8 @@ export interface MetricasMes {
   encerrados_sem_recuperacao: number
   aguardando_escolha: number
   taxa_recuperacao: number | null // 0..1, sobre ciclos com desfecho; null quando ainda não há desfecho
-  proxima_acao: { quando: string; descricao: string } | null
+  /** O que o sistema faz em seguida, e quando; `ciclo_id` abre o ciclo. null: nada agendado. */
+  proxima_acao: { quando: string; descricao: string; ciclo_id?: number | null } | null
 }
 
 export interface PontoSerie {
@@ -139,6 +140,8 @@ export interface Configuracao {
   prazo_escolha_horas: number
   janela_contato: { inicio: number; fim: number } // horas, ex.: 8 às 20
   canais: Canal[] // permitidos, na ordem de preferência
+  /** Um cliente recebe no máximo uma oferta de retenção a cada tantos dias (1 a 365; padrão 30). */
+  intervalo_minimo_ofertas_dias: number
   notificacoes: { resumo_semanal: boolean; risco_grave: boolean; escolha_pendente: boolean }
   retencao_dias: { mensagens: number; ciclos_meses: number; base_meses_apos_contrato: number; trilha_anos: number }
 }
@@ -235,6 +238,8 @@ export interface ResumoVisaoGeral {
   risco_grave_com_oferta: number | null
   taxa_recuperacao: number | null // 0..1, sobre ciclos com desfecho; null quando ainda não há desfecho
   ciclos_com_desfecho: number
+  /** A empresa está em período de piloto agora: a CRAI não cobra taxa. Quem define é a CRAI. */
+  piloto: boolean
 }
 
 export interface EtapaFunil {
@@ -300,6 +305,11 @@ export interface LinhaExtrato {
   descricao: string
   valor_base: number // cobrança recuperada, ou MRR menos o desconto
   taxa: number
+  /**
+   * Só em linha de período de piloto: a taxa que a CRAI cobraria fora dele (a cobrada é zero).
+   * `null`, ou ausente na demonstração, quando a linha não é de piloto.
+   */
+  taxa_fora_do_piloto?: number | null
   liquido: number
   estornado: boolean
   simulado: boolean
@@ -430,7 +440,15 @@ export interface ClienteRisco {
   /** A oferta e o canal já vêm em português (o backend manda o texto pronto). */
   abordagem: { oferta: string; canal: string; status: 'aguardando' | 'enviada' | 'aceita' | 'recusada' } | null
   atualizado_em: string | null
+  /** O cliente pediu para não receber mensagens (respondeu SAIR), ou a empresa o marcou. */
+  nao_contatar: boolean
   simulado: boolean
+}
+
+/** O resultado da busca do topo: clientes da base e ciclos de cobrança da empresa. Sem contato. */
+export interface ResultadoBusca {
+  clientes: { id: string; nome: string; mrr: number | null; cancelado: boolean; nao_contatar: boolean }[]
+  ciclos: { id: number; cliente: string | null; id_recorrencia: string; status: StatusTela; valor_cobranca: number; causa_legivel: string | null }[]
 }
 
 export interface BaseClientes {

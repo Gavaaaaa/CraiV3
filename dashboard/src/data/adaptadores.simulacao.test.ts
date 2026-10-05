@@ -10,6 +10,7 @@ import {
   CICLO_SIMULADO,
   RETENCAO_ACEITA,
   RETENCAO_PELO_MODELO_COM_OFERTA,
+  RETENCAO_PELO_MODELO_MAIS_LEVE,
   RETENCAO_PELO_MODELO_SEM_OFERTA,
   RETENCAO_RECUSADA,
   RETENCAO_SEM_RISCO,
@@ -214,6 +215,17 @@ describe('adaptarRetencaoSimulada', () => {
     expect(com.sem_oferta_porque).toBeNull()
     expect(com.porque).toMatch(/^O cliente mostrou intenção explícita de sair\./)
     expect(com.risco! < 0.6).toBe(true)
+  })
+
+  it('a mais leve é uma oferta de retenção de verdade, nunca a troca para Pix ou boleto', () => {
+    const leve = adaptarRetencaoSimulada(RETENCAO_PELO_MODELO_MAIS_LEVE)
+    expect(RETENCAO_PELO_MODELO_MAIS_LEVE.intensidade).toBe('oferta_mais_leve')
+    expect(leve.faixa).toBe('preocupante')
+    expect(leve.oferta).toBe('desconto_10')
+    expect(leve.porque).toMatch(/oferta de retenção de menor custo/)
+    // Por intenção explícita sai a do bandit, qualquer que seja a faixa.
+    expect(RETENCAO_PELO_MODELO_COM_OFERTA.intensidade).toBe('oferta_do_bandit')
+    expect(RETENCAO_PELO_MODELO_COM_OFERTA.regra_de_intervencao).toBe('intencao_explicita')
   })
 
   it('quando a régua decide, não há frase do backend para o "sem oferta" (a tela explica pelo corte)', () => {

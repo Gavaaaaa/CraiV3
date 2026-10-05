@@ -515,9 +515,11 @@ describe('configuração', () => {
       prazo_escolha_horas: 8,
       janela_contato: { inicio: 8, fim: 20 },
       canais: ['whatsapp', 'email'],
+      intervalo_minimo_ofertas_dias: 30, // Rodada 4: o campo novo; ausente na resposta, vale o padrão do backend
       notificacoes: { resumo_semanal: true, risco_grave: false, escolha_pendente: true },
       retencao_dias: { mensagens: 90, ciclos_meses: 24, base_meses_apos_contrato: 6, trilha_anos: 5 },
     })
+    expect(adaptarConfiguracao({ ...PADRAO, intervalo_minimo_ofertas_dias: 45 }, NOTIFICACOES).intervalo_minimo_ofertas_dias).toBe(45)
   })
 
   it('as horas: "08:00" é 8, "24:00" é 24, e de volta', () => {

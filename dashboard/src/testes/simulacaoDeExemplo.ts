@@ -1265,8 +1265,9 @@ export const RETENCAO_SEM_RISCO = {
 
 /**
  * A mesma rota com o MODELO DE IA decidindo o risco (capturadas do backend em 05/10/2026, com o
- * modelo v3 ativo). O corte fixo não vale (`corte_de_intervencao` nulo): quem abre a página de
- * cancelamento recebe oferta por intenção explícita; os outros, só pela posição na base.
+ * modelo v3 ativo e as regras da Rodada 4). O corte fixo não vale (`corte_de_intervencao` nulo):
+ * quem abre a página de cancelamento recebe a oferta do bandit, por intenção explícita; os
+ * outros, só pela posição na base, e o preocupante leva a oferta de retenção de menor custo.
  */
 export const RETENCAO_PELO_MODELO_COM_OFERTA = {
   "faixa": "sem_risco",
@@ -1275,15 +1276,15 @@ export const RETENCAO_PELO_MODELO_COM_OFERTA = {
   "risco": 0.21,
   "corte_de_intervencao": null,
   "regra_de_intervencao": "intencao_explicita",
-  "intensidade": "oferta_mais_leve",
+  "intensidade": "oferta_do_bandit",
   "sem_oferta_porque": null,
-  "oferta": "pix_boleto_flash",
-  "oferta_legivel": "troca para Pix ou boleto em 1 clique",
+  "oferta": "pausa_1_mes",
+  "oferta_legivel": "pausa de 1 mês na assinatura, sem custo",
   "canal": "popup",
   "canal_legivel": "aviso dentro do produto",
-  "porque": "O cliente mostrou intenção explícita de sair. Nesse caso o sistema age sempre, por regra, qualquer que seja o risco calculado. Como o caso não é grave, o sistema escolheu a oferta de menor custo entre as que considerou nesta rodada (chance de aceite aprendida até aqui: 33%).",
+  "porque": "O cliente mostrou intenção explícita de sair. Nesse caso o sistema age sempre, por regra, qualquer que seja o risco calculado. O sistema sorteia a partir do que já aprendeu sobre cada oferta para este perfil. Nesta rodada, esta teve o maior retorno esperado (chance de aceite aprendida até aqui: 64%).",
   "aceitou": true,
-  "valor_mantido_liquido": 1020.0,
+  "valor_mantido_liquido": 0.0,
   "sem_crai": "Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.",
   "meses_de_mrr": 1,
   "prazo_estorno_dias": 30,
@@ -1306,6 +1307,27 @@ export const RETENCAO_PELO_MODELO_SEM_OFERTA = {
   "aceitou": null,
   "valor_mantido_liquido": 0.0,
   "sem_crai": "O sistema não interveio: com ou sem a CRAI, este cliente segue como está.",
+  "meses_de_mrr": 1,
+  "prazo_estorno_dias": 30,
+  "simulado": true
+} as unknown as RetencaoSimuladaApi
+export const RETENCAO_PELO_MODELO_MAIS_LEVE = {
+  "faixa": "preocupante",
+  "motivo": "Sem login há 24 dias, usa 1 funcionalidade nos últimos 30 dias, MRR R$ 1.200,00 — entre os 30% de maior risco da sua base, pelo modelo",
+  "decidido_por": "modelo",
+  "risco": 0.2,
+  "corte_de_intervencao": null,
+  "regra_de_intervencao": "posicao_na_base",
+  "intensidade": "oferta_mais_leve",
+  "sem_oferta_porque": null,
+  "oferta": "desconto_10",
+  "oferta_legivel": "desconto de 10% por 3 meses",
+  "canal": "email",
+  "canal_legivel": "e-mail",
+  "porque": "Pela posição na base, o cliente está entre os de maior risco e tem sinal de abandono. Como o caso é preocupante, e não grave, o sistema escolheu a oferta de retenção de menor custo (chance de aceite aprendida até aqui: 35%).",
+  "aceitou": true,
+  "valor_mantido_liquido": 918.0,
+  "sem_crai": "Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.",
   "meses_de_mrr": 1,
   "prazo_estorno_dias": 30,
   "simulado": true

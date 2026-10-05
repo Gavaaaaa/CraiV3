@@ -138,6 +138,11 @@ export function VisaoGeral() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {sim ? <Badge tone="amber">Inclui demonstração</Badge> : null}
+          {resumo?.piloto ? (
+            <span className="t-label rounded-[8px] border border-line bg-slate/50 px-3 py-1.5 text-silver" data-piloto>
+              Período de piloto: sem taxa
+            </span>
+          ) : null}
           <span className="t-label rounded-[8px] border border-line bg-slate/50 px-3 py-1.5 text-silver">
             Últimos 30 dias{resumo ? ` · ${periodoTexto(resumo.periodo.de, resumo.periodo.ate)}` : ''}
           </span>
@@ -160,7 +165,7 @@ export function VisaoGeral() {
           valor={mantido !== null ? fmt.brlInteiro(mantido) : '—'}
           apoio={
             <>
-              <span>Recuperado mais retido, já descontada a taxa da CRAI.</span>
+              <span>{resumo?.piloto ? 'Recuperado mais retido. No período de piloto, a CRAI não cobra taxa.' : 'Recuperado mais retido, já descontada a taxa da CRAI.'}</span>
               {resumo ? <Divisao inv={resumo.recuperado_involuntario} vol={resumo.retido_voluntario} /> : null}
             </>
           }
@@ -287,7 +292,7 @@ export function VisaoGeral() {
                     />
                   </div>
                 ) : extrato ? (
-                  <ExtratoDoMes linhas={extrato} mes={mesAtual} />
+                  <ExtratoDoMes linhas={extrato} mes={mesAtual} incluirSimulados={sim} piloto={resumo?.piloto ?? false} />
                 ) : (
                   <div className="p-5">
                     <Carregando altura={320} />

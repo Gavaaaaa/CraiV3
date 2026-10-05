@@ -41,6 +41,7 @@ import type {
   PontoSerie,
   PontoSerieDupla,
   RespostaAssistente,
+  ResultadoBusca,
   ResultadoImportacao,
   ResultadoRetencaoSimulada,
   ResumoVisaoGeral,
@@ -151,6 +152,8 @@ export interface MetricasMesApi {
   aguardando_escolha: number
   /** Bloco 5: os estornos no prazo recebidos no mês (já descontados do valor líquido). */
   estornos?: { quantidade: number; ciclos_estornados_por_inteiro: number; valor_liquido_estornado: number }
+  /** Rodada 4: o que o sistema faz em seguida. Ausente num backend anterior; null se nada está agendado. */
+  proxima_acao?: { quando: string; tipo: string; descricao: string; ciclo_id: number | null } | null
 }
 
 export interface SerieApi {
@@ -164,6 +167,8 @@ export interface ConfiguracaoApi {
   janela_contato_inicio: string // "08:00"
   janela_contato_fim: string // "20:00" (aceita "24:00")
   canais_permitidos: string[]
+  /** Rodada 3, S5: o intervalo mínimo entre ofertas de retenção. Ausente num backend anterior. */
+  intervalo_minimo_ofertas_dias?: number
   retencao_mensagens_dias: number
   retencao_ciclos_meses: number
   retencao_base_meses_apos_contrato: number
@@ -516,8 +521,11 @@ export function adaptarMetricas(m: MetricasMesApi, ciclosAtivos: number): Metric
     encerrados_sem_recuperacao: m.encerrados_sem_recuperacao,
     aguardando_escolha: m.aguardando_escolha,
     taxa_recuperacao: m.taxa_recuperacao,
-    // O backend ainda não informa a próxima ação do sistema (pendência para a Etapa 3).
-    proxima_acao: null,
+    // Rodada 4: a próxima ação vem do backend. Sem ela (nada agendado, ou backend anterior), null.
+    proxima_acao:
+      m.proxima_acao && typeof m.proxima_acao.quando === 'string' && typeof m.proxima_acao.descricao === 'string'
+        ? { quando: m.proxima_acao.quando, descricao: maiuscula(m.proxima_acao.descricao), ciclo_id: numero(m.proxima_acao.ciclo_id) }
+        : null,
   }
 }
 
@@ -540,6 +548,10 @@ export function horaParaApi(hora: number): string {
   return `${String(hora).padStart(2, '0')}:00`
 }
 
+/** O intervalo entre ofertas que o backend usa quando a empresa não escolheu outro (e os limites do campo). */
+export const INTERVALO_PADRAO_ENTRE_OFERTAS = 30
+export const INTERVALO_ENTRE_OFERTAS = { minimo: 1, maximo: 365 }
+
 /** Os canais que o backend aceita hoje na configuração do involuntário. */
 export const CANAIS_DO_BACKEND: Canal[] = ['whatsapp', 'email']
 
@@ -553,6 +565,7 @@ export function adaptarConfiguracao(c: ConfiguracaoApi, locais: Pick<Configuraca
     prazo_escolha_horas: c.prazo_escolha_horas,
     janela_contato: { inicio: horaDaTela(c.janela_contato_inicio), fim: horaDaTela(c.janela_contato_fim) },
     canais: c.canais_permitidos.map(canalDaTela).filter((x) => x !== 'sem_canal'),
+    intervalo_minimo_ofertas_dias: numero(c.intervalo_minimo_ofertas_dias) ?? INTERVALO_PADRAO_ENTRE_OFERTAS,
     notificacoes: { ...locais.notificacoes },
     retencao_dias: {
       mensagens: c.retencao_mensagens_dias,
@@ -576,6 +589,7 @@ export function configuracaoParaApi(nova: Configuracao, lida: Configuracao): Par
   if (nova.janela_contato.fim !== lida.janela_contato.fim) corpo.janela_contato_fim = horaParaApi(nova.janela_contato.fim)
   const canais = nova.canais.filter((c) => CANAIS_DO_BACKEND.includes(c))
   if (canais.join(',') !== lida.canais.filter((c) => CANAIS_DO_BACKEND.includes(c)).join(',')) corpo.canais_permitidos = canais
+  if (nova.intervalo_minimo_ofertas_dias !== lida.intervalo_minimo_ofertas_dias) corpo.intervalo_minimo_ofertas_dias = nova.intervalo_minimo_ofertas_dias
   return corpo
 }
 
@@ -628,6 +642,8 @@ export interface VisaoGeralApi {
   taxa_recuperacao: number | null
   ciclos_com_desfecho: number
   mantido: number
+  /** Rodada 4: a empresa está em período de piloto. Ausente num backend anterior. */
+  piloto?: boolean
 }
 
 export function adaptarVisaoGeral(r: VisaoGeralApi): ResumoVisaoGeral {
@@ -643,6 +659,7 @@ export function adaptarVisaoGeral(r: VisaoGeralApi): ResumoVisaoGeral {
     risco_grave_com_oferta: r.risco_grave_com_oferta,
     taxa_recuperacao: r.taxa_recuperacao,
     ciclos_com_desfecho: r.ciclos_com_desfecho,
+    piloto: r.piloto === true,
   }
 }
 
@@ -721,6 +738,8 @@ export interface ExtratoApi {
     descricao: string
     valor_base: number
     fee: number
+    /** Rodada 4: só na linha de piloto; `null` nas outras, e ausente num backend anterior. */
+    fee_fora_do_piloto?: number | null
     liquido: number
     estornado: boolean
     simulado: boolean
@@ -737,6 +756,7 @@ export function adaptarExtrato(r: ExtratoApi): LinhaExtrato[] {
     descricao: maiuscula(l.descricao),
     valor_base: l.valor_base,
     taxa: l.fee,
+    taxa_fora_do_piloto: typeof l.fee_fora_do_piloto === 'number' ? l.fee_fora_do_piloto : null,
     liquido: l.liquido,
     estornado: Boolean(l.estornado),
     simulado: Boolean(l.simulado),
@@ -829,6 +849,8 @@ export interface ClienteRecenteApi {
     simulado?: boolean
   } | null
   atualizado_em: string | null
+  /** Rodada 4. Ausente num backend anterior. */
+  nao_contatar?: boolean
   simulado: boolean
 }
 
@@ -860,7 +882,41 @@ export function adaptarClienteRecente(c: ClienteRecenteApi): ClienteRisco {
           }
         : null,
     atualizado_em: c.atualizado_em,
+    nao_contatar: c.nao_contatar === true,
     simulado: Boolean(c.simulado),
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Busca do topo (Rodada 4)                                             */
+/* ------------------------------------------------------------------ */
+
+/** `GET /busca?q=`. Nenhum contato na resposta: do cliente, só o id, o nome e a mensalidade. */
+export interface BuscaApi {
+  q: string
+  clientes: { id: string; nome: string | null; mrr: number | null; cancelado: boolean; nao_contatar: boolean }[]
+  ciclos: { id: number; id_recorrencia: string; cliente_nome: string | null; status: StatusApi; estado: string; valor_cobranca: number; causa_legivel: string | null; atualizado_em: string }[]
+  limite: number
+}
+
+/** Só os campos conhecidos passam, um a um. */
+export function adaptarBusca(r: BuscaApi): ResultadoBusca {
+  return {
+    clientes: (Array.isArray(r.clientes) ? r.clientes : []).map((c) => ({
+      id: c.id,
+      nome: c.nome?.trim() || c.id,
+      mrr: typeof c.mrr === 'number' ? c.mrr : null,
+      cancelado: c.cancelado === true,
+      nao_contatar: c.nao_contatar === true,
+    })),
+    ciclos: (Array.isArray(r.ciclos) ? r.ciclos : []).map((c) => ({
+      id: c.id,
+      cliente: c.cliente_nome?.trim() || null,
+      id_recorrencia: c.id_recorrencia,
+      status: statusDaTela(c.status),
+      valor_cobranca: c.valor_cobranca,
+      causa_legivel: c.causa_legivel ?? null,
+    })),
   }
 }
 

@@ -7,8 +7,10 @@ import type { AnonimizacaoTitular, ExportacaoTitular, MarcaNaoContatar } from '.
 import { CANAIS_DISPONIVEIS, ErroApi, MODO_REAL, api } from '../../data/api'
 import { AGORA } from '../../data/mock'
 import type { Canal, Configuracao, EmpresaDetalhe, ExplicacaoDecisao, Integracao, Membro, Papel, ResultadoTesteIntegracao } from '../../data/tipos'
+import { INTERVALO_ENTRE_OFERTAS, INTERVALO_PADRAO_ENTRE_OFERTAS } from '../../data/adaptadores'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { paragrafosComNegrito, semMarcasDeNegrito } from '../../lib/textoComNegrito'
 import { Aviso, Bloco, Interruptor, Rotulo, Secao, campo, seletor } from './comuns'
 
 const CANAL: Record<Canal, string> = { whatsapp: 'WhatsApp', email: 'E-mail', sms: 'SMS', sem_canal: 'Sem canal disponível' }
@@ -29,8 +31,16 @@ interface PropsConfig {
 export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
   const [c, setC] = useState<Configuracao>(config)
   const [salvando, setSalvando] = useState(false)
-  useEffect(() => setC(config), [config])
-  const mudou = JSON.stringify(c) !== JSON.stringify(config)
+  // O intervalo é digitado: fica como texto até virar um número válido (de 1 a 365).
+  const [intervalo, setIntervalo] = useState(String(config.intervalo_minimo_ofertas_dias))
+  useEffect(() => {
+    setC(config)
+    setIntervalo(String(config.intervalo_minimo_ofertas_dias))
+  }, [config])
+  const dias = Number(intervalo.trim())
+  const intervaloValido = /^\d{1,3}$/.test(intervalo.trim()) && dias >= INTERVALO_ENTRE_OFERTAS.minimo && dias <= INTERVALO_ENTRE_OFERTAS.maximo
+  const nova: Configuracao = intervaloValido ? { ...c, intervalo_minimo_ofertas_dias: dias } : c
+  const mudou = JSON.stringify(nova) !== JSON.stringify(config)
 
   function mover(i: number, para: number) {
     const canais = [...c.canais]
@@ -44,8 +54,9 @@ export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
     setC({ ...c, canais: tem ? c.canais.filter((x) => x !== canal) : [...c.canais, canal] })
   }
   async function salvar() {
+    if (!intervaloValido) return
     setSalvando(true)
-    await onSalvar(c)
+    await onSalvar(nova)
     setSalvando(false)
   }
 
@@ -55,7 +66,7 @@ export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
       apoio="Como o sistema fala com os seus clientes depois que as 3 tentativas de cobrança falham. Nada é enviado antes disso."
       acoes={
         podeEditar ? (
-          <Button onClick={salvar} disabled={!mudou || salvando}>
+          <Button onClick={salvar} disabled={!mudou || salvando || !intervaloValido}>
             {salvando ? 'Salvando…' : 'Salvar'}
           </Button>
         ) : null
@@ -153,6 +164,32 @@ export function SecaoMensagens({ config, onSalvar, podeEditar }: PropsConfig) {
                 </Button>
               ))}
           </div>
+        ) : null}
+      </Bloco>
+
+      <Bloco
+        titulo="Intervalo entre ofertas de retenção"
+        apoio="Um mesmo cliente recebe no máximo uma oferta de retenção dentro deste intervalo, venha o sinal de onde vier: um evento, a base ou o disparo em lote. Vale para o churn voluntário."
+      >
+        <label className="block max-w-xs">
+          <Rotulo apoio={`De ${INTERVALO_ENTRE_OFERTAS.minimo} a ${INTERVALO_ENTRE_OFERTAS.maximo} dias. Padrão: ${INTERVALO_PADRAO_ENTRE_OFERTAS} dias.`}>Dias entre uma oferta e a próxima</Rotulo>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={INTERVALO_ENTRE_OFERTAS.minimo}
+            max={INTERVALO_ENTRE_OFERTAS.maximo}
+            step={1}
+            value={intervalo}
+            disabled={!podeEditar}
+            aria-invalid={!intervaloValido}
+            onChange={(e) => setIntervalo(e.target.value)}
+            className={campo}
+          />
+        </label>
+        {!intervaloValido ? (
+          <p role="alert" className="mt-2 text-apoio text-[#f5a29a]">
+            Digite um número inteiro de {INTERVALO_ENTRE_OFERTAS.minimo} a {INTERVALO_ENTRE_OFERTAS.maximo}.
+          </p>
         ) : null}
       </Bloco>
     </Secao>
@@ -455,7 +492,8 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
   async function copiarPolitica() {
     if (!politica) return
     try {
-      await navigator.clipboard.writeText(politica)
+      // Vai o texto limpo, sem as marcas do negrito: é o que a empresa cola na política dela.
+      await navigator.clipboard.writeText(semMarcasDeNegrito(politica))
       setCopiado(true)
       setTimeout(() => setCopiado(false), 2500)
     } catch {
@@ -592,11 +630,11 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
 
       <Bloco
         titulo="Por quanto tempo a CRAI guarda"
-        apoio="Prazos padrão até revisão jurídica. O texto das mensagens e a trilha de decisões são apagados numa passagem diária. Os outros dois prazos estão definidos, e a execução automática deles ainda não está ligada."
+        apoio="Prazos padrão até revisão jurídica. O texto das mensagens e a trilha de decisões são apagados numa passagem diária, e os ciclos antigos perdem os identificadores nela. O prazo da base depende do fim do contrato, e a execução automática dele ainda não está ligada."
       >
         <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Prazo rotulo="Texto das mensagens" valor={`${r.mensagens} dias`} apoio="Depois do desfecho; fica só a abordagem" />
-          <Prazo rotulo="Ciclos de cobrança" valor={`${r.ciclos_meses} meses`} apoio="Prazo definido; ainda não executado" />
+          <Prazo rotulo="Ciclos de cobrança" valor={`${r.ciclos_meses} meses`} apoio="Depois do desfecho; saem os identificadores, ficam os valores" />
           <Prazo rotulo="Base de clientes" valor={`Contrato + ${r.base_meses_apos_contrato} meses`} apoio="Prazo definido; ainda não executado" />
           <Prazo rotulo="Trilha de decisões" valor={`${r.trilha_anos} anos`} apoio="Sem dado de contato; apagada depois do prazo" />
         </dl>
@@ -605,14 +643,27 @@ export function SecaoDados({ config, podeEditar }: { config: Configuracao; podeE
       <Bloco titulo="Texto pronto para a sua política de privacidade" apoio="A lei pede que o seu cliente saiba que a CRAI existe e o que ela faz. Cole este parágrafo na sua política.">
         <div className="relative">
           {erroPolitica ? <Aviso tom="danger">{erroPolitica}</Aviso> : null}
-          <textarea
-            readOnly
-            value={politica ?? ''}
-            rows={MODO_REAL ? 14 : 8}
+          <div
+            role="region"
+            tabIndex={0}
             aria-busy={politica === null && !erroPolitica}
-            className="scroll-fino w-full resize-none rounded-[12px] border border-line bg-ink/40 p-4 pr-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none"
             aria-label="Texto para a política de privacidade"
-          />
+            className={cx('scroll-fino w-full overflow-y-auto rounded-[12px] border border-line bg-ink/40 p-4 text-apoio leading-[1.6] text-paper/90 focus:border-amber/60 focus:outline-none', MODO_REAL ? 'max-h-[380px] min-h-[220px]' : 'max-h-[260px] min-h-[140px]')}
+          >
+            {paragrafosComNegrito(politica ?? '').map((paragrafo, i) => (
+              <p key={i} className={i ? 'mt-3' : undefined}>
+                {paragrafo.map((trecho, j) =>
+                  trecho.forte ? (
+                    <strong key={j} className="font-[640] text-paper">
+                      {trecho.texto}
+                    </strong>
+                  ) : (
+                    <span key={j}>{trecho.texto}</span>
+                  ),
+                )}
+              </p>
+            ))}
+          </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button size="sm" variant="ghost" onClick={copiarPolitica} disabled={!politica}>

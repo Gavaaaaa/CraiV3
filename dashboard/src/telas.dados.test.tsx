@@ -68,10 +68,13 @@ describe('dados e privacidade em modo real', () => {
 
   it('o texto para a política é o do backend, com o botão de copiar', async () => {
     const chamadas = await abrir()
-    const campo = (await screen.findByLabelText('Texto para a política de privacidade', {}, ESPERA)) as HTMLTextAreaElement
-    await waitFor(() => expect(campo.value).toContain('Você recebe no máximo uma oferta de retenção a cada 30 dias.'), ESPERA)
-    expect(campo.value).toContain('responda SAIR')
-    expect(campo.value).not.toContain('24 meses')
+    // Rodada 4: o texto deixou de ser um campo com o Markdown cru e aparece formatado.
+    const campo = await screen.findByLabelText('Texto para a política de privacidade', {}, ESPERA)
+    await waitFor(() => expect(campo.textContent).toContain('Você recebe no máximo uma oferta de retenção a cada 30 dias.'), ESPERA)
+    expect(campo.textContent).toContain('responda SAIR')
+    expect(campo.textContent).not.toContain('24 meses')
+    expect(campo.textContent).not.toContain('**')
+    expect([...campo.querySelectorAll('strong')].map((s) => s.textContent)).toEqual(['Mensagens.'])
     expect(chamadas).toContain('GET /titular/texto-para-politica')
     expect((screen.getByRole('button', { name: /Copiar texto/ }) as HTMLButtonElement).disabled).toBe(false)
   })
@@ -154,7 +157,8 @@ describe('dados e privacidade em modo real', () => {
   it('os prazos dizem o que é executado e o que ainda não é', async () => {
     await abrir()
     const bloco = screen.getByText('Por quanto tempo a CRAI guarda').closest('section, div')!.parentElement as HTMLElement
-    expect(within(bloco).getAllByText('Prazo definido; ainda não executado')).toHaveLength(2)
+    expect(within(bloco).getAllByText('Prazo definido; ainda não executado')).toHaveLength(1)
+    expect(within(bloco).getByText('Depois do desfecho; saem os identificadores, ficam os valores')).toBeTruthy()
     expect(within(bloco).getByText('Sem dado de contato; apagada depois do prazo')).toBeTruthy()
   })
 })
