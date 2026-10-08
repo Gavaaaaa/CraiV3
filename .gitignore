@@ -72,7 +72,7 @@ relatorio_*.txt
 # com nome que diga a maquina e o build, ao lado da publicada — nunca por cima.
 app/rodada_*.json
 
-# Artefatos gerados ao rodar o relatorio.py / painel (scripts/painel.py, api/painel.py):
+# Artefatos gerados ao rodar o relatorio.py e as rotas de demonstracao:
 # banco SQLite local e HTML de saida sao estado de execucao, regenerados a
 # cada rodada — nunca versionar.
 app/relatorio_execucao.html
@@ -102,3 +102,8 @@ htmlcov/
 log_treino_*.txt
 
 /docs/interno/
+
+# Passo a passo do README (Como rodar): os bancos da demonstracao e o pacote
+# de modelos baixado ficam na raiz do clone e nunca vao para o repositorio.
+/dados_demo/
+/crai-modelos.zip

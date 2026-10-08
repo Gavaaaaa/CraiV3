@@ -5,7 +5,7 @@ um arquivo de configuração e não deve ser copiado para `.env`.**
 
 O `.env` fica em `app/` e é carregado pelo `crai/api/app.py` (`load_dotenv()`)
 quando a API sobe. Nenhuma variável é necessária para rodar a suíte de testes.
-Para abrir o painel de avaliação localmente, basta `ENV=development`.
+Para abrir o dashboard localmente, com o login de desenvolvimento, basta `ENV=development`.
 
 As 22 variáveis abaixo são as que o antigo `app/.env.example` listava, na mesma
 ordem, agrupadas por assunto.
@@ -22,13 +22,14 @@ placeholder `postgres.abcdefgh:SENHA@`. O arquivo foi removido e o hook
 ## Ambiente
 
 **`ENV`**
-- **O que faz:** com `development` ou `demo`, expõe os endpoints `/simulate/*`,
-  dos quais o painel `/painel` depende. Nesses dois modos, se nenhuma base foi
+- **O que faz:** com `development` ou `demo`, expõe os endpoints `/simulate/*`.
+  Só com `development` existe o login de desenvolvimento (`POST /dev/token`),
+  que o dashboard usa quando roda neste repositório. Nesses dois modos, se nenhuma base foi
   configurada, a API usa um SQLite local (`app/clientes_dev.db`).
 - **Obrigatória:** não.
 - **Sem ela:** vale `production`. Os `/simulate/*` respondem 403 ("Endpoints
-  /simulate/* exigem ENV=development ou ENV=demo") e o painel abre sem conseguir
-  chamar nada.
+  /simulate/* exigem ENV=development ou ENV=demo"), e o login de
+  desenvolvimento não existe (404).
 
 ## IA generativa
 

@@ -32,7 +32,7 @@ deles vem do roteiro do dia.
 - `app/tests/test_config_pricing.py`: teste novo travando o valor e a leitura da env.
 - `app/crai/dunning/recovery_log.py::metricas` ou o futuro `GET /resultado`: a fatura passa a somar a mensalidade ao fee.
 - `docs/CONTRATO_PAINEL.md`, seção 5: `fatura` ganha `mensalidade` e `plano`.
-- `painel/fixtures/resultado.json`: idem.
+- `docs/respostas_de_exemplo/resultado.json`: idem.
 - `docs/CONFIGURACAO.md`, tabela de envs (linha 202): a env nova.
 - Fora do repositório: corrigir a seção 4.2 do Plano de Negócio.
 
@@ -67,7 +67,7 @@ deles vem do roteiro do dia.
 - `app/tests/test_pix_confirmacao.py:279` (docstring cita "15%").
 - `app/crai/api/idempotencia.py:16` (docstring cita `amount * 0.15`).
 - `docs/CONTRATO_PAINEL.md:396-398` (nota sobre o percentual).
-- `painel/fixtures/resultado.json:11`, `:12`, `:45` (regerar).
+- `docs/respostas_de_exemplo/resultado.json:11`, `:12`, `:45` (regerar).
 - `docs/planos/churn_involuntario_sprints.md:50`, `:112`, `:372`, `:381`, `:388`: **histórico de sprint, não alterar**; cita o 0,15 como fato da época.
 - Fora do repositório: nada.
 
@@ -78,7 +78,7 @@ deles vem do roteiro do dia.
 - `app/tests/test_config_pricing.py`: testes da segunda env.
 - `docs/CONFIGURACAO.md:202`: a env nova.
 - `docs/CONTRATO_PAINEL.md`, seção 5: já separa `success_fee_pct_recuperacao` e `success_fee_pct_retencao`, de propósito; só atualizar a nota.
-- `painel/fixtures/resultado.json`: os dois percentuais.
+- `docs/respostas_de_exemplo/resultado.json`: os dois percentuais.
 
 ---
 

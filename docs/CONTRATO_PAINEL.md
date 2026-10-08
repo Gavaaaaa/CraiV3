@@ -1,5 +1,11 @@
 # Contrato da API para o painel da CRAI
 
+> **Nota de 07/10/2026.** O painel de avaliação que consumia este contrato (a página
+> estática em `/painel/v2`, pasta `painel/`) foi retirado do repositório. O dashboard em
+> `dashboard/` usa as rotas listadas no `README.md` da raiz. Este documento fica como
+> registro do contrato de 12/09; as respostas de exemplo foram para
+> `docs/respostas_de_exemplo/` e as bases em CSV para `exemplos/`.
+
 Congelado em 12/09/2026. É o documento que permite construir o painel em qualquer
 stack sem esperar o backend: os dois primeiros endpoints existem hoje e estão
 documentados **lendo o código** (`app/crai/api/app.py`,
@@ -7,17 +13,17 @@ documentados **lendo o código** (`app/crai/api/app.py`,
 `batch_scoring.py`); os três últimos **não existem** e estão especificados aqui
 para implementação na semana seguinte.
 
-Para cada endpoint há uma resposta de exemplo em `painel/fixtures/` (ver
-`painel/README.md`). O consumidor troca entre fixtures e API real por uma única
+Para cada endpoint há uma resposta de exemplo em `docs/respostas_de_exemplo/` (ver
+`docs/respostas_de_exemplo/README.md`). O consumidor troca entre fixtures e API real por uma única
 variável de configuração.
 
 | Endpoint | Estado | Fixture |
 |---|---|---|
-| `POST /clientes/importar` | existe | `painel/fixtures/importar.json` |
-| `GET /insights` | existe | `painel/fixtures/insights.json` |
-| `GET /modelos/status` | **a implementar** | `painel/fixtures/modelos_status.json` |
-| `POST /modelos/retreinar` | **a implementar** | `painel/fixtures/modelos_retreinar.json` |
-| `GET /resultado` | **a implementar** | `painel/fixtures/resultado.json` |
+| `POST /clientes/importar` | existe | `docs/respostas_de_exemplo/importar.json` |
+| `GET /insights` | existe | `docs/respostas_de_exemplo/insights.json` |
+| `GET /modelos/status` | **a implementar** | `docs/respostas_de_exemplo/modelos_status.json` |
+| `POST /modelos/retreinar` | **a implementar** | `docs/respostas_de_exemplo/modelos_retreinar.json` |
+| `GET /resultado` | **a implementar** | `docs/respostas_de_exemplo/resultado.json` |
 
 Além desses, há as **rotas de demonstração** `/simulate/painel/*`, sem
 autenticação e bloqueadas fora de `ENV=development|demo`. Duas delas fazem
@@ -25,8 +31,8 @@ parte deste contrato porque o painel de demonstração as consome (seção 6):
 
 | Endpoint | Estado | Fixture |
 |---|---|---|
-| `POST /simulate/painel/evento-risco` | existe | `painel/fixtures/evento_risco.json` |
-| `POST /simulate/painel/disparo-lote` | existe | `painel/fixtures/disparo_lote.json` |
+| `POST /simulate/painel/evento-risco` | existe | `docs/respostas_de_exemplo/evento_risco.json` |
+| `POST /simulate/painel/disparo-lote` | existe | `docs/respostas_de_exemplo/disparo_lote.json` |
 
 Convenções: JSON em UTF-8; datas em ISO-8601 com fuso (`2026-09-12T14:30:00+00:00`);
 dinheiro em `number` (reais, duas casas), nunca em texto; `null` é um valor com
@@ -91,7 +97,7 @@ Campos esperados no arquivo:
 | `features_used_30d` | não | número ≥ 0 ou vazio |
 | `email` | não | se preenchido, precisa parecer e-mail |
 
-A base de exemplo `painel/exemplos/base_exemplo_clientes.csv` usa nomes
+A base de exemplo `exemplos/base_exemplo_clientes.csv` usa nomes
 próprios de coluna e **precisa** deste mapeamento:
 
 ```json
@@ -405,7 +411,7 @@ correspondente, com a memória de cálculo aberta.
 
 **Query params:** `mes` (`AAAA-MM`, obrigatório).
 
-**Resposta 200:** ver `painel/fixtures/resultado.json`.
+**Resposta 200:** ver `docs/respostas_de_exemplo/resultado.json`.
 
 | Campo | Tipo | Nulo? | Significado |
 |---|---|---|---|
@@ -514,7 +520,7 @@ Antes de 13/09 a rota fixava `on_site_now: true` e não enviava telefone, e o
 canal saía sempre `popup`. Com os dois campos, o canal muda de verdade; o
 padrão (sem telefone, no site) continua dando `popup`.
 
-**Resposta 200** — exemplo real em `painel/fixtures/evento_risco.json`:
+**Resposta 200** — exemplo real em `docs/respostas_de_exemplo/evento_risco.json`:
 
 | Campo | Tipo | Nulo? | Significado |
 |---|---|---|---|
@@ -562,7 +568,7 @@ Uma linha inválida (perfil fora da lista, MRR que não é número, id vazio)
 `cadastro_invalido`. Um item que não é objeto JSON é 422 (requisição
 malformada).
 
-**Resposta 200** — exemplo real em `painel/fixtures/disparo_lote.json`:
+**Resposta 200** — exemplo real em `docs/respostas_de_exemplo/disparo_lote.json`:
 
 ```json
 {

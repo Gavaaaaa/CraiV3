@@ -386,6 +386,10 @@ class TestLinhaDeSaida:
         ({"on_site_now": True}, "popup", False)])
     def test_a_oferta_leva_a_linha_onde_o_cliente_pode_responder(self, cliente, monkeypatch,
                                                                  props, canal, tem_linha):
+        # As rotas `/simulate/*` só respondem em desenvolvimento. O teste liga o modo
+        # ele mesmo: antes dependia de um `.env` com ENV=development na máquina.
+        monkeypatch.setenv("ENV", "development")
+
         async def recusa(*a, **k):
             raise RuntimeError("sem LLM no teste")
         monkeypatch.setattr(va.claude.messages, "create", recusa)

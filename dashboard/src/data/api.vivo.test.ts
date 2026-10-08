@@ -2,8 +2,8 @@
  * Teste de integração AO VIVO: a própria camada `api.ts`, em modo real, contra o backend local.
  *
  * Fora do `npm test` comum. Para rodar:
- *   1. backend no ar com ENV=development (ver docs/interno/COMO_RODAR_DASHBOARD.md);
- *   2. semente da EMPRESA DOS TESTES: python docs/interno/semear_dashboard_demo.py --empresa demo_testes;
+ *   1. backend no ar com ENV=development (ver o README.md da raiz, seção Como rodar);
+ *   2. semente da EMPRESA DOS TESTES: python -m crai.scripts.semear_demo --empresa demo_testes (a partir de app/);
  *   3. npm run test:vivo
  *
  * A EMPRESA DOS TESTES (`demo_testes`). Estes testes geram chaves, escolhem mensagem e gravam
@@ -59,7 +59,7 @@ async function cicloAguardando(lista: CicloResumo[]): Promise<CicloDetalhe> {
       return d
     }
   }
-  throw new Error('Nenhum ciclo aguardando escolha com canal. Rode a semente de novo: python docs/interno/semear_dashboard_demo.py --empresa demo_testes')
+  throw new Error('Nenhum ciclo aguardando escolha com canal. Rode a semente de novo: python -m crai.scripts.semear_demo --empresa demo_testes (a partir de app/)')
 }
 
 // Tudo o que este arquivo faz acontece na empresa dos testes, nunca na da demonstração.

@@ -9,86 +9,87 @@ duas formas de perder receita recorrente:
 
 Em cada caso o sistema diagnostica, decide **se vale agir** pela expectativa de lucro da
 intervenção, e executa. Os pipelines são orquestrados em LangGraph, sobre um backend
-Python com FastAPI. Projeto de Conclusão de Curso em Engenharia de Software.
+Python com FastAPI, com um dashboard em React. Projeto de Conclusão de Curso em Engenharia
+de Software.
 
-## A invariante do produto
+## Como rodar
 
-**Escalonamento humano é zero.** Nenhum caminho do sistema termina em "falar com um
-atendente". Isso não é uma configuração: é garantido em três camadas — uma restrição no
-banco (`CHECK (offer_type <> 'consulta_cs')`), o conjunto `CANAIS_HUMANOS` em
-`crai/config.py`, que torna a ligação do CS inelegível como canal de envio mesmo quando
-ela tem o maior retorno esperado, e testes que reprovam se qualquer uma das duas cair.
+Do clone ao dashboard aberto no navegador, com dados de exemplo. Os comandos são para
+Windows, no PowerShell. No fim ficam duas coisas rodando na máquina:
 
-O comparativo de canal continua mostrando a ligação do CS, com o retorno calculado e o
-motivo do descarte. Mostrar a alternativa descartada é diferente de oferecê-la.
+- o **backend** (a API, com os modelos), em `http://127.0.0.1:8000`;
+- o **dashboard**, em `http://localhost:5173`.
 
-## Rodar
+Nada aqui cobra ninguém nem envia mensagem de verdade: o gateway de pagamento e o envio
+são simulados, e os dados são fictícios.
 
-Pré-requisito: Python 3.11.
+### Pré-requisitos
 
-```bash
-cd app
+[Git](https://git-scm.com/download/win), [Python 3.11](https://www.python.org/downloads/)
+(marque "Add python.exe to PATH" na instalação) e [Node.js 24](https://nodejs.org/) com
+npm 11. Confira:
+
+```powershell
+git --version
+py -3.11 --version
+node --version
+```
+
+### 1. Clone o repositório
+
+```powershell
+git clone https://github.com/Gavaaaaa/CraiV3.git
+cd CraiV3
+```
+
+Os passos seguintes partem dessa pasta (a raiz do repositório). **Cada janela nova do
+PowerShell abre em outra pasta:** os blocos abaixo começam com um `cd` para o clone; troque
+`C:\caminho\para\CraiV3` pelo caminho de verdade (o comando `pwd`, rodado agora, mostra).
+
+### 2. Instale o backend
+
+```powershell
+py -3.11 -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Crie `.env` na raiz do repositório com uma linha, `ENV=development`. A lista completa de
-variáveis está em [`docs/CONFIGURACAO.md`](docs/CONFIGURACAO.md). **Sem
-`ENV=development` ou `ENV=demo`, o painel e os endpoints de simulação respondem 403** —
-é a mesma trava para os dois.
+É o passo mais demorado (vários minutos). Com o ambiente ativo, a linha do PowerShell
+começa com `(.venv)`. A liberação de scripts (`Set-ExecutionPolicy`) e a ativação valem só
+para a janela em que foram rodadas; os blocos dos passos 4 e 5 as repetem.
 
-```bash
-uvicorn crai.api.app:app --reload
-```
+### 3. Baixe os modelos treinados
 
-- **Painel:** http://localhost:8000/painel/v2/ — a barra final importa.
-- **Documentação da API:** http://localhost:8000/docs.
-
-Testes, sempre a partir de `app/`:
-
-```bash
-pytest tests/ -q
-```
-
-Os modelos não vêm no repositório. Para tê-los sem treinar, veja
-[Modelos prontos (download)](#modelos-prontos-download), logo abaixo. Treinar é opcional;
-sem artefatos, o sistema responde por heurística:
-
-```bash
-python -m crai.scripts.preparar_amostra_real
-python -m crai.scripts.train_all --fonte sintetico_calibrado
-```
-
-Antes do primeiro commit, ative o hook que bloqueia segredos:
-`git config core.hooksPath scripts`.
-
-## Modelos prontos (download)
-
-A pasta `app/models/` não é versionada. Num clone limpo o sistema sobe sem modelo nenhum:
-**sem os modelos, ele responde por heurística** (regras fixas no lugar do diagnóstico, da
-previsão de liquidez e do risco). O pacote abaixo traz os modelos de produção já treinados.
-
-- **Download:** <https://github.com/Gavaaaaa/CraiV3/releases/download/modelos-2026-10/crai-modelos.zip>
-- **sha256 esperado do zip:** `6c13b4256f1372d722333005140c726ff9c06bf5db21600e89e78719fdebdbfd`
-
-Em PowerShell, a partir da raiz do repositório:
+Os modelos treinados não são versionados (de `app/models/` o repositório só guarda o
+`calibracao.json`). **Sem os modelos o sistema sobe e responde por
+heurística** (regras fixas no lugar do diagnóstico, da previsão de liquidez e do risco).
+O pacote traz os modelos de produção já treinados.
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/Gavaaaaa/CraiV3/releases/download/modelos-2026-10/crai-modelos.zip" -OutFile crai-modelos.zip
 (Get-FileHash crai-modelos.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
-O valor impresso tem que ser **igual** ao sha256 acima. Só então extraia e confira:
+O valor impresso tem que ser **igual** a este:
+
+```
+6c13b4256f1372d722333005140c726ff9c06bf5db21600e89e78719fdebdbfd
+```
+
+Só então extraia e confira:
 
 ```powershell
 Expand-Archive -Path crai-modelos.zip -DestinationPath app\models -Force
 cd app
 python -m crai.scripts.verificar_modelos
+cd ..
 ```
 
-`verificar_modelos` compara cada arquivo de `app\models` com o manifesto versionado em
-[`docs/modelos/MANIFESTO_MODELOS.json`](docs/modelos/MANIFESTO_MODELOS.json) e diz o que
-falta ou está diferente. Tem que terminar com "Tudo certo: os 18 arquivos batem com o
-manifesto". Com `--zip ..\crai-modelos.zip` ele confere também o arquivo baixado.
+Tem que terminar com "Tudo certo: os 18 arquivos batem com o manifesto". O
+`verificar_modelos` compara cada arquivo com
+[`docs/modelos/MANIFESTO_MODELOS.json`](docs/modelos/MANIFESTO_MODELOS.json); com
+`--zip ..\crai-modelos.zip` ele confere também o arquivo baixado.
 
 **Baixe só deste endereço e sempre confira o sha256 antes de extrair.** Os arquivos
 `.joblib` e `.pkl` executam código ao serem carregados: um pacote adulterado roda o que
@@ -100,75 +101,13 @@ treino. Não tem o estado do bandit de ofertas (o serviço cria o dele), nem os 
 experimentos. Todos foram treinados em dado sintético; o manifesto diz de qual treino veio
 cada um.
 
-## O painel
-
-Cinco abas, servidas como arquivos estáticos a partir de `painel/`, sob a mesma trava de
-ambiente das rotas de simulação. **Nada é calculado no navegador**: cada aba chama a API,
-e a tela desenha o que voltou.
-
-| Aba | O que é | Rota que ela chama |
-|---|---|---|
-| **Cobranças** | O gateway de pagamento do cliente. Dispara uma cobrança e ela é recusada. Nenhum diagnóstico acontece aqui. | `POST /simulate/painel/cobranca-falhada` |
-| **Recuperação** | O churn involuntário inteiro: causa, chance de recuperação, retorno esperado, a explicação fator a fator, o plano de retentativas e o comparativo de canal. | a mesma resposta |
-| **Clientes em risco** | Recebe uma planilha de clientes e devolve o ranking de risco, com a explicação de cada caso. | `POST /simulate/painel/importar` e `GET /simulate/painel/insights` |
-| **Mensagens** | As ofertas candidatas por cliente, a escolhida, o canal e o texto. | `POST /simulate/painel/disparo-lote` |
-| **Visão geral** | O fechamento. **Todo número vem das outras abas**, e a tela declara a origem de cada um. Sem análise, mostra estado vazio. | nenhuma — lê das anteriores |
-
-Como saber que os modelos estão sendo usados: as barras de explicação da aba Recuperação
-são valores SHAP do classificador treinado. Sem os artefatos em `app/models/`, a API
-continua respondendo por heurística e **essas barras vêm vazias**.
-
-### Bases de teste para a demonstração
-
-A aba **Clientes em risco** tem três botões que carregam as bases abaixo direto da API.
-Para usar por conta própria — anexar na tela, abrir no Excel, mandar para alguém — baixe
-daqui:
-
-| Base | O que demonstra | Download |
-|---|---|---|
-| Uso diário | SaaS de uso intenso, 500 clientes. Mediana de 1 dia sem login. Aqui, 7 dias parado já é sinal de abandono. | [`base_uso_diario.csv`](https://github.com/Gavaaaaa/CraiV3/raw/main/painel/exemplos/base_uso_diario.csv) |
-| Uso mensal | SaaS de fechamento mensal, 500 clientes. Mediana de 24 dias sem login. Aqui, 7 dias parado é rotina. | [`base_uso_mensal.csv`](https://github.com/Gavaaaaa/CraiV3/raw/main/painel/exemplos/base_uso_mensal.csv) |
-| Base saudável | 500 clientes, ninguém em risco. Prova que o sistema não grita à toa. | [`base_saudavel.csv`](https://github.com/Gavaaaaa/CraiV3/raw/main/painel/exemplos/base_saudavel.csv) |
-| Colunas próprias | 500 clientes com nomes de coluna diferentes dos esperados, para exercitar o mapeamento na importação. | [`base_exemplo_clientes.csv`](https://github.com/Gavaaaaa/CraiV3/raw/main/painel/exemplos/base_exemplo_clientes.csv) |
-
-**As duas primeiras são o ponto da demonstração, e é preciso usar as duas.** Elas contêm
-os mesmos quatro clientes-âncora — `ANCORA-07-A`, `ANCORA-07-B`, `ANCORA-20-A`,
-`ANCORA-20-B` — com exatamente os mesmos números: mesmo MRR, mesmo perfil de pagador,
-mesma quantidade de funcionalidades usadas, mesmos dias sem login.
-
-Importe uma, procure a âncora, importe a outra e procure de novo. **A mesma cliente sai
-crítica numa base e normal na outra.** O limiar não está no código; sai da distribuição da
-base. É o que a seção [A régua por percentil](#a-régua-por-percentil) explica.
-
-Cada uma das três primeiras tem 12 linhas propositalmente sem dado de atividade, que
-voltam como `dado_insuficiente` — nunca como risco zero.
-
-As bases são geradas com semente fixa por `python -m crai.scripts.gerar_bases_demo`
-(a partir de `app/`): rodar de novo produz arquivos idênticos. São UTF-8 com BOM,
-separador `;` e decimal com vírgula, então abrem no Excel com dois cliques. O detalhamento
-está em [`painel/exemplos/README.md`](painel/exemplos/README.md).
-
-Com o servidor no ar, elas também ficam em
-`http://localhost:8000/painel/v2/exemplos/<arquivo>.csv`.
-
-O painel é bilíngue (português e inglês). Todo texto visível passa pelo dicionário em
-`painel/idioma.js`; nenhuma frase é escrita direto na marcação.
-
-## Dashboard novo (em desenvolvimento)
-
-> **Provisório.** Esta seção descreve o dashboard que está sendo integrado, em `dashboard/`.
-> Ele ainda não substitui o painel acima. Quase todas as páginas já falam com o backend (a
-> tabela abaixo diz quais). O login é de desenvolvimento: uma empresa fictícia, sem senha,
-> que só existe com `ENV=development`.
-
-Pré-requisitos: Python 3.11 (o backend) e Node 24 com npm 11 (testado com Node 24.16).
-
-**1. O backend, em modo de desenvolvimento.** Os bancos da demonstração ficam numa pasta
-própria, para os ciclos fictícios não se misturarem com os dados de `app/data/`:
+### 4. Suba o backend (janela 1)
 
 ```powershell
-cd app
-$dados = (Resolve-Path ..).Path + "\docs\interno\dados_dashboard_demo"
+cd C:\caminho\para\CraiV3
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1
+$dados = (Get-Location).Path + "\dados_demo"
 New-Item -ItemType Directory -Force $dados | Out-Null
 $env:ENV = "development"
 $env:PYTHONIOENCODING = "utf-8"
@@ -176,47 +115,114 @@ $env:CRAI_RECOVERY_DB = "$dados\recovery_cycles.db"
 $env:CRAI_RETENTION_DB = "$dados\retention_cycles.db"
 $env:CRAI_RETRY_STATE = "$dados\pix_retry_state.json"
 $env:CRAI_CLIENTES_DB = "$dados\clientes.db"
+cd app
 python -m uvicorn crai.api.app:app --port 8000
 ```
 
-**2. A semente (ciclos fictícios). Opcional.** Sem ela o dashboard abre vazio, e a página
-**Simulação do gateway** já deixa criar um cliente fictício e uma cobrança pela própria
-tela. Para ter ciclos na lista do Involuntário, em outra janela, com o backend no ar, crie
-uma cobrança Pix que falhou, da empresa fictícia `demo_dashboard`:
+Espere a linha `Uvicorn running on http://127.0.0.1:8000` (uns 20 segundos, enquanto os
+modelos carregam) e deixe a janela aberta.
+
+- `ENV=development` liga o login de desenvolvimento (`POST /dev/token`) e as rotas
+  `/simulate/*`. Sem ele vale o modo de produção: o login de desenvolvimento não existe e
+  o dashboard deste repositório não entra.
+- As quatro variáveis `CRAI_*` põem os bancos da demonstração na pasta `dados_demo/`
+  (ignorada pelo git), separados do que estiver em `app/data/`.
+- A lista completa de variáveis está em [`docs/CONFIGURACAO.md`](docs/CONFIGURACAO.md).
+
+Para conferir, em outra janela: `curl.exe http://127.0.0.1:8000/health` tem que responder
+`"status":"ok"`.
+
+### 5. Crie os dados de exemplo (janela 2)
+
+Com o backend no ar:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/simulate/pix-falhado `
-  -ContentType "application/json" `
-  -Body '{"id_recorrencia": "RN_demo_001", "valor": 1290.0, "codigo_falha": "AM04", "tenant_id": "demo_dashboard"}'
+cd C:\caminho\para\CraiV3
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1
+cd app
+python -m crai.scripts.semear_demo
 ```
 
-Troque `AM04` (saldo insuficiente: o sistema agenda novas tentativas) por `MD01`
-(autorização revogada: vai direto às 3 mensagens) para ver um ciclo aguardando escolha, e
-use `/simulate/pix-pago` com o mesmo `id_recorrencia` para ver um ciclo recuperado. Quem
-desenvolve o projeto tem um script que cria um ciclo em cada situação de uma vez, uma base
-de clientes e dois eventos de comportamento (`docs/interno/semear_dashboard_demo.py`); a
-pasta `docs/interno/` não é versionada.
+Cria, pela própria API, seis clientes fictícios, sete cobranças (em análise, mensagem
+enviada, duas aguardando escolha, uma com telefone e outra com e-mail, sem canal,
+recuperada e descartada) e dois eventos de comportamento. Termina com "Pronto. Abra o dashboard em
+http://localhost:5173/involuntario". Rodar de novo acrescenta mais ciclos.
 
-**3. O dashboard.** Em outra janela:
+O passo é opcional: sem ele o dashboard abre vazio, e a página **Simulação do gateway**
+deixa criar um cliente fictício e uma cobrança pela própria tela.
+
+### 6. Suba o dashboard (janela 3)
 
 ```powershell
-cd dashboard
+cd C:\caminho\para\CraiV3\dashboard
 Set-Content -Path .env.local -Value "VITE_CRAI_API_URL=http://127.0.0.1:8000" -Encoding ascii
 npm install
 npm run dev
 ```
 
-Abra <http://localhost:5173/involuntario>. A porta é a 5173, e o endereço tem que ser
-`localhost` (não `127.0.0.1`): é a única origem que o backend libera em desenvolvimento.
+Espere a linha `Local: http://localhost:5173/` e deixe a janela aberta.
 
-O endereço do backend vem de `VITE_CRAI_API_URL`, em `dashboard/.env.local` (o git ignora o
-arquivo; não existe `.env.example`). **Sem essa variável o dashboard não chama o backend** e
-mostra só dados de demonstração.
+O endereço do backend vem de `VITE_CRAI_API_URL`, em `dashboard/.env.local` (o git ignora
+o arquivo; não existe `.env.example`). **Sem essa variável o dashboard não chama o
+backend** e mostra só dados de demonstração.
 
-**O login de desenvolvimento.** Ao abrir, o dashboard pede `POST /dev/token` e recebe um
-token da empresa fictícia com o papel de dono. O token fica só na memória da página. No
-topo, o seletor "Papel" troca para administrador ou membro, para ver o que cada papel pode
-fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
+### 7. Abra no navegador
+
+<http://localhost:5173>
+
+Tem que ser `localhost`, não `127.0.0.1`: é a única origem que o backend libera em
+desenvolvimento.
+
+### Nas próximas vezes
+
+Só os passos 4 e 6, sem o `Set-Content` e sem o `npm install`. Os dados de exemplo
+continuam na pasta `dados_demo/`; para recomeçar do zero, pare o backend e apague a pasta.
+Ficam fora dela, e não atrapalham recomeçar, o registro das explicações em
+`app/logs/shap/` e o estado do bandit de ofertas em `app/models/bandit_state.json`.
+
+### Testes
+
+```powershell
+# backend, a partir de app/ (com o ambiente ativo)
+pytest tests/ -q
+
+# dashboard, a partir de dashboard/
+npm test
+npm run build
+```
+
+`npm run test:vivo` roda os testes do dashboard contra o backend no ar. Ele usa uma
+segunda empresa fictícia, para não deixar chaves nem escolhas na da demonstração; semeie-a
+antes com `python -m crai.scripts.semear_demo --empresa demo_testes` (a partir de `app/`).
+
+Antes do primeiro commit, ative o hook que bloqueia segredos:
+`git config core.hooksPath scripts`.
+
+### Se algo não funcionar
+
+| O que aparece | Causa provável |
+|---|---|
+| O dashboard abre só com dados de demonstração | Falta `dashboard/.env.local`, ou o `npm run dev` subiu antes de o arquivo existir. Crie o arquivo e suba de novo |
+| "Não foi possível falar com o servidor da CRAI" | O backend não está no ar, ou o endereço aberto foi `127.0.0.1:5173` em vez de `localhost:5173` |
+| "O login de desenvolvimento não existe neste servidor" | O backend subiu sem `ENV=development` |
+| O dashboard abre vazio | O passo 5 não foi rodado. Rode-o, ou use a página Simulação do gateway |
+| As explicações de um ciclo vêm vazias | Os modelos não estão em `app/models/` (passo 3) |
+| `Activate.ps1` é recusado | Rode antes, na mesma janela, `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force` |
+| `.\.venv\Scripts\Activate.ps1` ou `cd app` não é encontrado | A janela não está na pasta do clone. Comece pelo `cd` do bloco |
+
+## O dashboard
+
+Seis páginas no menu (Simulação do gateway, Visão geral, Churn involuntário, Churn
+voluntário, Assistente e API), mais a Configuração. **Nada é calculado no navegador**: cada página chama a API, e a
+tela desenha o que voltou. O tema claro ou escuro se escolhe em Configuração, Aparência.
+
+**O login de desenvolvimento.** Neste repositório o dashboard entra sem senha: ao abrir,
+pede `POST /dev/token` e recebe um token de uma empresa fictícia, com o papel de dono. O
+token fica só na memória da página. No topo, à direita, o seletor de papel (mostra "Dono")
+troca para administrador ou membro, para ver o que cada papel pode fazer. Fora de `ENV=development` essa rota não
+existe e o token é recusado. O login de verdade (conta, empresa e equipe) vem do site da
+CRAI, que fica em outro repositório.
 
 **O que já é real e o que ainda é demonstração:**
 
@@ -231,7 +237,7 @@ fazer. Fora de `ENV=development` essa rota não existe e o token é recusado.
 | Configuração, seção Mensagens (modo, prazo, janela de contato, canais) | Real |
 | Configuração, Dados e privacidade (exportar e anonimizar os dados de um cliente, explicar uma decisão, não contatar, o texto para a política de privacidade, os prazos) | Real. Dos prazos, o expurgo diário executa o das mensagens (90 dias), o do registro de acesso (12 meses), o da trilha de decisões (5 anos) e o dos ciclos (24 meses: os identificadores saem, os valores ficam); o da base depois do contrato (6 meses) está definido e ainda não é executado |
 | Configuração: Empresa, Equipe, Integração (webhook e teste), Notificações | Demonstração |
-| O nome da empresa no topo | Fixo ("Empresa de demonstração"): o login ainda é o de desenvolvimento |
+| O nome da empresa no topo | Fixo ("Empresa de demonstração"): é o login de desenvolvimento |
 | **A tela não marca os blocos fictícios** | Esta tabela é o registro do que é real. A etiqueta "Demonstração" só aparece na Simulação do gateway e nos dados simulados que ela cria. Para religar as etiquetas nos outros blocos, ver abaixo |
 
 **A tela se atualiza sozinha.** Com o backend ligado, a Visão geral, o Involuntário e o
@@ -244,10 +250,11 @@ aparecer. A consulta para com a aba do navegador escondida.
 
 **As etiquetas "Demonstração".** A tela não marca mais os blocos que usam dado fictício: o
 que é real e o que não é está na tabela acima. O mecanismo continua no código, desligado.
-Para religar, acrescente uma linha ao `dashboard/.env.local` e suba o `npm run dev` de novo:
+Para religar, acrescente uma linha ao `dashboard/.env.local` (o comando abaixo é a partir da
+raiz do repositório) e suba o `npm run dev` de novo:
 
 ```powershell
-Add-Content -Path .env.local -Value "VITE_CRAI_MOSTRAR_DEMONSTRACAO=1" -Encoding ascii
+Add-Content -Path dashboard\.env.local -Value "VITE_CRAI_MOSTRAR_DEMONSTRACAO=1" -Encoding ascii
 ```
 
 Com ela, todo bloco que ainda usa dado fictício volta a mostrar a etiqueta (só com o backend
@@ -258,10 +265,44 @@ as marcas dos dados simulados aparecem sempre.
 O envio das mensagens e o gateway de pagamento são simulados em qualquer caso: nenhum
 WhatsApp ou e-mail sai de verdade, e nenhuma cobrança real é feita.
 
-Testes do dashboard, a partir de `dashboard/`: `npm run build`, `npm test` e, com o backend
-no ar, `npm run test:vivo`. O teste ao vivo usa uma segunda empresa fictícia, `demo_testes`,
-para não deixar chaves nem escolhas na empresa da demonstração; ela precisa ter ciclos
-(o script de semente aceita `--empresa demo_testes`).
+## Bases de exemplo para a planilha de clientes
+
+A página **Voluntário** recebe uma planilha de clientes (CSV ou XLSX) e devolve o risco de
+cada um. As bases abaixo servem para experimentar:
+
+| Base | O que demonstra | Arquivo |
+|---|---|---|
+| Uso diário | SaaS de uso intenso, 500 clientes. Mediana de 1 dia sem login. Aqui, 7 dias parado já é sinal de abandono. | [`base_uso_diario.csv`](exemplos/base_uso_diario.csv) |
+| Uso mensal | SaaS de fechamento mensal, 500 clientes. Mediana de 24 dias sem login. Aqui, 7 dias parado é rotina. | [`base_uso_mensal.csv`](exemplos/base_uso_mensal.csv) |
+| Base saudável | 500 clientes, ninguém em risco. Prova que o sistema não grita à toa. | [`base_saudavel.csv`](exemplos/base_saudavel.csv) |
+| Colunas próprias | 500 clientes com nomes de coluna diferentes dos esperados. Só importa pela API (`POST /clientes/importar`), com o `mapeamento` descrito em `exemplos/README.md`; a tela não tem o mapeamento. | [`base_exemplo_clientes.csv`](exemplos/base_exemplo_clientes.csv) |
+
+**As duas primeiras se usam em par.** Elas contêm os mesmos quatro clientes-âncora —
+`ANCORA-07-A`, `ANCORA-07-B`, `ANCORA-20-A`, `ANCORA-20-B` — com exatamente os mesmos
+números: mesmo MRR, mesmo perfil de pagador, mesma quantidade de funcionalidades usadas,
+mesmos dias sem login. Importe uma, procure a âncora, importe a outra e procure de novo:
+**a mesma cliente sai crítica numa base e normal na outra.** O limiar não está no código;
+sai da distribuição da base. É o que a seção
+[A régua por percentil](#a-régua-por-percentil) explica.
+
+Cada uma das três primeiras tem 12 linhas propositalmente sem dado de atividade, que
+voltam como `dado_insuficiente` — nunca como risco zero.
+
+As bases são geradas com semente fixa por `python -m crai.scripts.gerar_bases_demo`
+(a partir de `app/`): rodar de novo produz arquivos idênticos. São UTF-8 com BOM,
+separador `;` e decimal com vírgula, então abrem no Excel com dois cliques. O detalhamento
+está em [`exemplos/README.md`](exemplos/README.md).
+
+## A invariante do produto
+
+**Escalonamento humano é zero.** Nenhum caminho do sistema termina em "falar com um
+atendente". Isso não é uma configuração: é garantido em três camadas — uma restrição no
+banco (`CHECK (offer_type <> 'consulta_cs')`), o conjunto `CANAIS_HUMANOS` em
+`crai/config.py`, que torna a ligação do CS inelegível como canal de envio mesmo quando
+ela tem o maior retorno esperado, e testes que reprovam se qualquer uma das duas cair.
+
+O comparativo de canal continua mostrando a ligação do CS, com o retorno calculado e o
+motivo do descarte. Mostrar a alternativa descartada é diferente de oferecê-la.
 
 ## Os dois pipelines
 
@@ -419,7 +460,7 @@ régua). `app/crai/churn_voluntary/README_treino.md` explica como regenerar o ar
 zero.
 
 Os artefatos ficam em `app/models/` e **não são versionados**: baixe o pacote pronto em
-[Modelos prontos (download)](#modelos-prontos-download). Sem eles o sistema usa
+[Baixe os modelos treinados](#3-baixe-os-modelos-treinados). Sem eles o sistema usa
 fallbacks — e a ausência aparece na tela, não em silêncio.
 
 ## As rotas
@@ -442,9 +483,9 @@ da URL nem do corpo); "chave" é a chave de API da empresa (`crai_live_...`).
 | Assistente | `POST /assistente` | Token |
 | Operação | `GET /health` | Pública (com token, diz também a base da empresa) |
 | Só em desenvolvimento | `POST /dev/token` (só com `ENV=development`); `POST /simulate/pix-falhado`, `/simulate/pix-pago`, `/simulate/pix-estornado`, `/simulate/resposta-sair`, `/simulate/payment-failed`, `/simulate/churn-risk` | Quem desenvolve |
-| Painel antigo | `/simulate/painel/` + `ambiente`, `cobranca-falhada`, `evento-risco`, `disparo-lote`, `importar`, `insights` | A página `/painel/v2` |
+| Demonstração do motor | `/simulate/painel/` + `ambiente`, `cobranca-falhada`, `evento-risco`, `disparo-lote`, `importar`, `insights` | Quem desenvolve e os testes. Rodam os pipelines inteiros numa chamada só; o nome vem do painel de avaliação, que foi retirado |
 
-Tudo em `/simulate/*` e o painel antigo exigem `ENV=development` ou `ENV=demo`. As rotas do
+Tudo em `/simulate/*` exige `ENV=development` ou `ENV=demo`. As rotas do
 dashboard exigem o token de login, e cada uma lê e grava só o que é da empresa do token: o
 identificador de outra empresa responde 404, igual ao que não existe. A chave de API vale
 só nas cinco rotas marcadas acima (`POST /eventos` e as quatro da API de clientes); nas
@@ -459,12 +500,15 @@ o pipeline consome — o escopo exato dessa validação está declarado em `app/
 | Pasta | O que tem |
 |---|---|
 | `app/` | O sistema: pacote `crai/` (API, agentes, modelos, integrações), `tests/`, `docs/DATA_CARD.md` e as evidências de treino. |
-| `painel/` | O dashboard servido em `/painel/v2`: `index.html`, `estilo.css`, `idioma.js`, `api.js`, `render.js` e `img/`. Mais `exemplos/` com bases de clientes em CSV e `fixtures/` com uma resposta de exemplo por endpoint. |
+| `dashboard/` | O dashboard (React, Vite, Tailwind), com os testes dele. Fala com a API pelo endereço em `VITE_CRAI_API_URL`. |
+| `exemplos/` | Bases de clientes em CSV para experimentar a importação. |
 | `docs/` | Limitações, configuração, estrutura, contrato do painel, registro da migração, planos e histórico. |
 | `scripts/` | O hook de pre-commit. |
 
-O mapa arquivo a arquivo está em [`docs/ESTRUTURA.md`](docs/ESTRUTURA.md). O contrato de
-resposta de cada endpoint está em [`docs/CONTRATO_PAINEL.md`](docs/CONTRATO_PAINEL.md). Se
+O mapa arquivo a arquivo está em [`docs/ESTRUTURA.md`](docs/ESTRUTURA.md). O contrato da API
+de clientes está em [`docs/CONTRATO_CLIENTES_API.md`](docs/CONTRATO_CLIENTES_API.md);
+[`docs/CONTRATO_PAINEL.md`](docs/CONTRATO_PAINEL.md) é o registro do contrato de 12/09/2026,
+de antes do dashboard. Se
 procura algo que existia no repositório antigo, veja
 [`docs/MIGRACAO_FEITA.md`](docs/MIGRACAO_FEITA.md).
 

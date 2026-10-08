@@ -7,7 +7,7 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 
 | Caminho | O que é |
 |---|---|
-| `crai/api/` | A API FastAPI (`app.py`): webhooks, endpoints do self-service, `/simulate/*` e o painel de avaliação em `/painel` (`painel.py`). |
+| `crai/api/` | A API FastAPI (`app.py`): webhooks, endpoints do self-service, `/simulate/*` e as rotas do dashboard. |
 | `crai/agent/` | O grafo do churn involuntário: `workflow.py`, `main_agent.py`, `state.py`, a tradução de códigos do PSP (`pix_codes.py`) e o provedor de perfil do cliente (`perfil_provider.py`). |
 | `crai/dunning/` | Cobrança e retentativa: `pix_automatico_retry.py` (regras do BACEN), `dunning_engine.py` (mensagens), `recovery_log.py`, `retry_state.py`. |
 | `crai/dunning/legacy_card/` | Código de cartão **desativado**, mantido de propósito: `tests/test_payment_isolation.py` prova que o pipeline ativo não o importa. Não apagar. |
@@ -16,7 +16,7 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 | `crai/integrations/` | Gateways e canais: `payment_gateway.py`, `pagarme_gateway.py`, `whatsapp_sender.py`, `hubspot_crm.py`, `email_sender.py`. Todos simulados por default. |
 | `crai/accounts/` | Validação do JWT emitido pelo Supabase Auth (`supabase_auth.py`; contrato em `README.md`). |
 | `crai/security/` | Criptografia de campos sensíveis (`tokenization.py`). |
-| `crai/scripts/` | Linha de comando: `train_all.py`, `preparar_amostra_real.py`, `sanity_check_fora_do_dominio.py`, `gerar_readme_treino.py`, `relatorio.py`. |
+| `crai/scripts/` | Linha de comando: `train_all.py`, `preparar_amostra_real.py`, `sanity_check_fora_do_dominio.py`, `gerar_readme_treino.py`, `relatorio.py`, `verificar_modelos.py`, `empacotar_modelos.py`, `gerar_bases_demo.py` e `semear_demo.py` (os dados de exemplo do dashboard). |
 | `crai/config.py` | Parâmetros de negócio lidos do ambiente, com default. |
 | `tests/` | A suíte inteira (`pytest tests/ -q`). |
 | `docs/DATA_CARD.md` | As fontes de dado real, as licenças e o modelo causal dos rótulos sintéticos. |
@@ -28,11 +28,17 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 | `requirements.txt`, `requirements-lock.txt` | **`requirements.txt` é a fonte da verdade**: fixa as versões gravadas nos `meta.json` de todos os artefatos publicados (numpy 1.26.4, sklearn 1.5.2, xgboost 2.1.1, torch 2.13.0+cpu, prophet 1.4.0). O lock é um `pip freeze` de outro ambiente (Python 3.12; numpy 2.4.6, shap 0.52.0) que nenhum artefato usou — mantido como registro, com cabeçalho dizendo isso; não instalar por ele. Versão fixada garante que o artefato recarrega igual e que classificador, liquidez e voluntário treinam igual (medido em três máquinas, quarta casa); **não** reproduz o autoencoder, que varia entre máquinas com as mesmas versões (`docs/LIMITACOES.md`). |
 | `test_pipeline.py` | Roda cenários dos dois pipelines de ponta a ponta, sem serviços externos. |
 
-## `painel/` — o dashboard (ainda não construído)
+## `dashboard/` — o dashboard
 
-Reservado para o dashboard novo; a stack ainda está em decisão. Hoje só tem
-`exemplos/base_exemplo_clientes.csv`, uma base sintética de 500 clientes vinda
-da beta descartada (`mvp-crai`).
+O dashboard da CRAI (React, Vite, Tailwind). Fala com a API pelo endereço em
+`VITE_CRAI_API_URL`. Como rodar: o começo do `README.md` da raiz.
+
+## `exemplos/` — bases de clientes em CSV
+
+Quatro bases sintéticas de 500 clientes para o `POST /clientes/importar` (ver
+`exemplos/README.md`). A pasta `painel/`, que guardava o painel de avaliação
+antigo, foi retirada; as respostas de exemplo que ficavam nela estão em
+`docs/respostas_de_exemplo/`.
 
 ## `docs/` — documentação do projeto
 
@@ -41,6 +47,7 @@ da beta descartada (`mvp-crai`).
 | `LIMITACOES.md` | O que é real, o que é simulado e o que o sistema ainda não prova. |
 | `CONFIGURACAO.md` | As variáveis de ambiente, para montar o `.env` local do zero. |
 | `ESTRUTURA.md` | Este arquivo. |
+| `respostas_de_exemplo/` | Uma resposta de exemplo por endpoint do contrato de 12/09 (`CONTRATO_PAINEL.md`). |
 | `MIGRACAO_FEITA.md` | O que a migração para o CraiV3 trouxe, apagou e moveu. |
 | `MIGRACAO_CRAIV3.md` | O roteiro que conduziu essa migração. |
 | `planos/` | Os planos de trabalho: sprints, os dois pipelines, onboarding e o prompt de auditoria. |

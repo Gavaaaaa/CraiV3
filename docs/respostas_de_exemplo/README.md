@@ -1,13 +1,14 @@
-# painel/
+# docs/respostas_de_exemplo/
 
-Aqui vai o dashboard da CRAI, quando a stack estiver decidida. Por enquanto a
-pasta guarda o que o dashboard vai consumir, independente de stack:
+Uma resposta de exemplo por endpoint, no formato exato do contrato em
+[`docs/CONTRATO_PAINEL.md`](../CONTRATO_PAINEL.md). Servem para construir e
+testar uma tela sem backend e sem Supabase.
 
-- **`fixtures/`** — uma resposta de exemplo por endpoint, no formato exato do
-  contrato em `docs/CONTRATO_PAINEL.md`. Servem para construir e testar a tela
-  sem backend e sem Supabase.
-- **`exemplos/`** — bases de clientes em CSV para o `POST /clientes/importar`
-  (ver `exemplos/README.md`).
+Estes arquivos ficavam em `painel/fixtures/`, junto do painel de avaliação (a
+página estática servida em `/painel/v2`). O painel foi retirado do repositório:
+o que ele mostrava está no dashboard, em `dashboard/`. As bases de clientes em
+CSV que ficavam em `painel/exemplos/` estão em [`exemplos/`](../../exemplos/README.md),
+na raiz.
 
 ## As fixtures
 
@@ -34,7 +35,7 @@ documentadas.
 O consumidor escolhe a fonte de dados por **uma** variável de ambiente, e só
 por ela. Sugestão de nome: `CRAI_API_BASE`.
 
-- vazia ou ausente → lê `painel/fixtures/<endpoint>.json`;
+- vazia ou ausente → lê `docs/respostas_de_exemplo/<endpoint>.json`;
 - definida (ex.: `http://localhost:8000`) → chama a API real com o header
   `Authorization: Bearer <token do Supabase>`.
 

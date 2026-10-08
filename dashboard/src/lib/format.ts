@@ -23,6 +23,8 @@ export const fmt = {
   numero: (v: number) => numero.format(v),
   pontos: (v: number, casas = 0) => `${v.toFixed(casas).replace('.', ',')}%`,
   dataCurta: (iso: string) => dataCurta.format(new Date(iso)).replace('.', ''),
+  /** "12 de ago de 2026": a data curta com o ano dela. */
+  dataComAno: (iso: string) => `${dataCurta.format(new Date(iso)).replace('.', '')} de ${new Date(iso).getFullYear()}`,
   dataHora: (iso: string) => dataHora.format(new Date(iso)).replace('.', ''),
   dataLonga: (d: Date) => {
     const s = dataLonga.format(d)

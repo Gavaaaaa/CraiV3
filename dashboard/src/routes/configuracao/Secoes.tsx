@@ -209,7 +209,7 @@ export function SecaoEmpresa({ empresa }: { empresa: EmpresaDetalhe | null }) {
           <Dado rotulo="Nome" valor={empresa?.nome} />
           <Dado rotulo="Plano" valor={empresa ? (empresa.plano === 'premium' ? 'Premium (recuperação + retenção)' : 'Essencial (recuperação)') : undefined} />
           <Dado rotulo="CNPJ" valor={empresa?.cnpj_mascarado} apoio="Mascarado aqui por segurança" />
-          <Dado rotulo="Cliente da CRAI desde" valor={empresa ? fmt.dataCurta(empresa.desde) + ' de 2026' : undefined} />
+          <Dado rotulo="Cliente da CRAI desde" valor={empresa ? fmt.dataComAno(empresa.desde) : undefined} />
         </dl>
       </Bloco>
       <Bloco titulo="Nas mensagens" apoio="Toda mensagem sai em nome da sua empresa, nunca da CRAI. O cliente final não vê a CRAI.">

@@ -33,7 +33,7 @@ from crai.api.app import TENANT_PAINEL
 from crai.churn_voluntary import clientes_importados as ci
 from crai.churn_voluntary import retention_log as rl
 
-EXEMPLOS = Path(__file__).resolve().parents[2] / "painel" / "exemplos"
+EXEMPLOS = Path(__file__).resolve().parents[2] / "exemplos"
 
 
 @pytest.fixture(autouse=True)

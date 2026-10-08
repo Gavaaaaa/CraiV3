@@ -1,4 +1,4 @@
-# painel/exemplos/ — bases de clientes para demonstração
+# exemplos/ — bases de clientes para demonstração
 
 Quatro CSV para o `POST /clientes/importar`. As três primeiras são geradas por
 `python -m crai.scripts.gerar_bases_demo` (a partir de `app/`), com semente

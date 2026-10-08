@@ -182,7 +182,12 @@ class TestSequenciaPelasRotas:
         # O diagnóstico em linguagem simples, com as contribuições do SHAP gravadas.
         diag = detalhe["diagnostico"]
         assert diag and diag["explicacao"]
-        assert diag["contribuicoes"] and len(diag["contribuicoes"]) <= 5
+        # Sem os modelos em `models/` (clone limpo, antes do download do pacote) o
+        # diagnóstico sai da heurística, que não tem contribuição por fator: a lista
+        # vem vazia, e isso é o comportamento declarado, não um defeito.
+        if getattr(workflow_module._classifier, "is_fitted", False):
+            assert diag["contribuicoes"], "com o modelo carregado, o SHAP tem de vir gravado"
+        assert len(diag["contribuicoes"]) <= 5
         for item in diag["contribuicoes"]:
             assert " = " not in item["fator"], item
         assert detalhe["trilha_ambigua"] is False

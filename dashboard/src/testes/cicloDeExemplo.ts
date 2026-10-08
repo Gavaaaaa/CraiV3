@@ -1,7 +1,7 @@
 /**
  * Um ciclo de exemplo, na forma exata do backend: a resposta de `GET /ciclos/2` e a linha dele
  * em `GET /ciclos`, capturadas do backend local em 04/10/2026 com a semente de demonstração
- * (`docs/interno/semear_dashboard_demo.py`, só dados fictícios). Serve aos testes de tela que
+ * (`app/crai/scripts/semear_demo.py`, só dados fictícios). Serve aos testes de tela que
  * abrem o painel de um ciclo em MODO REAL.
  */
 import type { CicloApi, CicloDetalheApi } from '../data/adaptadores'

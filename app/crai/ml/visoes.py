@@ -80,7 +80,7 @@ JANELA_DIAS = 180
 # ══════════════════════════════════════════════════════════════════════════
 
 # Vocabulário de falha de Pix Automático e boleto. Os quatro primeiros são os
-# códigos que o painel já traduz (`CAUSA_K` em `painel/render.js`); o quinto é
+# códigos que o dashboard já traduz para texto; o quinto é
 # o resíduo. Os códigos de cartão da v1 (`expired_card`, `card_declined`,
 # `do_not_honor`) saíram: a CRAI não opera cartão em lugar nenhum.
 CAUSAS_FALHA = [

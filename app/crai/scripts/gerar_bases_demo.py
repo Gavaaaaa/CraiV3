@@ -1,6 +1,6 @@
 """crai/scripts/gerar_bases_demo.py — as bases de demonstração da régua da base.
 
-Gera TRÊS CSV de 500 clientes cada em `painel/exemplos/`, com semente fixa
+Gera TRÊS CSV de 500 clientes cada em `exemplos/` (raiz do repositório), com semente fixa
 (rodar duas vezes produz arquivos byte a byte idênticos), nas colunas que
 `POST /clientes/importar` espera sem `mapeamento`:
 
@@ -38,7 +38,7 @@ import random
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent      # app/
-DESTINO = BASE_DIR.parent / "painel" / "exemplos"
+DESTINO = BASE_DIR.parent / "exemplos"
 
 SEMENTE = 20260912
 N_CLIENTES = 500

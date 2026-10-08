@@ -2149,13 +2149,16 @@ def _build_fake_stripe_event(p: SimulatePayment) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# PAINEL DE AVALIACAO (`GET /painel`)
+# ROTAS DE DEMONSTRACAO (`/simulate/painel/*`)
 #
-# Console que exercita esta mesma API a partir do navegador: cada botao chama
-# uma das rotas abaixo, que rodam os grafos e os modulos REAIS e devolvem o
-# estado final. Existe porque `/docs` responde JSON cru, e quem precisa avaliar
-# o sistema -- uma banca, uma integracao sendo considerada -- nao deveria ter
-# de ler JSON para ver o raciocinio do agente.
+# Rodam os grafos e os modulos REAIS e devolvem o estado final em uma chamada
+# so: a cobranca que falhou com o diagnostico inteiro, o evento de risco com as
+# candidatas, a importacao e o disparo em lote. Nasceram para o painel de
+# avaliacao, a pagina estatica que era servida em `/painel/v2` (pasta `painel/`,
+# retirada do repositorio; o que ela mostrava esta no dashboard, em
+# `dashboard/`). As rotas ficaram porque os testes do motor as usam para
+# exercitar o caminho inteiro, e o nome `painel` ficou no endereco para nao
+# mudar o contrato delas.
 #
 # Tudo aqui passa por `_require_simulation_env()`: so responde com
 # ENV=development ou ENV=demo, igual ao resto de `/simulate/*`. Nenhuma destas
@@ -2249,44 +2252,10 @@ OFERTA_LEGIVEL = {"desconto_10": "Oferta: desconto de 10%",
                   "pix_boleto_flash": "Oferta: Pix / Boleto Flash"}
 
 
-
-
-# O painel novo mora em `painel/` na raiz do repositorio (index.html,
-# estilo.css, idioma.js, api.js, render.js, img/, e as fixtures e os CSVs de
-# exemplo que a tela consome). E servido como estatico em /painel/v2 enquanto a
-# pagina antiga em GET /painel continua no ar; quando ela for aposentada, este
-# mount passa para /painel. Um mount nao passa pelas dependencies de rota, entao
-# a trava de ambiente entra no proprio ASGI: fora de ENV=development|demo, 403
-# com o mesmo detalhe de `_require_simulation_env()`.
-from fastapi.staticfiles import StaticFiles                      # noqa: E402
-
-PASTA_PAINEL = Path(__file__).resolve().parents[3] / "painel"
-
-
-class _EstaticosDoPainel(StaticFiles):
-    """StaticFiles atras de `_require_simulation_env()`."""
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            try:
-                _require_simulation_env()
-            except HTTPException as e:
-                resposta = JSONResponse({"detail": e.detail},
-                                        status_code=e.status_code)
-                await resposta(scope, receive, send)
-                return
-        await super().__call__(scope, receive, send)
-
-
-app.mount("/painel/v2",
-          _EstaticosDoPainel(directory=PASTA_PAINEL, html=True),
-          name="painel_v2")
-
-
 @app.get("/simulate/painel/ambiente")
 async def painel_ambiente():
-    """O que esta ligado nesta execucao -- o painel mostra no cabecalho para
-    nunca dar a entender que rodou com mais do que realmente tinha."""
+    """O que esta ligado nesta execucao (ambiente, modelos, modelo de linguagem),
+    para quem chama nunca supor que rodou com mais do que realmente tinha."""
     _require_simulation_env()
     from ..ml.failure_classifier import FailureClassifier
     return JSONResponse({
