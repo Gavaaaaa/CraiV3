@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { IconAlert, IconRefresh } from '../icons/Icons'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 import { Button } from './Button'
 
 /** Erro ao carregar: diz o que houve, em português, e oferece tentar de novo. */
@@ -11,11 +12,11 @@ export function ErroCarregar({ mensagem, onTentar, className }: { mensagem: stri
         <IconAlert width={20} height={20} />
       </span>
       <div>
-        <div className="text-normal font-[600] text-paper">Não deu para carregar</div>
-        <p className="t-apoio mt-1 max-w-md text-silver">{mensagem} Os seus dados continuam guardados; só a tela não conseguiu buscá-los agora.</p>
+        <div className="text-normal font-[600] text-paper">{t('Não deu para carregar')}</div>
+        <p className="t-apoio mt-1 max-w-md text-silver">{mensagem} {t('Os seus dados continuam guardados; só a tela não conseguiu buscá-los agora.')}</p>
       </div>
       <Button size="sm" variant="ghost" onClick={onTentar}>
-        <IconRefresh width={15} height={15} /> Tentar de novo
+        <IconRefresh width={15} height={15} /> {t('Tentar de novo')}
       </Button>
     </div>
   )
@@ -38,7 +39,7 @@ export function Vazio({ titulo, texto, acao, icone, className }: { titulo: strin
 /** Esqueleto de carregamento, com a altura do que vai chegar. */
 export function Carregando({ altura = 320, className }: { altura?: number; className?: string }) {
   return (
-    <div className={cx('flex flex-col gap-3', className)} style={{ minHeight: altura }} aria-busy="true" aria-label="Carregando">
+    <div className={cx('flex flex-col gap-3', className)} style={{ minHeight: altura }} aria-busy="true" aria-label={t('Carregando')}>
       <div className="h-4 w-1/3 animate-pulse rounded bg-paper/[0.07]" />
       <div className="h-3 w-1/2 animate-pulse rounded bg-paper/[0.05]" />
       <div className="mt-4 flex-1 animate-pulse rounded-[12px] bg-paper/[0.04]" />

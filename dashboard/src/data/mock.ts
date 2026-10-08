@@ -23,6 +23,7 @@ import type {
   PontoSerie,
   StatusTela,
 } from './tipos'
+import { t } from '../lib/idioma'
 
 /** "Agora" fixo, para a tela ficar estável enquanto os dados são de mentira. */
 export const AGORA = new Date('2026-09-30T14:20:00-03:00')
@@ -37,11 +38,11 @@ function d(dias: number, hora = 9): string {
 export const empresa: Empresa = { nome: 'NimbusFlow Tecnologia', plano: 'premium', papel: 'owner' }
 
 export const CAUSA_LEGIVEL: Record<CausaFalha, string> = {
-  insufficient_funds: 'Saldo insuficiente',
-  limit_exceeded: 'Limite do Pix excedido',
-  authorization_revoked: 'Autorização revogada',
-  processing_error: 'Erro no processamento',
-  generic_decline: 'Recusa sem motivo informado',
+  insufficient_funds: t('Saldo insuficiente'),
+  limit_exceeded: t('Limite do Pix excedido'),
+  authorization_revoked: t('Autorização revogada'),
+  processing_error: t('Erro no processamento'),
+  generic_decline: t('Recusa sem motivo informado'),
 }
 
 export function statusDoEstado(estado: EstadoCiclo, executadas: number): StatusTela {
@@ -65,10 +66,10 @@ interface Base {
 }
 
 const base: Base[] = [
-  { id: 41, cliente: 'Studio Vetor Ltda.', rec: 'RN_7f3a9c21', valor: 1290, causa: 'insufficient_funds', estado: 'recobrando', exec: 0, aberto: 0, prox: [1, 'Tentativa 1 no dia provável de saldo'] },
-  { id: 40, cliente: 'Padaria do Bairro ME', rec: 'RN_2b81de04', valor: 349.9, causa: 'insufficient_funds', estado: 'recobrando', exec: 1, aberto: -2, prox: [2, 'Tentativa 2 agendada'] },
-  { id: 39, cliente: null, rec: 'RN_9e0c44f7', valor: 2480, causa: 'processing_error', estado: 'recobrando', exec: 2, aberto: -4, prox: [1, 'Tentativa 3 agendada'] },
-  { id: 38, cliente: 'Clínica Horizonte', rec: 'RN_c31a77b2', valor: 4900, causa: 'insufficient_funds', estado: 'aguardando_escolha', exec: 3, aberto: -7, prox: [0, 'Escolha da mensagem: 6 h 40 min restantes'] },
+  { id: 41, cliente: 'Studio Vetor Ltda.', rec: 'RN_7f3a9c21', valor: 1290, causa: 'insufficient_funds', estado: 'recobrando', exec: 0, aberto: 0, prox: [1, t('Tentativa 1 no dia provável de saldo')] },
+  { id: 40, cliente: 'Padaria do Bairro ME', rec: 'RN_2b81de04', valor: 349.9, causa: 'insufficient_funds', estado: 'recobrando', exec: 1, aberto: -2, prox: [2, t('Tentativa {n} agendada', { n: 2 })] },
+  { id: 39, cliente: null, rec: 'RN_9e0c44f7', valor: 2480, causa: 'processing_error', estado: 'recobrando', exec: 2, aberto: -4, prox: [1, t('Tentativa {n} agendada', { n: 3 })] },
+  { id: 38, cliente: 'Clínica Horizonte', rec: 'RN_c31a77b2', valor: 4900, causa: 'insufficient_funds', estado: 'aguardando_escolha', exec: 3, aberto: -7, prox: [0, t('Escolha da mensagem: 6 h 40 min restantes')] },
   { id: 37, cliente: 'Loja Marés', rec: 'RN_5d2e19aa', valor: 799, causa: 'authorization_revoked', estado: 'mensagem_enviada', exec: 0, aberto: -1 },
   { id: 36, cliente: 'Escola Aurora', rec: 'RN_a8f06c3d', valor: 1890, causa: 'limit_exceeded', estado: 'mensagem_enviada', exec: 3, aberto: -9 },
   { id: 35, cliente: 'Agência Norte', rec: 'RN_e4b2c910', valor: 3200, causa: 'insufficient_funds', estado: 'recuperado', exec: 2, aberto: -6 },
@@ -76,7 +77,7 @@ const base: Base[] = [
   { id: 33, cliente: 'Consultório Vida', rec: 'RN_77aa02bd', valor: 1150, causa: 'insufficient_funds', estado: 'recuperado', exec: 3, aberto: -14 },
   { id: 32, cliente: null, rec: 'RN_b06e3f12', valor: 2100, causa: 'generic_decline', estado: 'perdido', exec: 3, aberto: -41 },
   { id: 31, cliente: 'Mercado Sol', rec: 'RN_f2d8a1c4', valor: 420, causa: 'insufficient_funds', estado: 'descartado', exec: 0, aberto: -3 },
-  { id: 30, cliente: 'Cliente fictício · Ana Souza', rec: 'RN_sim_0001', valor: 300, causa: 'insufficient_funds', estado: 'recobrando', exec: 1, aberto: -1, prox: [2, 'Tentativa 2 (simulação)'], simulado: true },
+  { id: 30, cliente: 'Cliente fictício · Ana Souza', rec: 'RN_sim_0001', valor: 300, causa: 'insufficient_funds', estado: 'recobrando', exec: 1, aberto: -1, prox: [2, t('Tentativa {n} (simulação)', { n: 2 })], simulado: true },
 ]
 
 export const ciclos: CicloResumo[] = base.map((b) => ({
@@ -132,22 +133,22 @@ function linha(
 }
 
 export const extrato: LinhaExtrato[] = [
-  linha('rec-35', -3, 10, 'Agência Norte', 'involuntario', 'Recuperado na 2ª tentativa', 3200),
-  linha('rec-34', -7, 9, 'Oficina Central', 'involuntario', 'Recuperado na 1ª tentativa', 560),
-  linha('rec-33', -10, 9, 'Consultório Vida', 'involuntario', 'Recuperado na 3ª tentativa', 1150),
-  linha('rec-29', -12, 9, 'Academia Ritmo', 'involuntario', 'Recuperado na 1ª tentativa', 2890),
-  linha('rec-27', -15, 15, 'Construtora Base Forte', 'involuntario', 'Recuperado depois da mensagem', 5400),
-  linha('rec-25', -18, 10, 'Floricultura Jardim', 'involuntario', 'Recuperado na 2ª tentativa', 1990),
-  linha('rec-22', -21, 9, 'Colégio Integral', 'involuntario', 'Recuperado na 2ª tentativa', 4200),
-  linha('rec-19', -24, 9, 'Laboratório Alfa', 'involuntario', 'Recuperado na 1ª tentativa', 3450),
-  linha('rec-16', -27, 11, 'Restaurante Sabor', 'involuntario', 'Recuperado na 3ª tentativa', 1736.67),
-  linha('ret-12', -3, 16, 'Café Aroma', 'voluntario', 'Aceitou desconto de 20% por 3 meses (MRR R$ 890,00)', 712),
-  linha('ret-11', -5, 11, 'Rede Pilates Move', 'voluntario', 'Aceitou desconto de 20% por 3 meses (MRR R$ 2.400,00)', 1920),
-  linha('ret-10', -9, 14, 'Contábil Prisma', 'voluntario', 'Aceitou suporte dedicado, sem desconto (MRR R$ 3.600,00)', 3600),
-  linha('ret-09', -14, 10, 'Imobiliária Casa Clara', 'voluntario', 'Aceitou desconto de 20% por 3 meses (MRR R$ 1.500,00)', 1200),
-  linha('ret-08', -20, 15, 'Pet Shop Amigo', 'voluntario', 'Cancelou 12 dias depois do aceite: estornado', 552, { estornado: true }),
-  linha('ret-07', -25, 10, 'Instituto Saber', 'voluntario', 'Aceitou desconto de 20% por 3 meses (MRR R$ 4.200,00)', 3360),
-  linha('sim-02', -1, 16, 'Cliente fictício · Bruno Lima', 'voluntario', 'Aceitou desconto de 20% (MRR R$ 300,00)', 240, { simulado: true }),
+  linha('rec-35', -3, 10, 'Agência Norte', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 2 }), 3200),
+  linha('rec-34', -7, 9, 'Oficina Central', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 1 }), 560),
+  linha('rec-33', -10, 9, 'Consultório Vida', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 3 }), 1150),
+  linha('rec-29', -12, 9, 'Academia Ritmo', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 1 }), 2890),
+  linha('rec-27', -15, 15, 'Construtora Base Forte', 'involuntario', t('Recuperado depois da mensagem'), 5400),
+  linha('rec-25', -18, 10, 'Floricultura Jardim', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 2 }), 1990),
+  linha('rec-22', -21, 9, 'Colégio Integral', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 2 }), 4200),
+  linha('rec-19', -24, 9, 'Laboratório Alfa', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 1 }), 3450),
+  linha('rec-16', -27, 11, 'Restaurante Sabor', 'involuntario', t('Recuperado na {n}ª tentativa', { n: 3 }), 1736.67),
+  linha('ret-12', -3, 16, 'Café Aroma', 'voluntario', t('Aceitou desconto de 20% por 3 meses (MRR R$ 890,00)'), 712),
+  linha('ret-11', -5, 11, 'Rede Pilates Move', 'voluntario', t('Aceitou desconto de 20% por 3 meses (MRR R$ 2.400,00)'), 1920),
+  linha('ret-10', -9, 14, 'Contábil Prisma', 'voluntario', t('Aceitou suporte dedicado, sem desconto (MRR R$ 3.600,00)'), 3600),
+  linha('ret-09', -14, 10, 'Imobiliária Casa Clara', 'voluntario', t('Aceitou desconto de 20% por 3 meses (MRR R$ 1.500,00)'), 1200),
+  linha('ret-08', -20, 15, 'Pet Shop Amigo', 'voluntario', t('Cancelou 12 dias depois do aceite: estornado'), 552, { estornado: true }),
+  linha('ret-07', -25, 10, 'Instituto Saber', 'voluntario', t('Aceitou desconto de 20% por 3 meses (MRR R$ 4.200,00)'), 3360),
+  linha('sim-02', -1, 16, 'Cliente fictício · Bruno Lima', 'voluntario', t('Aceitou desconto de 20% (MRR R$ 300,00)'), 240, { simulado: true }),
 ].sort((a, b) => (a.data < b.data ? 1 : -1))
 
 const somaLiquido = (origem: LinhaExtrato['origem']) =>
@@ -161,7 +162,7 @@ export const metricasMes: MetricasMes = {
   encerrados_sem_recuperacao: 2,
   aguardando_escolha: 1,
   taxa_recuperacao: 9 / 11,
-  proxima_acao: { quando: d(1, 10), descricao: '3 tentativas agendadas para amanhã' },
+  proxima_acao: { quando: d(1, 10), descricao: t('3 tentativas agendadas para amanhã') },
 }
 
 /** Os 30 dias que terminam hoje. */
@@ -199,30 +200,30 @@ export const serie30: PontoSerie[] = serieDupla(false).map((p) => ({ dia: p.dia,
 export const funil: Funil = {
   mes: '2026-09',
   etapas: [
-    { etapa: 'falhas', rotulo: 'Cobranças que falharam', chegaram: 17, valor: 38805.57, recuperados_aqui: 0, valor_recuperado_aqui: 0 },
-    { etapa: 'tentativa_1', rotulo: 'Tentativa 1', chegaram: 14, valor: 36296.57, recuperados_aqui: 3, valor_recuperado_aqui: 6900 },
-    { etapa: 'tentativa_2', rotulo: 'Tentativa 2', chegaram: 10, valor: 29046.67, recuperados_aqui: 3, valor_recuperado_aqui: 9390 },
-    { etapa: 'tentativa_3', rotulo: 'Tentativa 3', chegaram: 6, valor: 17176.67, recuperados_aqui: 2, valor_recuperado_aqui: 2886.67 },
-    { etapa: 'mensagem', rotulo: 'Mensagem', chegaram: 5, valor: 15089, recuperados_aqui: 1, valor_recuperado_aqui: 5400 },
+    { etapa: 'falhas', rotulo: t('Cobranças que falharam'), chegaram: 17, valor: 38805.57, recuperados_aqui: 0, valor_recuperado_aqui: 0 },
+    { etapa: 'tentativa_1', rotulo: t('Tentativa {n}', { n: 1 }), chegaram: 14, valor: 36296.57, recuperados_aqui: 3, valor_recuperado_aqui: 6900 },
+    { etapa: 'tentativa_2', rotulo: t('Tentativa {n}', { n: 2 }), chegaram: 10, valor: 29046.67, recuperados_aqui: 3, valor_recuperado_aqui: 9390 },
+    { etapa: 'tentativa_3', rotulo: t('Tentativa {n}', { n: 3 }), chegaram: 6, valor: 17176.67, recuperados_aqui: 2, valor_recuperado_aqui: 2886.67 },
+    { etapa: 'mensagem', rotulo: t('Mensagem'), chegaram: 5, valor: 15089, recuperados_aqui: 1, valor_recuperado_aqui: 5400 },
   ],
   desfecho: { recuperados: 9, encerrados: 2, em_andamento: 6 },
 }
 
 export const oQueFunciona: OQueFunciona = {
   causas: [
-    { rotulo: 'Saldo insuficiente', taxa: 6 / 7, casos: 7, valor: 13940 },
-    { rotulo: 'Recusa sem motivo informado', taxa: 0.5, casos: 2, valor: 4200 },
-    { rotulo: 'Erro no processamento', taxa: 1, casos: 1, valor: 560 },
-    { rotulo: 'Limite do Pix excedido', taxa: 0, casos: 1, valor: 0 },
+    { rotulo: t('Saldo insuficiente'), taxa: 6 / 7, casos: 7, valor: 13940 },
+    { rotulo: t('Recusa sem motivo informado'), taxa: 0.5, casos: 2, valor: 4200 },
+    { rotulo: t('Erro no processamento'), taxa: 1, casos: 1, valor: 560 },
+    { rotulo: t('Limite do Pix excedido'), taxa: 0, casos: 1, valor: 0 },
   ],
   ofertas: [
-    { rotulo: 'Desconto de 20% por 3 meses', taxa: 5 / 12, casos: 12 },
-    { rotulo: 'Suporte dedicado', taxa: 2 / 6, casos: 6 },
-    { rotulo: 'Plano mais leve', taxa: 2 / 8, casos: 8 },
+    { rotulo: t('Desconto de 20% por 3 meses'), taxa: 5 / 12, casos: 12 },
+    { rotulo: t('Suporte dedicado'), taxa: 2 / 6, casos: 6 },
+    { rotulo: t('Plano mais leve'), taxa: 2 / 8, casos: 8 },
   ],
   canais: [
     { rotulo: 'WhatsApp', taxa: 14 / 22, casos: 22 },
-    { rotulo: 'E-mail', taxa: 8 / 26, casos: 26 },
+    { rotulo: t('E-mail'), taxa: 8 / 26, casos: 26 },
     { rotulo: 'SMS', taxa: 2 / 11, casos: 11 },
   ],
 }
@@ -235,15 +236,15 @@ const hm = (dias: number, hora: number, minuto = 0) => {
 }
 
 export const atividades: Atividade[] = ([
-  { id: 9, em: hm(0, 13, 48), tipo: 'risco_grave', texto: 'Loja Ponto Certo entrou em risco grave: o uso caiu pela metade em 2 semanas', valor: null, simulado: false },
-  { id: 8, em: hm(0, 11, 0), tipo: 'tentativa_falhou', texto: 'Tentativa 2 não passou para um cliente sem cadastro: erro no processamento', valor: null, simulado: false },
-  { id: 7, em: hm(-1, 16, 30), tipo: 'oferta_aceita', texto: 'Bruno Lima aceitou desconto de 20%', valor: 192, simulado: true },
-  { id: 6, em: hm(-1, 10, 15), tipo: 'mensagem_enviada', texto: 'Mensagem enviada por e-mail para Loja Marés, que revogou a autorização', valor: null, simulado: false },
-  { id: 5, em: hm(-1, 9, 0), tipo: 'escolha', texto: '3 mensagens sugeridas para Clínica Horizonte, aguardando a sua escolha', valor: null, simulado: false },
-  { id: 4, em: hm(-3, 16, 0), tipo: 'oferta_aceita', texto: 'Café Aroma aceitou desconto de 20% por 3 meses', valor: 569.6, simulado: false },
-  { id: 3, em: hm(-3, 10, 0), tipo: 'recuperado', texto: 'Cobrança de Agência Norte recuperada na 2ª tentativa', valor: 2400, simulado: false },
-  { id: 2, em: hm(-5, 11, 0), tipo: 'oferta_aceita', texto: 'Rede Pilates Move aceitou desconto de 20% por 3 meses', valor: 1536, simulado: false },
-  { id: 1, em: hm(-8, 9, 30), tipo: 'estorno', texto: 'Pet Shop Amigo cancelou 12 dias depois do aceite; o valor saiu do mantido', valor: null, simulado: false },
+  { id: 9, em: hm(0, 13, 48), tipo: 'risco_grave', texto: t('Loja Ponto Certo entrou em risco grave: o uso caiu pela metade em 2 semanas'), valor: null, simulado: false },
+  { id: 8, em: hm(0, 11, 0), tipo: 'tentativa_falhou', texto: t('Tentativa 2 não passou para um cliente sem cadastro: erro no processamento'), valor: null, simulado: false },
+  { id: 7, em: hm(-1, 16, 30), tipo: 'oferta_aceita', texto: t('Bruno Lima aceitou desconto de 20%'), valor: 192, simulado: true },
+  { id: 6, em: hm(-1, 10, 15), tipo: 'mensagem_enviada', texto: t('Mensagem enviada por e-mail para Loja Marés, que revogou a autorização'), valor: null, simulado: false },
+  { id: 5, em: hm(-1, 9, 0), tipo: 'escolha', texto: t('3 mensagens sugeridas para Clínica Horizonte, aguardando a sua escolha'), valor: null, simulado: false },
+  { id: 4, em: hm(-3, 16, 0), tipo: 'oferta_aceita', texto: t('Café Aroma aceitou desconto de 20% por 3 meses'), valor: 569.6, simulado: false },
+  { id: 3, em: hm(-3, 10, 0), tipo: 'recuperado', texto: t('Cobrança de Agência Norte recuperada na 2ª tentativa'), valor: 2400, simulado: false },
+  { id: 2, em: hm(-5, 11, 0), tipo: 'oferta_aceita', texto: t('Rede Pilates Move aceitou desconto de 20% por 3 meses'), valor: 1536, simulado: false },
+  { id: 1, em: hm(-8, 9, 30), tipo: 'estorno', texto: t('Pet Shop Amigo cancelou 12 dias depois do aceite; o valor saiu do mantido'), valor: null, simulado: false },
 ] as Atividade[]).sort((a, b) => (a.em < b.em ? 1 : -1))
 
 export const saude: SaudeSistema = {
@@ -263,11 +264,11 @@ export const detalhes: Record<number, CicloDetalhe> = {
     desconto_anomalia_pct: null,
     dia_provavel_saldo: d(-6, 9),
     contribuicoes: [
-      { fator: 'Causa: saldo insuficiente', efeito: 'Aumentou a chance de recuperar' },
-      { fator: 'Cliente há 3 anos', efeito: 'Aumentou a chance de recuperar' },
-      { fator: 'Bom histórico de pagamento', efeito: 'Aumentou a chance de recuperar' },
-      { fator: 'Valor alto para o perfil', efeito: 'Reduziu a chance de recuperar' },
-      { fator: 'Já é a 3ª tentativa', efeito: 'Reduziu a chance de recuperar' },
+      { fator: t('Causa: saldo insuficiente'), efeito: 'Aumentou a chance de recuperar' },
+      { fator: t('Cliente há 3 anos'), efeito: 'Aumentou a chance de recuperar' },
+      { fator: t('Bom histórico de pagamento'), efeito: 'Aumentou a chance de recuperar' },
+      { fator: t('Valor alto para o perfil'), efeito: 'Reduziu a chance de recuperar' },
+      { fator: t('Já é a 3ª tentativa'), efeito: 'Reduziu a chance de recuperar' },
     ],
     tentativas: [
       { numero: 1, agendada_para: d(-6, 9), disparada_em: d(-6, 9), resultado: 'falhou', resultado_em: d(-6, 9), codigo_resultado: 'AM04', motivo_cancelamento: null },
@@ -279,7 +280,7 @@ export const detalhes: Record<number, CicloDetalhe> = {
         abordagem: 'lembrete_cordial',
         texto: 'Olá! A mensalidade de R$ 4.900,00 da Clínica Horizonte não pôde ser debitada. Quando for possível, é só regularizar por este link. Qualquer dúvida, estamos por aqui.',
         canal: 'whatsapp',
-        motivo_canal: 'Telefone cadastrado; canal preferido da empresa',
+        motivo_canal: t('Telefone cadastrado; canal preferido da empresa'),
         recomendada: true,
         escolhida: false,
         rodada: 1,
@@ -289,7 +290,7 @@ export const detalhes: Record<number, CicloDetalhe> = {
         abordagem: 'facilitacao',
         texto: 'Olá! Vimos que o débito de R$ 4.900,00 não passou. Se ficar mais fácil, dá para pagar por boleto ou Pix avulso neste link, sem alterar a sua assinatura.',
         canal: 'whatsapp',
-        motivo_canal: 'Telefone cadastrado; canal preferido da empresa',
+        motivo_canal: t('Telefone cadastrado; canal preferido da empresa'),
         recomendada: false,
         escolhida: false,
         rodada: 1,
@@ -299,7 +300,7 @@ export const detalhes: Record<number, CicloDetalhe> = {
         abordagem: 'urgencia_com_respeito',
         texto: 'Olá. A mensalidade de R$ 4.900,00 continua pendente e o acesso será suspenso em 5 dias. Para manter tudo funcionando, regularize por este link.',
         canal: 'whatsapp',
-        motivo_canal: 'Telefone cadastrado; canal preferido da empresa',
+        motivo_canal: t('Telefone cadastrado; canal preferido da empresa'),
         recomendada: false,
         escolhida: false,
         rodada: 1,
@@ -312,13 +313,13 @@ export const detalhes: Record<number, CicloDetalhe> = {
     escolha_por: null,
     motivo_descarte: null,
     linha_do_tempo: [
-      { em: d(-7, 8), tipo: 'abertura', titulo: 'Cobrança falhou', detalhe: 'R$ 4.900,00 · Saldo insuficiente (AM04)', tom: 'danger' },
-      { em: d(-7, 8), tipo: 'diagnostico', titulo: 'Diagnóstico: 72% de chance de recuperar', detalhe: 'Dia provável de saldo: 24/09. 3 tentativas agendadas: 24, 26 e 29/09.' },
-      { em: d(-6, 9), tipo: 'tentativa', titulo: 'Tentativa 1 falhou', detalhe: 'Saldo insuficiente', tom: 'danger' },
-      { em: d(-4, 10), tipo: 'tentativa', titulo: 'Tentativa 2 falhou', detalhe: 'Saldo insuficiente', tom: 'danger' },
-      { em: d(-1, 9), tipo: 'tentativa', titulo: 'Tentativa 3 falhou', detalhe: 'Saldo insuficiente. Limite do BACEN atingido.', tom: 'danger' },
-      { em: d(-1, 9), tipo: 'sugestoes', titulo: '3 mensagens sugeridas', detalhe: 'Recomendada: Lembrete cordial, por WhatsApp.' },
-      { em: d(0, 14), tipo: 'aviso', titulo: 'Aguardando a sua escolha', detalhe: 'Sem escolha até as 17h20, a recomendada é enviada.', tom: 'warn' },
+      { em: d(-7, 8), tipo: 'abertura', titulo: t('Cobrança falhou'), detalhe: t('R$ 4.900,00 · Saldo insuficiente (AM04)'), tom: 'danger' },
+      { em: d(-7, 8), tipo: 'diagnostico', titulo: t('Diagnóstico: 72% de chance de recuperar'), detalhe: t('Dia provável de saldo: 24/09. 3 tentativas agendadas: 24, 26 e 29/09.') },
+      { em: d(-6, 9), tipo: 'tentativa', titulo: t('Tentativa 1 falhou'), detalhe: t('Saldo insuficiente'), tom: 'danger' },
+      { em: d(-4, 10), tipo: 'tentativa', titulo: t('Tentativa 2 falhou'), detalhe: t('Saldo insuficiente'), tom: 'danger' },
+      { em: d(-1, 9), tipo: 'tentativa', titulo: t('Tentativa 3 falhou'), detalhe: t('Saldo insuficiente. Limite do BACEN atingido.'), tom: 'danger' },
+      { em: d(-1, 9), tipo: 'sugestoes', titulo: t('3 mensagens sugeridas'), detalhe: t('Recomendada: Lembrete cordial, por WhatsApp.') },
+      { em: d(0, 14), tipo: 'aviso', titulo: t('Aguardando a sua escolha'), detalhe: t('Sem escolha até as 17h20, a recomendada é enviada.'), tom: 'warn' },
     ],
   },
 }
@@ -337,11 +338,11 @@ export const baseClientes: BaseClientes = {
 
 /** As ofertas e os canais da demonstração, já no texto que a tabela mostra. */
 const OFERTA_DEMO = {
-  desconto: 'Desconto de 20% por 3 meses',
-  suporte: 'Suporte dedicado por 30 dias',
-  plano_leve: 'Plano mais leve, sem multa',
+  desconto: t('Desconto de 20% por 3 meses'),
+  suporte: t('Suporte dedicado por 30 dias'),
+  plano_leve: t('Plano mais leve, sem multa'),
 }
-const CANAL_DEMO = { whatsapp: 'WhatsApp', email: 'E-mail', sms: 'SMS' }
+const CANAL_DEMO = { whatsapp: 'WhatsApp', email: t('E-mail'), sms: 'SMS' }
 
 const cr = (
   id: string,
@@ -369,17 +370,17 @@ const cr = (
 })
 
 export const clientesRisco: ClienteRisco[] = [
-  cr('c-101', 'Loja Ponto Certo', 1200, 'grave', 'O uso caiu pela metade em 2 semanas e o pagamento atrasou 2 vezes.', 'modelo', 1, { oferta: 'desconto', canal: 'whatsapp', status: 'enviada' }, false, 7),
-  cr('c-102', 'Cliente fictício · Bruno Lima', 300, 'grave', 'Sinais marcados na simulação: uso em queda e atraso.', 'regua', 2, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, true, 41),
-  cr('c-103', 'Escritório Vértice', 3400, 'grave', 'Abriu 3 chamados no mês e parou de usar o módulo principal. Estava como Preocupante há 12 dias; com mensalidade alta, só sobe para Grave quando os sinais continuam.', 'modelo', 5, { oferta: 'suporte', canal: 'email', status: 'aguardando' }, false, 19),
-  cr('c-104', 'Café Aroma', 890, 'preocupante', 'Uso 30% abaixo do normal nas últimas 3 semanas.', 'modelo', 9, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, false, 168),
-  cr('c-105', 'Academia Ritmo', 2890, 'sem_risco', 'Uso estável e pagamentos em dia.', 'modelo', 12, null, false, 904),
-  cr('c-106', 'Distribuidora Norte Sul', 5600, 'preocupante', 'Reduziu o número de usuários ativos de 12 para 7. Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.', 'modelo', 20, { oferta: 'plano_leve', canal: 'email', status: 'recusada' }, false, 96),
-  cr('c-107', 'Padaria do Bairro ME', 349.9, 'sem_dado', 'Cliente novo, sem dados de comportamento ainda; a régua não tem o que avaliar.', 'regua', 26, null, false, null),
-  cr('c-108', 'Clínica Horizonte', 4900, 'preocupante', 'Cobrança em recuperação no involuntário e 1 chamado aberto.', 'regua', 30, { oferta: 'suporte', canal: 'whatsapp', status: 'enviada' }, false, 231),
-  cr('c-109', 'Rede Pilates Move', 2400, 'sem_risco', 'Aceitou a oferta há 5 dias e voltou a usar normalmente.', 'modelo', 44, null, false, 512),
-  cr('c-110', 'Contábil Prisma', 3600, 'sem_risco', 'Uso acima da média e nenhum chamado em 60 dias.', 'modelo', 52, null, false, 1103),
-  cr('c-111', 'Pet Shop Amigo', 690, 'grave', 'Cancelou 12 dias depois de aceitar a oferta; o valor foi estornado.', 'modelo', 70, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, false, 3),
+  cr('c-101', 'Loja Ponto Certo', 1200, 'grave', t('O uso caiu pela metade em 2 semanas e o pagamento atrasou 2 vezes.'), 'modelo', 1, { oferta: 'desconto', canal: 'whatsapp', status: 'enviada' }, false, 7),
+  cr('c-102', 'Cliente fictício · Bruno Lima', 300, 'grave', t('Sinais marcados na simulação: uso em queda e atraso.'), 'regua', 2, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, true, 41),
+  cr('c-103', 'Escritório Vértice', 3400, 'grave', t('Abriu 3 chamados no mês e parou de usar o módulo principal. Estava como Preocupante há 12 dias; com mensalidade alta, só sobe para Grave quando os sinais continuam.'), 'modelo', 5, { oferta: 'suporte', canal: 'email', status: 'aguardando' }, false, 19),
+  cr('c-104', 'Café Aroma', 890, 'preocupante', t('Uso 30% abaixo do normal nas últimas 3 semanas.'), 'modelo', 9, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, false, 168),
+  cr('c-105', 'Academia Ritmo', 2890, 'sem_risco', t('Uso estável e pagamentos em dia.'), 'modelo', 12, null, false, 904),
+  cr('c-106', 'Distribuidora Norte Sul', 5600, 'preocupante', t('Reduziu o número de usuários ativos de 12 para 7. Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.'), 'modelo', 20, { oferta: 'plano_leve', canal: 'email', status: 'recusada' }, false, 96),
+  cr('c-107', 'Padaria do Bairro ME', 349.9, 'sem_dado', t('Cliente novo, sem dados de comportamento ainda; a régua não tem o que avaliar.'), 'regua', 26, null, false, null),
+  cr('c-108', 'Clínica Horizonte', 4900, 'preocupante', t('Cobrança em recuperação no involuntário e 1 chamado aberto.'), 'regua', 30, { oferta: 'suporte', canal: 'whatsapp', status: 'enviada' }, false, 231),
+  cr('c-109', 'Rede Pilates Move', 2400, 'sem_risco', t('Aceitou a oferta há 5 dias e voltou a usar normalmente.'), 'modelo', 44, null, false, 512),
+  cr('c-110', 'Contábil Prisma', 3600, 'sem_risco', t('Uso acima da média e nenhum chamado em 60 dias.'), 'modelo', 52, null, false, 1103),
+  cr('c-111', 'Pet Shop Amigo', 690, 'grave', t('Cancelou 12 dias depois de aceitar a oferta; o valor foi estornado.'), 'modelo', 70, { oferta: 'desconto', canal: 'whatsapp', status: 'aceita' }, false, 3),
 ]
 
 export const resumoVoluntario: ResumoVoluntario = {
@@ -434,7 +435,7 @@ export const membros: Membro[] = [
 ]
 
 export const chavesApi: ChaveApi[] = [
-  { id: 'k1', nome: 'Sistema de cobrança', inicio: 'crai_live_7f3a', final: 'k2Qd', criada_em: '2026-09-02T14:00:00Z', ultimo_uso: new Date(AGORA.getTime() - 2 * 3_600_000).toISOString(), revogada_em: null },
-  { id: 'k2', nome: 'Planilha da equipe de sucesso', inicio: 'crai_live_c91d', final: 'x8Lm', criada_em: '2026-08-28T10:00:00Z', ultimo_uso: '2026-09-25T18:30:00Z', revogada_em: null },
-  { id: 'k0', nome: 'Integração antiga', inicio: 'crai_live_2b8e', final: 'p0Ra', criada_em: '2026-08-15T10:00:00Z', ultimo_uso: '2026-09-01T09:00:00Z', revogada_em: '2026-09-02T14:05:00Z' },
+  { id: 'k1', nome: t('Sistema de cobrança'), inicio: 'crai_live_7f3a', final: 'k2Qd', criada_em: '2026-09-02T14:00:00Z', ultimo_uso: new Date(AGORA.getTime() - 2 * 3_600_000).toISOString(), revogada_em: null },
+  { id: 'k2', nome: t('Planilha da equipe de sucesso'), inicio: 'crai_live_c91d', final: 'x8Lm', criada_em: '2026-08-28T10:00:00Z', ultimo_uso: '2026-09-25T18:30:00Z', revogada_em: null },
+  { id: 'k0', nome: t('Integração antiga'), inicio: 'crai_live_2b8e', final: 'p0Ra', criada_em: '2026-08-15T10:00:00Z', ultimo_uso: '2026-09-01T09:00:00Z', revogada_em: '2026-09-02T14:05:00Z' },
 ]

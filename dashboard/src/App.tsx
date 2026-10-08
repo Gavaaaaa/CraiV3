@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Shell } from './components/layout/Shell'
 import { Involuntario } from './routes/Involuntario'
 import { VisaoGeral } from './routes/VisaoGeral'
+import { t } from './lib/idioma'
 
 // As páginas menos visitadas carregam só quando abertas (o pacote inicial fica menor).
 const Voluntario = lazy(() => import('./routes/Voluntario').then((m) => ({ default: m.Voluntario })))
@@ -12,7 +13,7 @@ const PaginaApi = lazy(() => import('./routes/Api').then((m) => ({ default: m.Pa
 const Configuracao = lazy(() => import('./routes/Configuracao').then((m) => ({ default: m.Configuracao })))
 
 function Carregando() {
-  return <div className="card-glass min-h-[420px] rounded-[18px]" aria-busy="true" aria-label="Carregando a página" />
+  return <div className="card-glass min-h-[420px] rounded-[18px]" aria-busy="true" aria-label={t('Carregando a página')} />
 }
 
 export default function App() {

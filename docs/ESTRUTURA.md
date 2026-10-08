@@ -12,15 +12,16 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 | `crai/dunning/` | Cobrança e retentativa: `pix_automatico_retry.py` (regras do BACEN), `dunning_engine.py` (mensagens), `recovery_log.py`, `retry_state.py`. |
 | `crai/dunning/legacy_card/` | Código de cartão **desativado**, mantido de propósito: `tests/test_payment_isolation.py` prova que o pipeline ativo não o importa. Não apagar. |
 | `crai/churn_voluntary/` | O churn voluntário: `risk_scorer.py` (regras), `batch_scoring.py`, `importacao.py` e `clientes_importados.py` (base da empresa), `insights_unificados.py`, `offer_bandit.py`, `voluntary_agent.py`, `retention_log.py`. |
-| `crai/ml/` | Os modelos: `failure_classifier.py`, `anomaly_detector.py`, `payday_inference.py`, `voluntary_risk.py` (candidato, não ativo), `synthetic_data.py`, `calibracao.py`. |
+| `crai/ml/` | Os modelos: `failure_classifier.py`, `anomaly_detector.py`, `payday_inference.py`, `voluntary_risk.py` (o risco voluntário; em produção está o v3, promovido em 03/10/2026), `synthetic_data.py`, `calibracao.py`, `classificador_v4.py` (experimento, não ativo). |
 | `crai/integrations/` | Gateways e canais: `payment_gateway.py`, `pagarme_gateway.py`, `whatsapp_sender.py`, `hubspot_crm.py`, `email_sender.py`. Todos simulados por default. |
 | `crai/accounts/` | Validação do JWT emitido pelo Supabase Auth (`supabase_auth.py`; contrato em `README.md`). |
 | `crai/security/` | Criptografia de campos sensíveis (`tokenization.py`). |
-| `crai/scripts/` | Linha de comando: `train_all.py`, `preparar_amostra_real.py`, `sanity_check_fora_do_dominio.py`, `gerar_readme_treino.py`, `relatorio.py`, `verificar_modelos.py`, `empacotar_modelos.py`, `gerar_bases_demo.py` e `semear_demo.py` (os dados de exemplo do dashboard). |
+| `crai/scripts/` | Linha de comando: `train_all.py`, `preparar_amostra_real.py`, `sanity_check_fora_do_dominio.py`, `gerar_readme_treino.py`, `relatorio.py`, `verificar_modelos.py`, `empacotar_modelos.py`, `gerar_bases_demo.py`, `semear_demo.py` (os dados de exemplo do dashboard) e os dois do experimento do classificador v4 (`gerar_base_v4_classificador.py`, `treinar_classificador_v4.py`). |
 | `crai/config.py` | Parâmetros de negócio lidos do ambiente, com default. |
 | `tests/` | A suíte inteira (`pytest tests/ -q`). |
 | `docs/DATA_CARD.md` | As fontes de dado real, as licenças e o modelo causal dos rótulos sintéticos. |
 | `docs/evidencia/` | Evidência dos sprints (8 arquivos) e, em `treino/`, as medições da última rodada de treino (JSONs, logs, `PROVENIENCIA.json`). |
+| `docs/evidencia_v4/` | O experimento do classificador de falha v4: o desenho (`DESENHO.md`), o que foi medido (`LEIA.md`), `metricas_v4.json` e a saída do treino. Nada dele é lido pelo serviço. |
 | `models/` | Artefatos treinados. **Ignorado pelo git**, exceto `calibracao.json`; o resto se regenera com `train_all`. |
 | `data/`, `logs/` | Estado de execução e dados brutos. Gerados localmente, ignorados pelo git. |
 | `README.md` | Documentação técnica do backend. Tem dono. |
@@ -32,6 +33,12 @@ O que vive em cada pasta do `CraiV3` e o que vive no repositório de dados
 
 O dashboard da CRAI (React, Vite, Tailwind). Fala com a API pelo endereço em
 `VITE_CRAI_API_URL`. Como rodar: o começo do `README.md` da raiz.
+
+As telas estão em português e em inglês (Configuração, Aparência). O texto de origem é o
+português do código; `src/lib/idioma.ts` troca pelo inglês de `src/i18n/en/`, e
+`src/lib/doBackend.ts` traduz as frases de vocabulário fixo que o backend manda prontas. O
+registro das decisões (Art. 20), as mensagens aos clientes finais e o texto de política de
+privacidade continuam em português nos dois idiomas.
 
 ## `exemplos/` — bases de clientes em CSV
 

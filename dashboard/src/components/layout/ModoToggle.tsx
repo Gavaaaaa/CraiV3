@@ -1,20 +1,21 @@
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 
 export type Modo = 'reais' | 'simulacao'
 
 /** O alternador flutuante do vídeo ("Dashboard 1 / 2"), aqui "Dados reais / Simulação". */
 export function ModoToggle({ modo, onChange }: { modo: Modo; onChange: (m: Modo) => void }) {
   const opcoes: { valor: Modo; rotulo: string }[] = [
-    { valor: 'reais', rotulo: 'Dados reais' },
-    { valor: 'simulacao', rotulo: 'Simulação' },
+    { valor: 'reais', rotulo: t('Dados reais') },
+    { valor: 'simulacao', rotulo: t('Simulação') },
   ]
   return (
     <div
       role="radiogroup"
-      aria-label="Modo dos dados"
+      aria-label={t('Modo dos dados')}
       className="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-bar/90 p-1 shadow-flutuante backdrop-blur-md"
     >
-      <span className="t-label pr-1 pl-3 text-muted">Mostrar</span>
+      <span className="t-label pr-1 pl-3 text-muted">{t('Mostrar')}</span>
       {opcoes.map((o) => (
         <button
           key={o.valor}

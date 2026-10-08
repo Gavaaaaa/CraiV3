@@ -7,7 +7,11 @@
  * - a `fee` (taxa da CRAI) nunca aparece: o backend não manda, e nenhum tipo da tela a tem;
  * - nenhum contato do cliente final (telefone, e-mail, CPF) passa: o backend não manda, e o
  *   adaptador só copia campos conhecidos, nunca o objeto inteiro;
- * - todo texto que vai para a tela começa com letra maiúscula.
+ * - todo texto que vai para a tela começa com letra maiúscula;
+ * - as frases de vocabulário fixo que o backend manda prontas passam por `doBackend()`, que as
+ *   põe no idioma do painel (em português, passam como estão). Não passam: o `efeito` das
+ *   contribuições (a tela traduz), o texto das mensagens aos clientes finais, o registro de
+ *   decisões do Art. 20 e o texto para a política de privacidade.
  */
 import type {
   Abordagem,
@@ -53,6 +57,9 @@ import type {
   TentativaSimulada,
   TipoAtividade,
 } from './tipos'
+import { t } from '../lib/idioma'
+import { doBackend } from '../lib/doBackend'
+import { fmt } from '../lib/format'
 
 /* ------------------------------------------------------------------ */
 /* O que o backend manda                                                */
@@ -199,8 +206,6 @@ export interface SaudeApi {
 /* Pequenas traduções                                                   */
 /* ------------------------------------------------------------------ */
 
-const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
-
 /** Todo texto de tela começa com maiúscula. */
 export function maiuscula(texto: string): string {
   return texto ? texto.charAt(0).toUpperCase() + texto.slice(1) : texto
@@ -226,16 +231,16 @@ export function abordagemParaApi(abordagem: Abordagem): AbordagemApi {
 }
 
 const ABORDAGEM_LEGIVEL: Record<Abordagem, string> = {
-  lembrete_cordial: 'Lembrete cordial',
-  facilitacao: 'Facilitação',
-  urgencia_com_respeito: 'Urgência com respeito',
+  lembrete_cordial: t('Lembrete cordial'),
+  facilitacao: t('Facilitação'),
+  urgencia_com_respeito: t('Urgência com respeito'),
 }
 
 const CANAL_LEGIVEL: Record<Canal, string> = {
   whatsapp: 'WhatsApp',
-  email: 'E-mail',
+  email: t('E-mail'),
   sms: 'SMS',
-  sem_canal: 'Sem canal disponível',
+  sem_canal: t('Sem canal disponível'),
 }
 
 function canalDaTela(canal: unknown): Canal {
@@ -262,27 +267,27 @@ function estadoDaTela(estado: string, status: StatusApi): EstadoCiclo {
 export function motivoDoCanal(codigo: string): string {
   switch (codigo) {
     case 'contato_da_base':
-      return 'Contato cadastrado na sua base'
+      return t('Contato cadastrado na sua base')
     case 'sem_contato':
-      return 'O cliente não tem telefone nem e-mail na sua base'
+      return t('O cliente não tem telefone nem e-mail na sua base')
     case 'sem_mapeamento':
-      return 'O cliente desta cobrança não está na sua base'
+      return t('O cliente desta cobrança não está na sua base')
     case 'presumido_sem_contato':
     case 'presumido_sem_mapeamento':
-      return 'Canal presumido: o cliente não tem contato na base'
+      return t('Canal presumido: o cliente não tem contato na base')
     case 'cliente_pediu_para_nao_ser_contatado':
       // Rodada 3, Fase 6: o descadastro. Nenhuma mensagem sai para este cliente.
-      return 'O cliente pediu para não ser contatado'
+      return t('O cliente pediu para não ser contatado')
     default:
-      return 'Canal escolhido pelo sistema'
+      return t('Canal escolhido pelo sistema')
   }
 }
 
 const MOTIVO_DESCARTE: Record<string, string> = {
-  eprofit_nao_positivo: 'Retorno esperado abaixo do custo da ação',
-  score_abaixo_do_corte: 'Chance de recuperação baixa demais para agir',
-  autorizacao_revogada: 'O cliente revogou a autorização do Pix Automático',
-  janela_encerrada: 'A janela de novas tentativas acabou',
+  eprofit_nao_positivo: t('Retorno esperado abaixo do custo da ação'),
+  score_abaixo_do_corte: t('Chance de recuperação baixa demais para agir'),
+  autorizacao_revogada: t('O cliente revogou a autorização do Pix Automático'),
+  janela_encerrada: t('A janela de novas tentativas acabou'),
 }
 
 function motivoLegivel(codigo: string | null): string | null {
@@ -303,7 +308,7 @@ export function adaptarCiclo(c: CicloApi): CicloResumo {
     valor_cobranca: c.valor_cobranca,
     valor_liquido: c.valor_liquido,
     causa: causaDaTela(c.causa),
-    causa_legivel: c.causa_legivel,
+    causa_legivel: doBackend(c.causa_legivel),
     estado: estadoDaTela(c.estado, c.status),
     status: statusDaTela(c.status),
     tentativas_executadas: c.tentativas_executadas,
@@ -336,26 +341,25 @@ export function adaptarMensagem(m: MensagemApi): SugestaoDoCiclo {
 }
 
 export function adaptarContribuicoes(itens: { fator: string; efeito: string | null }[]): ContribuicaoTexto[] {
-  return itens.map((c) => ({ fator: maiuscula(c.fator), efeito: c.efeito ? maiuscula(c.efeito) : null }))
+  return itens.map((c) => ({ fator: doBackend(maiuscula(c.fator)), efeito: c.efeito ? maiuscula(c.efeito) : null }))
 }
 
 const texto = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null)
 const numero = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
-const ORDINAL = (n: number | null) => (n === null ? '' : ` ${n}`)
 
 const DECISAO: Record<string, string> = {
-  risco: 'Decisão registrada: avaliação da cobrança',
-  retentativa: 'Decisão registrada: nova tentativa',
-  oferta: 'Decisão registrada: mensagem',
-  canal: 'Decisão registrada: canal',
+  risco: t('Decisão registrada: avaliação da cobrança'),
+  retentativa: t('Decisão registrada: nova tentativa'),
+  oferta: t('Decisão registrada: mensagem'),
+  canal: t('Decisão registrada: canal'),
 }
 
 const QUEM_ESCOLHEU: Record<string, string> = {
-  owner: 'Escolhida pelo dono',
-  admin: 'Escolhida por um administrador',
-  prazo: 'O prazo de escolha acabou: saiu a recomendada',
-  automatico: 'Modo automático: saiu a recomendada',
+  owner: t('Escolhida pelo dono'),
+  admin: t('Escolhida por um administrador'),
+  prazo: t('O prazo de escolha acabou: saiu a recomendada'),
+  automatico: t('Modo automático: saiu a recomendada'),
 }
 
 /**
@@ -368,40 +372,40 @@ export function adaptarEvento(e: EventoApi): EventoLinhaDoTempo | null {
   const n = numero(d.numero)
   switch (e.tipo) {
     case 'abertura':
-      return { em: e.quando, tipo: 'abertura', titulo: 'Cobrança falhou', detalhe: texto(d.causa_legivel) ?? undefined, tom: 'danger' }
+      return { em: e.quando, tipo: 'abertura', titulo: t('Cobrança falhou'), detalhe: doBackend(texto(d.causa_legivel)) ?? undefined, tom: 'danger' }
     case 'diagnostico': {
       const p = numero(d.p_recovery)
       return {
         em: e.quando,
         tipo: 'diagnostico',
-        titulo: p !== null ? `Diagnóstico: ${Math.round(p * 100)}% de chance de recuperar` : 'Diagnóstico concluído',
+        titulo: p !== null ? t('Diagnóstico: {pct}% de chance de recuperar', { pct: Math.round(p * 100) }) : t('Diagnóstico concluído'),
       }
     }
     case 'decisao':
       return {
         em: e.quando,
         tipo: 'diagnostico',
-        titulo: DECISAO[String(d.tipo_decisao)] ?? 'Decisão registrada',
+        titulo: DECISAO[String(d.tipo_decisao)] ?? t('Decisão registrada'),
         detalhe: texto(d.explicacao) ?? undefined,
       }
     case 'tentativa_agendada':
-      return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)} agendada` }
+      return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa agendada') : t('Tentativa {n} agendada', { n }) }
     case 'tentativa_disparada':
-      return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)} enviada ao banco` }
+      return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa enviada ao banco') : t('Tentativa {n} enviada ao banco', { n }) }
     case 'tentativa_resultado': {
       const r = texto(d.resultado)
-      if (r === 'paga') return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)} paga`, tom: 'ok' }
-      if (r === 'falhou') return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)} falhou`, tom: 'danger' }
-      if (r === 'sem_retorno') return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)} sem resposta do banco`, tom: 'warn' }
-      return { em: e.quando, tipo: 'tentativa', titulo: `Tentativa${ORDINAL(n)}: resultado registrado` }
+      if (r === 'paga') return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa paga') : t('Tentativa {n} paga', { n }), tom: 'ok' }
+      if (r === 'falhou') return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa falhou') : t('Tentativa {n} falhou', { n }), tom: 'danger' }
+      if (r === 'sem_retorno') return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa sem resposta do banco') : t('Tentativa {n} sem resposta do banco', { n }), tom: 'warn' }
+      return { em: e.quando, tipo: 'tentativa', titulo: n === null ? t('Tentativa: resultado registrado') : t('Tentativa {n}: resultado registrado', { n }) }
     }
     case 'tentativa_cancelada': {
       const motivo = texto(d.motivo)
       return {
         em: e.quando,
         tipo: 'tentativa',
-        titulo: `Tentativa${ORDINAL(n)} cancelada`,
-        detalhe: motivo === 'recuperado' ? 'O pagamento entrou antes' : (motivoLegivel(motivo) ?? undefined),
+        titulo: n === null ? t('Tentativa cancelada') : t('Tentativa {n} cancelada', { n }),
+        detalhe: motivo === 'recuperado' ? t('O pagamento entrou antes') : (motivoLegivel(motivo) ?? undefined),
       }
     }
     case 'sugestoes_geradas': {
@@ -411,58 +415,60 @@ export function adaptarEvento(e: EventoApi): EventoLinhaDoTempo | null {
       return {
         em: e.quando,
         tipo: 'sugestoes',
-        titulo: rodada > 1 ? `Outras 3 mensagens sugeridas (${rodada}ª rodada)` : '3 mensagens sugeridas',
-        detalhe: recomendada ? `Recomendada: ${ABORDAGEM_LEGIVEL[abordagemDaTela(recomendada)]}. Canal: ${canal}.` : `Canal: ${canal}.`,
+        titulo: rodada > 1 ? t('Outras 3 mensagens sugeridas ({rodada}ª rodada)', { rodada }) : t('3 mensagens sugeridas'),
+        detalhe: recomendada
+          ? t('Recomendada: {abordagem}. Canal: {canal}.', { abordagem: ABORDAGEM_LEGIVEL[abordagemDaTela(recomendada)], canal })
+          : t('Canal: {canal}.', { canal }),
       }
     }
     case 'mensagem_escolhida': {
       const abordagem = texto(d.abordagem)
-      const quem = QUEM_ESCOLHEU[String(d.escolhida_por)] ?? 'Mensagem escolhida'
+      const quem = QUEM_ESCOLHEU[String(d.escolhida_por)] ?? t('Mensagem escolhida')
       return {
         em: e.quando,
         tipo: 'escolha',
-        titulo: abordagem ? `Mensagem escolhida: ${ABORDAGEM_LEGIVEL[abordagemDaTela(abordagem)]}` : 'Mensagem escolhida',
+        titulo: abordagem ? t('Mensagem escolhida: {abordagem}', { abordagem: ABORDAGEM_LEGIVEL[abordagemDaTela(abordagem)] }) : t('Mensagem escolhida'),
         detalhe: `${quem}.`,
       }
     }
     case 'mensagem_nao_entregavel':
-      return { em: e.quando, tipo: 'aviso', titulo: 'Sem canal disponível', detalhe: `${motivoDoCanal(String(d.motivo_canal))}. A mensagem não foi entregue.`, tom: 'warn' }
+      return { em: e.quando, tipo: 'aviso', titulo: t('Sem canal disponível'), detalhe: t('{motivo}. A mensagem não foi entregue.', { motivo: motivoDoCanal(String(d.motivo_canal)) }), tom: 'warn' }
     case 'mensagem_reservada':
       return null // passo interno do envio; a tela mostra só a mensagem enviada
     case 'mensagem_enviada':
-      return { em: e.quando, tipo: 'mensagem', titulo: 'Mensagem enviada', tom: 'ok' }
+      return { em: e.quando, tipo: 'mensagem', titulo: t('Mensagem enviada'), tom: 'ok' }
     case 'recuperado': {
       const liquido = numero(d.valor_liquido)
-      return { em: e.quando, tipo: 'desfecho', titulo: 'Pagamento recuperado', detalhe: liquido !== null ? `${brl.format(liquido)} líquidos para você.` : undefined, tom: 'ok' }
+      return { em: e.quando, tipo: 'desfecho', titulo: t('Pagamento recuperado'), detalhe: liquido !== null ? t('{valor} líquidos para você.', { valor: fmt.brl(liquido) }) : undefined, tom: 'ok' }
     }
     case 'perdido':
       return {
         em: e.quando,
         tipo: 'desfecho',
-        titulo: 'Encerrado sem recuperação',
-        detalhe: texto(d.motivo_perdido) === 'sem_canal' ? 'Não havia canal para entregar a mensagem em 30 dias.' : 'O pagamento não veio no prazo depois da mensagem.',
+        titulo: t('Encerrado sem recuperação'),
+        detalhe: texto(d.motivo_perdido) === 'sem_canal' ? t('Não havia canal para entregar a mensagem em 30 dias.') : t('O pagamento não veio no prazo depois da mensagem.'),
       }
     case 'descartado':
-      return { em: e.quando, tipo: 'desfecho', titulo: 'Encerrado sem ação', detalhe: motivoLegivel(texto(d.motivo_descarte)) ?? undefined }
+      return { em: e.quando, tipo: 'desfecho', titulo: t('Encerrado sem ação'), detalhe: motivoLegivel(texto(d.motivo_descarte)) ?? undefined }
     case 'estorno': {
       const valor = numero(d.valor_devolvido)
       const noPrazo = d.no_prazo === true
       return {
         em: e.quando,
         tipo: 'aviso',
-        titulo: noPrazo ? 'Pagamento devolvido dentro do prazo' : 'Pagamento devolvido depois do prazo',
+        titulo: noPrazo ? t('Pagamento devolvido dentro do prazo') : t('Pagamento devolvido depois do prazo'),
         detalhe:
-          (valor !== null ? `${brl.format(valor)} devolvidos ao cliente. ` : '') +
+          (valor !== null ? t('{valor} devolvidos ao cliente.', { valor: fmt.brl(valor) }) + ' ' : '') +
           (noPrazo
             ? d.total === true
-              ? 'Todo o valor voltou: esta cobrança deixou de contar como recuperada.'
-              : 'O valor saiu do que foi recuperado para você.'
-            : 'O prazo de estorno já tinha acabado: os valores não mudam.'),
+              ? t('Todo o valor voltou: esta cobrança deixou de contar como recuperada.')
+              : t('O valor saiu do que foi recuperado para você.')
+            : t('O prazo de estorno já tinha acabado: os valores não mudam.')),
         tom: noPrazo ? 'danger' : 'neutro',
       }
     }
     default:
-      return { em: e.quando, tipo: 'aviso', titulo: 'Evento registrado' }
+      return { em: e.quando, tipo: 'aviso', titulo: t('Evento registrado') }
   }
 }
 
@@ -472,7 +478,7 @@ export function adaptarEvento(e: EventoApi): EventoLinhaDoTempo | null {
  * só, o que o sistema usou.
  */
 export function avisoDoDesconto(percentual: number): string {
-  return `Avaliação inicial da cobrança. O número do topo é o que o sistema usou e já tem o desconto de ${percentual}% por comportamento fora do padrão.`
+  return t('Avaliação inicial da cobrança. O número do topo é o que o sistema usou e já tem o desconto de {percentual}% por comportamento fora do padrão.', { percentual })
 }
 
 /** `GET /ciclos/{id}`: o painel lateral. */
@@ -524,7 +530,7 @@ export function adaptarMetricas(m: MetricasMesApi, ciclosAtivos: number): Metric
     // Rodada 4: a próxima ação vem do backend. Sem ela (nada agendado, ou backend anterior), null.
     proxima_acao:
       m.proxima_acao && typeof m.proxima_acao.quando === 'string' && typeof m.proxima_acao.descricao === 'string'
-        ? { quando: m.proxima_acao.quando, descricao: maiuscula(m.proxima_acao.descricao), ciclo_id: numero(m.proxima_acao.ciclo_id) }
+        ? { quando: m.proxima_acao.quando, descricao: doBackend(maiuscula(m.proxima_acao.descricao)), ciclo_id: numero(m.proxima_acao.ciclo_id) }
         : null,
   }
 }
@@ -688,7 +694,7 @@ export function adaptarFunil(r: FunilApi): Funil {
     // Só as etapas que a tela conhece, na ordem dela.
     etapas: ETAPAS_DO_FUNIL.flatMap((etapa) => {
       const e = r.etapas.find((x) => x.etapa === etapa)
-      return e ? [{ etapa, rotulo: e.rotulo, chegaram: e.chegaram, valor: e.valor, recuperados_aqui: e.recuperados_aqui, valor_recuperado_aqui: e.valor_recuperado_aqui }] : []
+      return e ? [{ etapa, rotulo: doBackend(e.rotulo), chegaram: e.chegaram, valor: e.valor, recuperados_aqui: e.recuperados_aqui, valor_recuperado_aqui: e.valor_recuperado_aqui }] : []
     }),
     desfecho: { recuperados: r.desfecho.recuperados, encerrados: r.desfecho.encerrados, em_andamento: r.desfecho.em_andamento },
   }
@@ -703,7 +709,7 @@ export interface OQueFuncionaApi {
 
 export function adaptarOQueFunciona(r: OQueFuncionaApi): OQueFunciona {
   const item = (i: { rotulo: string; casos: number; taxa: number | null; valor_liquido?: number }): ItemDesempenho => ({
-    rotulo: maiuscula(i.rotulo),
+    rotulo: doBackend(maiuscula(i.rotulo)),
     taxa: i.taxa ?? 0,
     casos: i.casos,
     ...(typeof i.valor_liquido === 'number' ? { valor: i.valor_liquido } : {}),
@@ -722,7 +728,7 @@ export function adaptarAtividade(r: AtividadeApi): Atividade[] {
   // Evento de um tipo que esta versão da tela não conhece não é mostrado com o ícone de outro.
   return r.atividades
     .filter((a) => TIPOS_DE_ATIVIDADE.includes(a.tipo as TipoAtividade))
-    .map((a) => ({ id: a.id, em: a.em, tipo: a.tipo as TipoAtividade, texto: maiuscula(a.texto), valor: a.valor, simulado: Boolean(a.simulado) }))
+    .map((a) => ({ id: a.id, em: a.em, tipo: a.tipo as TipoAtividade, texto: doBackend(maiuscula(a.texto)), valor: a.valor, simulado: Boolean(a.simulado) }))
 }
 
 /** `GET /extrato`: a ÚNICA resposta que traz a fee (é a memória de cálculo da fatura). */
@@ -753,7 +759,7 @@ export function adaptarExtrato(r: ExtratoApi): LinhaExtrato[] {
     cliente: l.cliente?.trim() || l.id_cliente,
     origem: l.origem === 'voluntario' ? 'voluntario' : 'involuntario',
     tipo: l.tipo === 'estorno' ? 'estorno' : l.tipo === 'mantido' ? 'mantido' : 'recuperacao',
-    descricao: maiuscula(l.descricao),
+    descricao: doBackend(maiuscula(l.descricao)),
     valor_base: l.valor_base,
     taxa: l.fee,
     taxa_fora_do_piloto: typeof l.fee_fora_do_piloto === 'number' ? l.fee_fora_do_piloto : null,
@@ -870,14 +876,14 @@ export function adaptarClienteRecente(c: ClienteRecenteApi): ClienteRisco {
     nome: c.nome?.trim() || c.id,
     mrr: typeof c.mrr === 'number' ? c.mrr : null,
     faixa: FAIXAS.includes(c.faixa as FaixaRisco) ? (c.faixa as FaixaRisco) : 'sem_dado',
-    motivo: maiuscula(c.motivo ?? ''),
+    motivo: doBackend(maiuscula(c.motivo ?? '')),
     risco_decidido_por: c.decidido_por === 'modelo' || c.decidido_por === 'regua' ? c.decidido_por : null,
     posicao_na_base: c.posicao_no_ranking,
     abordagem:
       c.abordagem && situacao
         ? {
-            oferta: maiuscula(c.abordagem.oferta_legivel ?? c.abordagem.oferta),
-            canal: maiuscula(c.abordagem.canal_legivel ?? c.abordagem.canal ?? 'Sem canal disponível'),
+            oferta: doBackend(maiuscula(c.abordagem.oferta_legivel ?? c.abordagem.oferta)),
+            canal: doBackend(maiuscula(c.abordagem.canal_legivel ?? c.abordagem.canal ?? t('Sem canal disponível'))),
             status: situacao,
           }
         : null,
@@ -915,7 +921,7 @@ export function adaptarBusca(r: BuscaApi): ResultadoBusca {
       id_recorrencia: c.id_recorrencia,
       status: statusDaTela(c.status),
       valor_cobranca: c.valor_cobranca,
-      causa_legivel: c.causa_legivel ?? null,
+      causa_legivel: doBackend(c.causa_legivel ?? null),
     })),
   }
 }
@@ -1019,8 +1025,8 @@ export interface ImportacaoApi {
 const AVISOS_DA_IMPORTACAO = 5
 
 export function adaptarImportacao(arquivo: string, r: ImportacaoApi): ResultadoImportacao {
-  const avisos = r.rejeitados.slice(0, AVISOS_DA_IMPORTACAO).map((x) => `Linha ${x.linha}: ${x.motivo}`)
-  if (r.rejeitados.length > AVISOS_DA_IMPORTACAO) avisos.push(`E mais ${r.rejeitados.length - AVISOS_DA_IMPORTACAO} linhas recusadas.`)
+  const avisos = r.rejeitados.slice(0, AVISOS_DA_IMPORTACAO).map((x) => t('Linha {linha}: {motivo}', { linha: x.linha, motivo: x.motivo }))
+  if (r.rejeitados.length > AVISOS_DA_IMPORTACAO) avisos.push(t('E mais {n} linhas recusadas.', { n: r.rejeitados.length - AVISOS_DA_IMPORTACAO }))
   if (r.mensagem) avisos.unshift(maiuscula(r.mensagem))
   return {
     arquivo,
@@ -1169,15 +1175,15 @@ export function adaptarSimulacao(s: SimulacaoApi, agoraDeVerdade: string = new D
     dia_provavel_saldo: s.dia_provavel_saldo ?? null,
     contribuicoes: detalhe?.contribuicoes ?? [],
     tentativas,
-    proxima_acao: s.proxima_acao ? { quando: s.proxima_acao.quando, descricao: maiuscula(s.proxima_acao.descricao) } : null,
+    proxima_acao: s.proxima_acao ? { quando: s.proxima_acao.quando, descricao: doBackend(maiuscula(s.proxima_acao.descricao)) } : null,
     sugestoes,
     mensagem_enviada:
       enviada && enviada.enviada_em
         ? { abordagem: abordagemDaTela(enviada.abordagem), canal: canalDaTela(enviada.canal), em: enviada.enviada_em, escolhida_por: escolhidaPor ?? 'automatico' }
         : null,
     desfecho,
-    pensando: s.pensando.map(maiuscula),
-    sem_crai: s.sem_crai,
+    pensando: s.pensando.map((linha) => doBackend(maiuscula(linha))),
+    sem_crai: s.sem_crai ? { resultado: s.sem_crai.resultado, explicacao: doBackend(s.sem_crai.explicacao) } : null,
     linha_do_tempo: detalhe?.linha_do_tempo ?? [],
   }
 }
@@ -1215,18 +1221,18 @@ export function adaptarRetencaoSimulada(r: RetencaoSimuladaApi): ResultadoRetenc
   const oferta = OFERTAS_DE_RETENCAO.find((o) => o === r.oferta) ?? null
   return {
     faixa,
-    motivo: maiuscula(r.motivo),
+    motivo: doBackend(maiuscula(r.motivo)),
     decidido_por: r.decidido_por,
     risco: numero(r.risco),
     corte_de_intervencao: numero(r.corte_de_intervencao) ?? 0.6,
-    sem_oferta_porque: typeof r.sem_oferta_porque === 'string' && r.sem_oferta_porque.trim() ? maiuscula(r.sem_oferta_porque) : null,
+    sem_oferta_porque: typeof r.sem_oferta_porque === 'string' && r.sem_oferta_porque.trim() ? doBackend(maiuscula(r.sem_oferta_porque)) : null,
     oferta,
-    oferta_legivel: r.oferta_legivel ? maiuscula(r.oferta_legivel) : null,
-    canal_legivel: r.canal_legivel,
-    porque: r.porque ? maiuscula(r.porque) : null,
+    oferta_legivel: r.oferta_legivel ? doBackend(maiuscula(r.oferta_legivel)) : null,
+    canal_legivel: doBackend(r.canal_legivel),
+    porque: r.porque ? doBackend(maiuscula(r.porque)) : null,
     aceitou: r.aceitou,
     valor_mantido_liquido: r.valor_mantido_liquido,
-    sem_crai: maiuscula(r.sem_crai),
+    sem_crai: doBackend(maiuscula(r.sem_crai)),
     meses_de_mrr: r.meses_de_mrr,
     prazo_estorno_dias: r.prazo_estorno_dias,
   }
@@ -1249,11 +1255,11 @@ const caminhoDoPainel = (para: unknown): para is string => typeof para === 'stri
 
 export function adaptarAssistente(r: AssistenteApi): RespostaAssistente {
   return {
-    texto: maiuscula(String(r.texto ?? '')),
+    texto: doBackend(maiuscula(String(r.texto ?? ''))),
     links: (Array.isArray(r.links) ? r.links : [])
       .filter((l) => l && typeof l.rotulo === 'string' && caminhoDoPainel(l.para))
-      .map((l) => ({ rotulo: maiuscula(l.rotulo), para: l.para })),
-    sugestoes: (Array.isArray(r.sugestoes) ? r.sugestoes : []).filter((s): s is string => typeof s === 'string' && s.trim().length > 0).map(maiuscula),
+      .map((l) => ({ rotulo: doBackend(maiuscula(l.rotulo)), para: l.para })),
+    sugestoes: (Array.isArray(r.sugestoes) ? r.sugestoes : []).filter((s): s is string => typeof s === 'string' && s.trim().length > 0).map((s) => doBackend(maiuscula(s))),
     // Tudo o que não é resposta do LLM é o texto fixo: a tela marca como "Resposta fixa".
     origem: r.origem === 'assistente' ? 'assistente' : 'texto_fixo',
   }

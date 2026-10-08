@@ -5,25 +5,26 @@ import { Button } from '../../components/ui/Button'
 import { MODO_REAL } from '../../data/api'
 import type { ClienteFicticio, PerfilPagador } from '../../data/tipos'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 
 const NOMES = ['Ana Souza', 'Bruno Lima', 'Carla Menezes', 'Diego Farias', 'Elisa Prado', 'Fábio Nunes', 'Gabi Torres', 'Heitor Campos', 'Iara Bastos', 'Júlio Rezende']
 
 /** Recusa o que pareça dado real: CPF, CNPJ, telefone, e-mail, chave Pix, sequências longas de números. */
 export function pareceDadoReal(texto: string): string | null {
-  const t = texto.trim()
-  if (/@/.test(t)) return 'Parece um e-mail. Aqui só entra um nome inventado.'
-  if (/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/.test(t)) return 'Parece um CPF. Aqui só entra um nome inventado.'
-  if (/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/.test(t)) return 'Parece um CNPJ. Aqui só entra um nome inventado.'
-  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(t)) return 'Parece uma chave Pix. Aqui só entra um nome inventado.'
-  if (/(\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}/.test(t)) return 'Parece um telefone. Aqui só entra um nome inventado.'
-  if (/\d{6,}/.test(t)) return 'Números longos não entram aqui: pode ser um dado real.'
+  const txt = texto.trim()
+  if (/@/.test(txt)) return t('Parece um e-mail. Aqui só entra um nome inventado.')
+  if (/\d{3}\.?\d{3}\.?\d{3}-?\d{2}/.test(txt)) return t('Parece um CPF. Aqui só entra um nome inventado.')
+  if (/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/.test(txt)) return t('Parece um CNPJ. Aqui só entra um nome inventado.')
+  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(txt)) return t('Parece uma chave Pix. Aqui só entra um nome inventado.')
+  if (/(\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}/.test(txt)) return t('Parece um telefone. Aqui só entra um nome inventado.')
+  if (/\d{6,}/.test(txt)) return t('Números longos não entram aqui: pode ser um dado real.')
   return null
 }
 
 const PERFIS: { valor: PerfilPagador; rotulo: string; dica: string }[] = [
-  { valor: 'clt', rotulo: 'CLT', dica: 'Salário fixo, entra até o 5º dia útil' },
-  { valor: 'pj', rotulo: 'PJ', dica: 'Caixa da empresa, primeira semana' },
-  { valor: 'freelancer', rotulo: 'Freelancer', dica: 'Entradas irregulares' },
+  { valor: 'clt', rotulo: 'CLT', dica: t('Salário fixo, entra até o 5º dia útil') },
+  { valor: 'pj', rotulo: 'PJ', dica: t('Caixa da empresa, primeira semana') },
+  { valor: 'freelancer', rotulo: t('Freelancer'), dica: t('Entradas irregulares') },
 ]
 
 export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimular: (c: ClienteFicticio) => void; onRascunho?: (c: ClienteFicticio) => void; ocupado: boolean }) {
@@ -51,11 +52,11 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
   function enviar(e: FormEvent) {
     e.preventDefault()
     const n = nome.trim()
-    if (n.length < 3) return setErro('Dê um nome ao cliente fictício (pelo menos 3 letras).')
+    if (n.length < 3) return setErro(t('Dê um nome ao cliente fictício (pelo menos 3 letras).'))
     const suspeito = pareceDadoReal(n)
     if (suspeito) return setErro(suspeito)
     const valor = Number(mensalidade.replace(',', '.'))
-    if (!Number.isFinite(valor) || valor < 10 || valor > 50_000) return setErro('A mensalidade precisa ficar entre R$ 10 e R$ 50.000.')
+    if (!Number.isFinite(valor) || valor < 10 || valor > 50_000) return setErro(t('A mensalidade precisa ficar entre R$ 10 e R$ 50.000.'))
     setErro(null)
     onSimular({ nome: n, mensalidade: Math.round(valor * 100) / 100, perfil, verdade: { dias_ate_saldo: dias, chance_pagar: chance / 100, vai_revogar: revoga } })
   }
@@ -63,29 +64,29 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
   const campo = 'h-10 w-full rounded-[10px] border border-campo bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none'
 
   return (
-    <form onSubmit={enviar} className="flex flex-col gap-5" aria-label="Cliente fictício">
+    <form onSubmit={enviar} className="flex flex-col gap-5" aria-label={t('Cliente fictício')}>
       <div>
-        <h3 className="t-h3 text-paper">Cliente fictício</h3>
-        <p className="t-apoio mt-1 text-silver">Invente um pagador. Nada aqui é real: nenhum campo de cartão, CPF, conta ou chave Pix.</p>
+        <h3 className="t-h3 text-paper">{t('Cliente fictício')}</h3>
+        <p className="t-apoio mt-1 text-silver">{t('Invente um pagador. Nada aqui é real: nenhum campo de cartão, CPF, conta ou chave Pix.')}</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block sm:col-span-2">
-          <span className="t-label text-silver">Nome inventado</span>
+          <span className="t-label text-silver">{t('Nome inventado')}</span>
           <div className="mt-1.5 flex gap-2">
             <input value={nome} onChange={(e) => { setNome(e.target.value); setErro(null) }} className={campo} maxLength={40} autoComplete="off" />
-            <Button type="button" variant="ghost" size="md" onClick={sortear} aria-label="Sortear um nome">
+            <Button type="button" variant="ghost" size="md" onClick={sortear} aria-label={t('Sortear um nome')}>
               <IconRefresh width={16} height={16} />
             </Button>
           </div>
         </label>
         <label className="block">
-          <span className="t-label text-silver">Mensalidade (R$)</span>
+          <span className="t-label text-silver">{t('Mensalidade (R$)')}</span>
           <input value={mensalidade} onChange={(e) => setMensalidade(e.target.value)} inputMode="decimal" className={cx(campo, 'tabular mt-1.5')} />
         </label>
         <div>
-          <span className="t-label text-silver">Perfil do pagador</span>
-          <div role="radiogroup" aria-label="Perfil do pagador" className="mt-1.5 flex gap-1 rounded-[10px] border border-line bg-ink/40 p-1">
+          <span className="t-label text-silver">{t('Perfil do pagador')}</span>
+          <div role="radiogroup" aria-label={t('Perfil do pagador')} className="mt-1.5 flex gap-1 rounded-[10px] border border-line bg-ink/40 p-1">
             {PERFIS.map((p) => (
               <button
                 key={p.valor}
@@ -100,19 +101,19 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
               </button>
             ))}
           </div>
-          {MODO_REAL ? <p className="t-label mt-1.5 text-muted">O sistema não recebe o perfil: ele estima o dia de saldo sozinho.</p> : null}
+          {MODO_REAL ? <p className="t-label mt-1.5 text-muted">{t('O sistema não recebe o perfil: ele estima o dia de saldo sozinho.')}</p> : null}
         </div>
       </div>
 
       {/* A verdade escondida: o que só o banco do cliente sabe */}
       <fieldset className="rounded-[14px] border border-dashed border-amber/40 bg-amber/[0.04] p-4">
-        <legend className="t-label px-1.5 text-amber">Verdade escondida · o sistema não vê</legend>
-        <p className="t-apoio text-silver">O que acontece de verdade quando a cobrança chega ao banco do cliente. É o que torna a demonstração honesta.</p>
+        <legend className="t-label px-1.5 text-amber">{t('Verdade escondida · o sistema não vê')}</legend>
+        <p className="t-apoio text-silver">{t('O que acontece de verdade quando a cobrança chega ao banco do cliente. É o que torna a demonstração honesta.')}</p>
         <div className="mt-4 flex flex-col gap-4">
-          <Faixa rotulo="O dinheiro entra em" valor={dias === 0 ? 'já tem saldo' : `${dias} ${dias === 1 ? 'dia' : 'dias'}`} min={0} max={15} atual={dias} onChange={setDias} />
-          <Faixa rotulo="Chance de pagar quando tem saldo" valor={`${chance}%`} min={0} max={100} passo={5} atual={chance} onChange={setChance} />
+          <Faixa rotulo={t('O dinheiro entra em')} valor={dias === 0 ? t('já tem saldo') : dias === 1 ? t('{n} dia', { n: dias }) : t('{n} dias', { n: dias })} min={0} max={15} atual={dias} onChange={setDias} />
+          <Faixa rotulo={t('Chance de pagar quando tem saldo')} valor={`${chance}%`} min={0} max={100} passo={5} atual={chance} onChange={setChance} />
           <label className="flex cursor-pointer items-center justify-between gap-3">
-            <span className="text-apoio text-paper">Vai revogar a autorização na 1ª tentativa</span>
+            <span className="text-apoio text-paper">{t('Vai revogar a autorização na 1ª tentativa')}</span>
             <span className="relative inline-flex h-6 w-11 shrink-0 items-center">
               <input type="checkbox" checked={revoga} onChange={(e) => setRevoga(e.target.checked)} className="peer sr-only" />
               <span className="absolute inset-0 rounded-full bg-paper/[0.12] transition-colors peer-checked:bg-orange peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-amber" />
@@ -130,12 +131,12 @@ export function FormularioCliente({ onSimular, onRascunho, ocupado }: { onSimula
 
       <div className="flex flex-col gap-3">
         <Button type="submit" size="md" disabled={ocupado} className="w-full">
-          <IconSend width={16} height={16} /> {ocupado ? 'Enviando cobrança Pix…' : 'Simular cobrança'}
+          <IconSend width={16} height={16} /> {ocupado ? t('Enviando cobrança Pix…') : t('Simular cobrança')}
         </Button>
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <Badge tone="amber">Demonstração</Badge>
-          <Badge>Dados fictícios</Badge>
-          <span className="t-label text-muted">Nada é enviado a nenhum banco.</span>
+          <Badge tone="amber">{t('Demonstração')}</Badge>
+          <Badge>{t('Dados fictícios')}</Badge>
+          <span className="t-label text-muted">{t('Nada é enviado a nenhum banco.')}</span>
         </div>
       </div>
     </form>

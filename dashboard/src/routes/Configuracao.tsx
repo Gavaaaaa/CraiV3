@@ -10,6 +10,7 @@ import { ErroCarregar } from '../components/ui/Estados'
 import { ErroApi, api } from '../data/api'
 import type { Configuracao as Config, EmpresaDetalhe, Membro, Papel } from '../data/tipos'
 import { cx } from '../lib/cx'
+import { t } from '../lib/idioma'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { SecaoAparencia, SecaoDados, SecaoEmpresa, SecaoEquipe, SecaoIntegracao, SecaoMensagens, SecaoNotificacoes } from './configuracao/Secoes'
 
@@ -17,14 +18,14 @@ type SecaoId = 'mensagens' | 'empresa' | 'equipe' | 'integracao' | 'dados' | 'no
 
 /** `de`: as funções de `api.ts` que alimentam a seção (decide a etiqueta "Demonstração"). */
 const SECOES: { id: SecaoId; rotulo: string; apoio: string; Icone: typeof IconGear; premium?: boolean; de: string[] }[] = [
-  { id: 'mensagens', rotulo: 'Mensagens', apoio: 'Modo, prazo, horário e canais', Icone: IconChat, de: ['configuracao', 'salvarConfiguracao'] },
-  { id: 'empresa', rotulo: 'Empresa', apoio: 'Como aparece para o cliente', Icone: IconGear, de: ['empresaDetalhe'] },
-  { id: 'equipe', rotulo: 'Equipe', apoio: 'Pessoas e papéis', Icone: IconUsers, de: ['membros', 'mudarPapel'] },
-  { id: 'integracao', rotulo: 'Integração', apoio: 'Chaves de API e webhook', Icone: IconTable, premium: true, de: ['integracao'] },
-  { id: 'dados', rotulo: 'Dados e privacidade', apoio: 'Direitos do cliente, prazos', Icone: IconShield, de: ['exportarTitular', 'anonimizarTitular', 'explicacaoDecisao', 'naoContatar', 'voltarAContatar', 'textoParaPolitica'] },
-  { id: 'notificacoes', rotulo: 'Notificações', apoio: 'Avisos para a equipe', Icone: IconBell, de: ['notificacoes'] },
+  { id: 'mensagens', rotulo: t('Mensagens'), apoio: t('Modo, prazo, horário e canais'), Icone: IconChat, de: ['configuracao', 'salvarConfiguracao'] },
+  { id: 'empresa', rotulo: t('Empresa'), apoio: t('Como aparece para o cliente'), Icone: IconGear, de: ['empresaDetalhe'] },
+  { id: 'equipe', rotulo: t('Equipe'), apoio: t('Pessoas e papéis'), Icone: IconUsers, de: ['membros', 'mudarPapel'] },
+  { id: 'integracao', rotulo: t('Integração'), apoio: t('Chaves de API e webhook'), Icone: IconTable, premium: true, de: ['integracao'] },
+  { id: 'dados', rotulo: t('Dados e privacidade'), apoio: t('Direitos do cliente, prazos'), Icone: IconShield, de: ['exportarTitular', 'anonimizarTitular', 'explicacaoDecisao', 'naoContatar', 'voltarAContatar', 'textoParaPolitica'] },
+  { id: 'notificacoes', rotulo: t('Notificações'), apoio: t('Avisos para a equipe'), Icone: IconBell, de: ['notificacoes'] },
   // O tema é preferência de quem olha: não lê nem grava nada no backend (`de` vazio).
-  { id: 'aparencia', rotulo: 'Aparência', apoio: 'Tema claro ou escuro', Icone: IconSun, de: [] },
+  { id: 'aparencia', rotulo: t('Aparência'), apoio: t('Tema e idioma'), Icone: IconSun, de: [] },
 ]
 
 export function Configuracao() {
@@ -56,7 +57,7 @@ export function Configuracao() {
         setDetalhe(d)
         setMembros(m)
       })
-      .catch((e: unknown) => vivo && setErro(e instanceof ErroApi ? e.message : 'Algo deu errado ao carregar a configuração.'))
+      .catch((e: unknown) => vivo && setErro(e instanceof ErroApi ? e.message : t('Algo deu errado ao carregar a configuração.')))
     return () => {
       vivo = false
     }
@@ -70,17 +71,17 @@ export function Configuracao() {
   async function salvar(c: Config) {
     try {
       setConfig(await api.salvarConfiguracao(c))
-      avisar('Configuração salva. Vale a partir de agora.')
+      avisar(t('Configuração salva. Vale a partir de agora.'))
     } catch (e) {
-      avisar(`Não foi salvo: ${e instanceof ErroApi ? e.message : 'algo deu errado.'} Tente de novo.`, true)
+      avisar(t('Não foi salvo: {motivo} Tente de novo.', { motivo: e instanceof ErroApi ? e.message : t('algo deu errado.') }), true)
     }
   }
   async function mudarPapel(id: string, p: Papel) {
     try {
       setMembros(await api.mudarPapel(id, p))
-      avisar('Papel atualizado.')
+      avisar(t('Papel atualizado.'))
     } catch (e) {
-      avisar(`Não foi salvo: ${e instanceof ErroApi ? e.message : 'algo deu errado.'}`, true)
+      avisar(t('Não foi salvo: {motivo}', { motivo: e instanceof ErroApi ? e.message : t('algo deu errado.') }), true)
     }
   }
 
@@ -89,13 +90,13 @@ export function Configuracao() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h2 className="t-h2 text-paper">Configuração</h2>
-        <p className="t-apoio mt-1 text-silver">Como o sistema age em nome da sua empresa. Cada mudança vale a partir do momento em que é salva.</p>
+        <h2 className="t-h2 text-paper">{t('Configuração')}</h2>
+        <p className="t-apoio mt-1 text-silver">{t('Como o sistema age em nome da sua empresa. Cada mudança vale a partir do momento em que é salva.')}</p>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
         {/* Navegação das seções: lista à esquerda no computador, fileira rolável no celular */}
-        <nav aria-label="Seções da configuração" className="min-w-0 lg:sticky lg:top-6 lg:self-start">
+        <nav aria-label={t('Seções da configuração')} className="min-w-0 lg:sticky lg:top-6 lg:self-start">
           <ul className="scroll-fino -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0 lg:pb-0">
             {SECOES.map((s) => {
               const sel = s.id === secao
@@ -118,7 +119,7 @@ export function Configuracao() {
                     <span className="min-w-0">
                       <span className={cx('flex items-center gap-2 text-apoio font-[560] whitespace-nowrap', sel ? 'text-paper' : 'text-silver')}>
                         {s.rotulo}
-                        {bloqueada ? <Badge className="px-1.5 py-0 text-rotulo">Premium</Badge> : null}
+                        {bloqueada ? <Badge className="px-1.5 py-0 text-rotulo">{t('Premium')}</Badge> : null}
                         <Demonstracao de={s.de} className="px-1.5 py-0 text-rotulo" />
                       </span>
                       <span className="t-label hidden text-muted lg:block">{s.apoio}</span>
@@ -129,8 +130,8 @@ export function Configuracao() {
             })}
           </ul>
           <div className="mt-4 hidden rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 lg:block">
-            <div className="t-label text-silver">Você está como</div>
-            <div className="mt-0.5 text-apoio font-[560] text-paper">{papel === 'owner' ? 'Dono' : papel === 'admin' ? 'Administrador' : 'Membro (só leitura)'}</div>
+            <div className="t-label text-silver">{t('Você está como')}</div>
+            <div className="mt-0.5 text-apoio font-[560] text-paper">{papel === 'owner' ? t('Dono') : papel === 'admin' ? t('Administrador') : t('Membro (só leitura)')}</div>
           </div>
         </nav>
 

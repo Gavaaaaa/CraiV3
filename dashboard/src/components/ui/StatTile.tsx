@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 import { Badge } from './Badge'
 import { Card } from './Card'
 
@@ -23,7 +24,7 @@ export function StatTile({ rotulo, valor, apoio, icone, tone = 'glass', hero = f
       <div className="flex items-start justify-between gap-3">
         <span className={cx('t-label', escuro ? 'text-sobre-destaque' : 'text-silver')}>
           {rotulo}
-          {demo ? <Badge tone={escuro ? 'ink' : 'amber'} className="ml-2 align-middle">Demonstração</Badge> : null}
+          {demo ? <Badge tone={escuro ? 'ink' : 'amber'} className="ml-2 align-middle">{t('Demonstração')}</Badge> : null}
         </span>
         {icone ? (
           <span

@@ -3,6 +3,7 @@ import { IconChart, IconTable } from '../../components/icons/Icons'
 import type { PontoSerieDupla } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { localeAtual, t } from '../../lib/idioma'
 
 /*
  * Gráfico de 30 dias, em dois painéis que dividem o mesmo eixo de datas:
@@ -26,7 +27,7 @@ const ALT_DIA = 196
 const ALT_EIXO = 30
 const ALT_TOTAL = TOPO + ALT_ACUM + ESPACO + ALT_DIA + ALT_EIXO
 
-const compacto = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 })
+const compacto = new Intl.NumberFormat(localeAtual(), { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 })
 const eixo = (v: number) => (v === 0 ? 'R$ 0' : compacto.format(v))
 
 /** Topo "redondo" do eixo, com passos 1, 2, 2,5 ou 5 vezes uma potência de 10. */
@@ -39,10 +40,10 @@ function escala(max: number, marcas = 3): number[] {
   return Array.from({ length: n + 1 }, (_, i) => i * passo)
 }
 
+const MESES = [t('jan'), t('fev'), t('mar'), t('abr'), t('mai'), t('jun'), t('jul'), t('ago'), t('set'), t('out'), t('nov'), t('dez')]
 const diaMes = (dia: string) => {
   const [, m, d] = dia.split('-').map(Number)
-  const meses = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
-  return `${d} ${meses[m - 1]}`
+  return t('{dia} {mes}', { dia: d, mes: MESES[m - 1] })
 }
 
 /** Coluna com o topo arredondado (4px) e a base reta. */
@@ -58,8 +59,8 @@ export interface SerieCfg {
   cor: string
 }
 const SERIES_PADRAO: SerieCfg[] = [
-  { chave: 'involuntario', rotulo: 'Involuntário (cobranças recuperadas)', cor: INV },
-  { chave: 'voluntario', rotulo: 'Voluntário (clientes mantidos)', cor: VOL },
+  { chave: 'involuntario', rotulo: t('Involuntário (cobranças recuperadas)'), cor: INV },
+  { chave: 'voluntario', rotulo: t('Voluntário (clientes mantidos)'), cor: VOL },
 ]
 
 interface Props {
@@ -83,7 +84,8 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
 
   useEffect(() => {
     const el = caixa.current
-    if (!el) return
+    // Sem `ResizeObserver` (navegador muito antigo, ou o jsdom dos testes), fica a largura padrão.
+    if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(([e]) => setLargura(Math.max(240, Math.floor(e.contentRect.width))))
     ro.observe(el)
     return () => ro.disconnect()
@@ -149,8 +151,8 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="t-h3 text-paper">{titulo ?? 'Dinheiro mantido nos últimos 30 dias'}</h3>
-          <p className="t-apoio mt-1 text-silver">{subtitulo ?? 'Já descontada a taxa da CRAI. Passe o mouse ou use as setas do teclado para ver cada dia.'}</p>
+          <h3 className="t-h3 text-paper">{titulo ?? t('Dinheiro mantido nos últimos 30 dias')}</h3>
+          <p className="t-apoio mt-1 text-silver">{subtitulo ?? t('Já descontada a taxa da CRAI. Passe o mouse ou use as setas do teclado para ver cada dia.')}</p>
         </div>
         <button
           type="button"
@@ -158,12 +160,12 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
           className="inline-flex h-8 items-center gap-1.5 rounded-[8px] border border-line px-2.5 text-rotulo font-[520] text-silver transition-colors hover:border-graphite hover:text-paper"
         >
           {tabela ? <IconChart width={15} height={15} /> : <IconTable width={15} height={15} />}
-          {tabela ? 'Ver como gráfico' : 'Ver como tabela'}
+          {tabela ? t('Ver como gráfico') : t('Ver como tabela')}
         </button>
       </div>
 
       {/* Legenda: retângulo para colunas, traço para a linha */}
-      <ul className="t-label mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-silver" aria-label="Legenda">
+      <ul className="t-label mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-silver" aria-label={t('Legenda')}>
         <li className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: s1.cor }} aria-hidden="true" />
           {s1.rotulo}
@@ -176,7 +178,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
         ) : null}
         <li className="flex items-center gap-2">
           <span className="h-[2px] w-4 rounded-full" style={{ background: LINHA_ACUM }} aria-hidden="true" />
-          Acumulado
+          {t('Acumulado')}
         </li>
       </ul>
 
@@ -185,11 +187,11 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
           <table className="w-full text-left text-apoio">
             <thead className="sticky top-0 bg-card">
               <tr className="t-label text-silver">
-                <th className="px-4 py-2.5 font-[500]">Dia</th>
+                <th className="px-4 py-2.5 font-[500]">{t('Dia')}</th>
                 <th className="px-3 py-2.5 text-right font-[500]">{s1.rotulo.split(' (')[0]}</th>
                 {s2 ? <th className="px-3 py-2.5 text-right font-[500]">{s2.rotulo.split(' (')[0]}</th> : null}
-                {s2 ? <th className="px-3 py-2.5 text-right font-[500]">Total do dia</th> : null}
-                <th className="px-4 py-2.5 text-right font-[500]">Acumulado</th>
+                {s2 ? <th className="px-3 py-2.5 text-right font-[500]">{t('Total do dia')}</th> : null}
+                <th className="px-4 py-2.5 text-right font-[500]">{t('Acumulado')}</th>
               </tr>
             </thead>
             <tbody className="tabular">
@@ -213,7 +215,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             viewBox={`0 0 ${largura} ${ALT_TOTAL}`}
             role="img"
             tabIndex={0}
-            aria-label={`Dinheiro mantido por dia nos últimos 30 dias. Total acumulado: ${fmt.brl(ultimo?.acum ?? 0)}. Use as setas para percorrer os dias.`}
+            aria-label={t('Dinheiro mantido por dia nos últimos 30 dias. Total acumulado: {total}. Use as setas para percorrer os dias.', { total: fmt.brl(ultimo?.acum ?? 0) })}
             className="block touch-pan-y rounded-[8px] outline-none focus-visible:outline-2 focus-visible:outline-amber"
             onPointerMove={(e) => setAtivo(indicePelo(e))}
             onPointerDown={(e) => setAtivo(indicePelo(e))}
@@ -244,10 +246,10 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
 
             {/* Títulos dos painéis */}
             <text x={M.esq} y={13} fontSize={LETRA} fontWeight={560} fill="var(--color-silver)">
-              Acumulado
+              {t('Acumulado')}
             </text>
             <text x={M.esq} y={baseAcum + ESPACO - 14} fontSize={LETRA} fontWeight={560} fill="var(--color-silver)">
-              Por dia
+              {t('Por dia')}
             </text>
 
             {/* Painel de cima: acumulado */}
@@ -296,7 +298,7 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
             <g fontSize={LETRA} fill="var(--color-silver)" className="tabular">
               {marcasX.map(({ i, d }) => (
                 <text key={d.dia} x={cx0(i)} y={baseDia + 20} textAnchor="middle">
-                  {i === dados.length - 1 ? 'Hoje' : diaMes(d.dia)}
+                  {i === dados.length - 1 ? t('Hoje') : diaMes(d.dia)}
                 </text>
               ))}
             </g>
@@ -321,17 +323,17 @@ export function GraficoTrintaDias({ pontos, comVoluntario = true, series: series
                   : { right: `calc(${100 - tipX}% + 14px)` }
               }
             >
-              <div className="t-label text-silver">{ativo === dados.length - 1 ? `Hoje, ${diaMes(p.dia)}` : diaMes(p.dia)}</div>
+              <div className="t-label text-silver">{ativo === dados.length - 1 ? t('Hoje, {dia}', { dia: diaMes(p.dia) }) : diaMes(p.dia)}</div>
               <ul className="mt-2 flex flex-col gap-1.5 text-rotulo">
                 <LinhaTip cor={s1.cor} tipo="barra" valor={p.v1} rotulo={s1.rotulo.split(' (')[0]} />
                 {s2 ? <LinhaTip cor={s2.cor} tipo="barra" valor={p.v2} rotulo={s2.rotulo.split(' (')[0]} /> : null}
                 {s2 ? (
                   <li className="mt-1 flex items-baseline justify-between gap-3 border-t border-line pt-1.5">
-                    <span className="text-silver">Total do dia</span>
+                    <span className="text-silver">{t('Total do dia')}</span>
                     <span className="tabular font-[640] text-paper">{fmt.brl(p.total)}</span>
                   </li>
                 ) : null}
-                <LinhaTip cor={LINHA_ACUM} tipo="linha" valor={p.acum} rotulo="Acumulado" />
+                <LinhaTip cor={LINHA_ACUM} tipo="linha" valor={p.acum} rotulo={t('Acumulado')} />
               </ul>
             </div>
           ) : null}

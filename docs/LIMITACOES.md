@@ -1358,3 +1358,58 @@ código de produção as carrega.
 
 7. **Trocar de modelo é decisão do Crai.** A regra de decisão foi escrita antes de medir e
    está no `LEIA.md`. Pela regra, ficam os modelos atuais.
+
+### O classificador de falha v4: o que o experimento mediu e o que não (08/10/2026)
+
+**O que é.** Um experimento para o problema dos falsos positivos do classificador de falha.
+Na base v2 ele marca 82% das cobranças como recuperáveis, com precisão de 46,2%, e o oráculo
+do gerador tem a mesma precisão em todo nível de recall: o limite é o rótulo, sorteado por
+uma fórmula sobre as próprias features. A base v4 (`app/crai/ml/classificador_v4.py`) mantém
+as mesmas 120.000 cobranças e as mesmas features e refaz só o rótulo, por um mecanismo: saldo
+do cliente na data da nova tentativa (a simulação de caixa do Módulo 3), causa da falha e
+método de pagamento. **Nada foi promovido**; o classificador de produção continua o da v2.
+O desenho, os números e a saída do treino estão em `docs/evidencia_v4/`.
+
+**O critério, escrito antes de medir, não foi satisfeito.** Com as 11 features de hoje e
+recall de 90%, a precisão na v4 é 45,6%, contra 47,7% na v2. O critério compara precisões
+entre bases com taxas de recuperação diferentes (40,5% e 36,7% no teste); pela taxa de falsos
+positivos, que não depende disso, o rótulo novo reduz pouco: de 67,2% para 62,1% dos que não
+recuperam. O critério não foi reescrito depois de ver o resultado.
+
+**O que o experimento mostra.** No mundo da v4 o desfecho é quase todo decidido pelo saldo,
+e as features de hoje enxergam pouco dele. Dar ao classificador o perfil do pagador e a razão
+entre a fatura e o ticket leva a AUC de 0,7363 a 0,7803. Dar também a previsão de liquidez do
+Módulo 3 leva a 0,8438 e derruba os falsos positivos com recall de 90% de 9.479 para 6.957.
+A leitura é: dentro deste mundo simulado, o que reduz falso positivo é informação sobre o
+saldo, mais do que trocar o rótulo. O experimento não comparou outros algoritmos.
+
+**O que ele não prova.**
+
+1. **A base é sintética e o mecanismo foi desenhado pelo projeto.** O resultado mede o modelo
+   contra esse desenho. Não é recuperação observada e não diz nada sobre cobranças reais.
+2. **As precisões da v2 e da v4 não se comparam ponto a ponto,** pela diferença na taxa de
+   recuperação. A taxa de falsos positivos compara as duas bases; a precisão compara os
+   cenários da v4 entre si.
+3. **O cenário com a previsão de liquidez é exploratório.** Entrou depois de ver os outros
+   dois, então está fora do critério declarado. O previsor foi treinado no mesmo gerador que
+   produz o caixa da v4, então conhece a forma do mundo que prevê. Em 16,8% das cobranças
+   faltam dias para completar a janela de 30, e o que falta entra como zero. Os parâmetros do
+   Prophet foram ajustados na série inteira de liquidez da v2, que inclui datas posteriores a
+   parte das cobranças. E ele supõe que o histórico de saldo do cliente chega ao sistema;
+   hoje, em produção, a série de 30 dias do Módulo 3 é simulada a partir do identificador do
+   cliente.
+4. **O teto (AUC de 0,9544) não é alcançável.** Ele supõe conhecer o caixa dos 7 dias
+   seguintes à cobrança. É limite superior, não meta.
+5. **O saldo simulado na v4 é outra realização do gerador** para os clientes que também estão
+   na tabela de liquidez: mesmo perfil e mesmos parâmetros, não a mesma série.
+6. **O mecanismo tem simplificações.** A cobrança recuperada não é debitada do caixa (duas
+   cobranças do mesmo cliente não disputam o mesmo saldo); o gasto que explica o saldo
+   insuficiente é uma subtração constante nos dias seguintes; e o caixa começa em 01/04/2026,
+   então os primeiros dias de cada cliente ainda carregam o estado inicial da simulação.
+7. **Os parâmetros do mecanismo são escolhas.** Foram fixados antes de treinar, e só a taxa de
+   recuperação da base foi conferida contra a faixa declarada (30% a 50%; deu 36,6%). Outros
+   valores dariam outros números.
+8. **Promover exigiria mais que o artefato.** Com as 11 features, o modelo da v4 entra sem
+   mudar quem monta a entrada, mas não resolve o problema. Os cenários que melhoram pedem
+   features novas, e o `predict` troca feature ausente por zero em silêncio: cada uma teria de
+   entrar junto com a mudança em `agent/workflow.py` que a calcula na hora de servir.

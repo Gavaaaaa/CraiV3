@@ -4,6 +4,7 @@ import { Badge } from '../../components/ui/Badge'
 import type { ClienteFicticio, EstadoSimulacao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { t } from '../../lib/idioma'
 import { useReducedMotion } from '../../lib/useReducedMotion'
 import { CAUSA } from '../../data/simulador'
 
@@ -52,21 +53,21 @@ export function CartaoPix({ cliente, empresa, idRecorrencia, proximaCobranca, vi
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="t-label tracking-[0.08em] whitespace-nowrap text-silver uppercase">Pix Automático</div>
-          <div className="mt-0.5 text-rotulo text-muted">Autorização de débito recorrente</div>
+          <div className="mt-0.5 text-rotulo text-muted">{t('Autorização de débito recorrente')}</div>
         </div>
-        <Badge tone="amber">Dados fictícios</Badge>
+        <Badge tone="amber">{t('Dados fictícios')}</Badge>
       </div>
       <div>
-        <div className="t-label text-silver">Mensalidade</div>
+        <div className="t-label text-silver">{t('Mensalidade')}</div>
         <div className="mt-1 text-[34px] leading-none font-[680] tracking-[-0.03em] text-paper">
           {cliente && cliente.mensalidade > 0 ? fmt.brl(cliente.mensalidade) : 'R$ —'}
         </div>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-        <Dado rotulo="Pagador" valor={cliente?.nome || 'Nome fictício'} />
-        <Dado rotulo="Recebedor" valor={empresa} />
-        <Dado rotulo="Recorrência" valor={idRecorrencia ? `${idRecorrencia.slice(0, 7)}••••` : 'RN_sim_••••'} mono />
-        <Dado rotulo="Próxima cobrança" valor={proximaCobranca ? fmt.dataCurta(proximaCobranca) : '—'} />
+        <Dado rotulo={t('Pagador')} valor={cliente?.nome || t('Nome fictício')} />
+        <Dado rotulo={t('Recebedor')} valor={empresa} />
+        <Dado rotulo={t('Recorrência')} valor={idRecorrencia ? `${idRecorrencia.slice(0, 7)}••••` : 'RN_sim_••••'} mono />
+        <Dado rotulo={t('Próxima cobrança')} valor={proximaCobranca ? fmt.dataCurta(proximaCobranca) : '—'} />
       </dl>
     </Face>
   )
@@ -76,14 +77,14 @@ export function CartaoPix({ cliente, empresa, idRecorrencia, proximaCobranca, vi
     <Face className="justify-between border-dashed">
       <div className="-mx-5 -mt-5 rounded-t-[18px] border-b border-dashed border-amber/40 bg-amber/[0.08] px-5 py-2.5 sm:-mx-6 sm:-mt-6 sm:px-6">
         <div className="t-label flex items-center gap-2 text-amber">
-          <span aria-hidden="true">◐</span> O sistema não vê este lado
+          <span aria-hidden="true">◐</span> {t('O sistema não vê este lado')}
         </div>
       </div>
-      <p className="t-apoio text-silver">O que acontece de verdade quando a cobrança chega ao banco do cliente. Os modelos da CRAI decidem sem ver isso.</p>
+      <p className="t-apoio text-silver">{t('O que acontece de verdade quando a cobrança chega ao banco do cliente. Os modelos da CRAI decidem sem ver isso.')}</p>
       <dl className="grid grid-cols-3 gap-3">
-        <Dado rotulo="Dinheiro entra em" valor={v ? (v.dias_ate_saldo === 0 ? 'Já tem' : `${v.dias_ate_saldo} ${v.dias_ate_saldo === 1 ? 'dia' : 'dias'}`) : '—'} grande />
-        <Dado rotulo="Chance de pagar" valor={v ? `${Math.round(v.chance_pagar * 100)}%` : '—'} grande />
-        <Dado rotulo="Vai revogar" valor={v ? (v.vai_revogar ? 'Sim' : 'Não') : '—'} grande />
+        <Dado rotulo={t('Dinheiro entra em')} valor={v ? (v.dias_ate_saldo === 0 ? t('Já tem') : v.dias_ate_saldo === 1 ? t('{n} dia', { n: v.dias_ate_saldo }) : t('{n} dias', { n: v.dias_ate_saldo })) : '—'} grande />
+        <Dado rotulo={t('Chance de pagar')} valor={v ? `${Math.round(v.chance_pagar * 100)}%` : '—'} grande />
+        <Dado rotulo={t('Vai revogar')} valor={v ? (v.vai_revogar ? t('Sim') : t('Não')) : '—'} grande />
       </dl>
     </Face>
   )
@@ -120,7 +121,7 @@ export function CartaoPix({ cliente, empresa, idRecorrencia, proximaCobranca, vi
         </motion.div>
       </div>
       {faixa}
-      {estado?.causa && brilho === 'recusada' ? <span className="sr-only">Cobrança recusada: {CAUSA[estado.causa]}</span> : null}
+      {estado?.causa && brilho === 'recusada' ? <span className="sr-only">{t('Cobrança recusada: {causa}', { causa: CAUSA[estado.causa] })}</span> : null}
     </div>
   )
 }

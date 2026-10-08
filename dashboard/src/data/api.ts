@@ -112,6 +112,7 @@ import {
 } from './adaptadores'
 import { responder } from './assistente'
 import { ErroApi } from './erros'
+import { t } from '../lib/idioma'
 import { API_URL, MODO_REAL, chamar, chamarTexto, definirEmpresaDev, definirPapelDev, definirPlanoDev, papelDev, planoDev } from './http'
 import { avancar, diasAteProximaAcao, escolherMensagem, estadoVazio, iniciar, simularRetencao } from './simulador'
 import type {
@@ -266,7 +267,7 @@ export const NOME_DA_CHAVE_MAX = 60
 /** A tela gera a chave com um clique, sem pedir nome: o nome é "Chave de API" mais a data. */
 export function nomePadraoDaChave(agora: Date = new Date()): string {
   const dois = (n: number) => String(n).padStart(2, '0')
-  return `Chave de API ${dois(agora.getDate())}/${dois(agora.getMonth() + 1)}/${agora.getFullYear()}`
+  return t('Chave de API {dia}/{mes}/{ano}', { dia: dois(agora.getDate()), mes: dois(agora.getMonth() + 1), ano: agora.getFullYear() })
 }
 const LIMITE_DE_CHAVES_ATIVAS = 5
 
@@ -285,7 +286,7 @@ const vazio = estadoTeste === 'vazio'
 
 const espera = async (ms = 250) => {
   await new Promise((r) => setTimeout(r, ms))
-  if (estadoTeste === 'erro') throw new ErroApi('servidor', 'Não foi possível falar com o servidor da CRAI.')
+  if (estadoTeste === 'erro') throw new ErroApi('servidor', t('Não foi possível falar com o servidor da CRAI.'))
 }
 
 export interface FiltroCiclos {
@@ -320,24 +321,76 @@ function detalheDeDemonstracao(id: number): CicloDetalhe | null {
     desconto_anomalia_pct: null,
     dia_provavel_saldo: null,
     contribuicoes: [
-      { fator: 'Causa da falha', efeito: 'Aumentou a chance de recuperar' },
-      { fator: 'Histórico de pagamento', efeito: 'Aumentou a chance de recuperar' },
-      { fator: 'Valor da cobrança', efeito: 'Reduziu a chance de recuperar' },
+      { fator: t('Causa da falha'), efeito: 'Aumentou a chance de recuperar' },
+      { fator: t('Histórico de pagamento'), efeito: 'Aumentou a chance de recuperar' },
+      { fator: t('Valor da cobrança'), efeito: 'Reduziu a chance de recuperar' },
     ],
     tentativas: [],
     sugestoes: [],
     modo_mensagem: null,
     escolha_ate: null,
     escolha_por: null,
-    motivo_descarte: resumo.estado === 'descartado' ? 'Retorno esperado abaixo do custo da ação' : null,
-    linha_do_tempo: [{ em: resumo.aberto_em, tipo: 'abertura', titulo: 'Cobrança falhou', tom: 'danger' }],
+    motivo_descarte: resumo.estado === 'descartado' ? t('Retorno esperado abaixo do custo da ação') : null,
+    linha_do_tempo: [{ em: resumo.aberto_em, tipo: 'abertura', titulo: t('Cobrança falhou'), tom: 'danger' }],
+  }
+}
+
+/** Demonstração: quantas cobranças (não simuladas) esperam a escolha agora: o número do sino e da aba. */
+function pendentesDeDemonstracao(): number {
+  return ciclos.filter((c) => !c.simulado && c.estado === 'aguardando_escolha').length
+}
+
+/**
+ * Demonstração: a escolha de uma sugestão, pela empresa (`owner`) ou pelo modo automático. O
+ * detalhe e a linha da lista mudam juntos, para o sino, a aba Mensagens e a lista concordarem.
+ */
+function escolherNaDemonstracao(id: number, rodada: number, abordagem: Abordagem, por: 'owner' | 'automatico'): void {
+  const d = detalheDeDemonstracao(id)
+  const agora = AGORA.toISOString()
+  if (d && detalhesAtuais[id]) {
+    detalhesAtuais[id] = {
+      ...d,
+      estado: 'mensagem_enviada',
+      escolha_ate: null,
+      escolha_por: por,
+      proxima_acao: null,
+      proxima_acao_descricao: null,
+      sugestoes: d.sugestoes.map((s) => ({ ...s, escolhida: s.rodada === rodada && s.abordagem === abordagem })),
+      linha_do_tempo: [
+        ...d.linha_do_tempo.filter((e) => e.tipo !== 'aviso'),
+        {
+          em: agora,
+          tipo: 'escolha',
+          titulo: t('Mensagem escolhida'),
+          detalhe: por === 'automatico' ? t('Escolhida pelo sistema: a recomendada, no modo automático.') : t('Escolhida pelo dono.'),
+        },
+        { em: agora, tipo: 'mensagem', titulo: t('Mensagem enviada'), tom: 'ok' },
+      ],
+    }
+  }
+  const linha = ciclos.find((c) => c.id === id)
+  if (linha) Object.assign(linha, { estado: 'mensagem_enviada', proxima_acao: null, proxima_acao_descricao: null, atualizado_em: agora })
+}
+
+/**
+ * Demonstração do modo automático: o que o relógio do backend faz na passagem seguinte. Cada
+ * cobrança que esperava a escolha sai pela recomendada da rodada mais recente.
+ */
+function enviarRecomendadasNaDemonstracao(): void {
+  for (const c of ciclos.filter((x) => !x.simulado && x.estado === 'aguardando_escolha')) {
+    const sugestoes = detalheDeDemonstracao(c.id)?.sugestoes ?? []
+    if (!sugestoes.length) continue
+    const rodada = Math.max(...sugestoes.map((s) => s.rodada))
+    const daRodada = sugestoes.filter((s) => s.rodada === rodada)
+    const recomendada = daRodada.find((s) => s.recomendada) ?? daRodada[0]
+    escolherNaDemonstracao(c.id, recomendada.rodada, recomendada.abordagem, 'automatico')
   }
 }
 
 export const api = {
   /** A empresa logada. No modo real ainda não há rota: é a empresa fictícia do login de desenvolvimento. */
   async empresa(): Promise<Empresa> {
-    if (MODO_REAL) return { nome: 'Empresa de demonstração', plano: planoDev(), papel: papelDev() }
+    if (MODO_REAL) return { nome: t('Empresa de demonstração'), plano: planoDev(), papel: papelDev() }
     await espera(80)
     return empresa
   },
@@ -400,6 +453,8 @@ export const api = {
     }
     await espera(500)
     configuracaoAtual = structuredClone(nova)
+    // No modo automático ninguém escolhe: as que esperavam saem pela recomendada, como no backend.
+    if (configuracaoAtual.modo_mensagem_involuntario === 'automatico') enviarRecomendadasNaDemonstracao()
     return configuracaoAtual
   },
 
@@ -412,7 +467,7 @@ export const api = {
     await espera(900)
     const d = detalheDeDemonstracao(id)
     const canal = d?.sugestoes[0]?.canal ?? 'whatsapp'
-    const motivo = d?.sugestoes[0]?.motivo_canal ?? 'Canal padrão da empresa'
+    const motivo = d?.sugestoes[0]?.motivo_canal ?? t('Canal padrão da empresa')
     const rodada = Math.max(0, ...(d?.sugestoes ?? []).map((s) => s.rodada)) + 1
     const novas: SugestaoDoCiclo[] = [
       { rodada, abordagem: 'lembrete_cordial', canal, motivo_canal: motivo, recomendada: true, escolhida: false, nao_entregavel: false,
@@ -440,24 +495,7 @@ export const api = {
       return { enviada: r.enviada, espera: r.espera }
     }
     await espera(500)
-    const d = detalheDeDemonstracao(id)
-    if (d && detalhesAtuais[id]) {
-      const agora = AGORA.toISOString()
-      detalhesAtuais[id] = {
-        ...d,
-        estado: 'mensagem_enviada',
-        escolha_ate: null,
-        escolha_por: 'owner',
-        proxima_acao: null,
-        proxima_acao_descricao: null,
-        sugestoes: d.sugestoes.map((s) => ({ ...s, escolhida: s.rodada === rodada && s.abordagem === abordagem })),
-        linha_do_tempo: [
-          ...d.linha_do_tempo.filter((e) => e.tipo !== 'aviso'),
-          { em: agora, tipo: 'escolha', titulo: 'Mensagem escolhida', detalhe: 'Escolhida pelo dono.' },
-          { em: agora, tipo: 'mensagem', titulo: 'Mensagem enviada', tom: 'ok' },
-        ],
-      }
-    }
+    escolherNaDemonstracao(id, rodada, abordagem, 'owner')
     return { enviada: true, espera: null }
   },
 
@@ -473,7 +511,7 @@ export const api = {
     }
     await espera(120)
     if (vazio) return { ...metricasMes, valor_liquido_recuperado: 0, ciclos_ativos: 0, recuperados: 0, encerrados_sem_recuperacao: 0, aguardando_escolha: 0, taxa_recuperacao: 0, proxima_acao: null }
-    return metricasMes
+    return { ...metricasMes, aguardando_escolha: pendentesDeDemonstracao() }
   },
 
   /**
@@ -483,7 +521,7 @@ export const api = {
   async pendenciasDeEscolha(): Promise<number> {
     if (real('metricasMes')) return (await chamar<MetricasMesApi>('GET', '/metrics/involuntario/mes')).aguardando_escolha
     await espera(60)
-    return vazio ? 0 : metricasMes.aguardando_escolha
+    return vazio ? 0 : pendentesDeDemonstracao()
   },
 
   /** GET /metrics/involuntario/serie?dias=30 */
@@ -628,7 +666,7 @@ export const api = {
       // A escolha vale para o ciclo simulado que o backend tem AGORA, na última rodada de sugestões.
       const atual = await chamar<SimulacaoApi>('GET', '/simulacao')
       const id = atual.ciclo?.ciclo.id
-      if (!id) throw new ErroApi('conflito', 'Esta simulação não tem mensagem esperando escolha. Atualize a página.')
+      if (!id) throw new ErroApi('conflito', t('Esta simulação não tem mensagem esperando escolha. Atualize a página.'))
       const rodada = Math.max(1, ...atual.ciclo!.mensagens.map((m) => m.rodada))
       await chamar('POST', `/ciclos/${id}/mensagens/escolher`, { rodada, abordagem: abordagemParaApi(abordagem) })
       return adaptarSimulacao(await chamar<SimulacaoApi>('GET', '/simulacao'))
@@ -756,7 +794,7 @@ export const api = {
       atualizados: Math.round(linhas * 0.31),
       sem_id_recorrencia: Math.round(linhas * 0.02),
       sem_comportamento: null,
-      avisos: ['3 linhas sem e-mail nem telefone: ficam com "Sem canal disponível".'],
+      avisos: [t('3 linhas sem e-mail nem telefone: ficam com "Sem canal disponível".')],
       demonstracao: true,
     }
   },
@@ -827,9 +865,9 @@ export const api = {
     }
     await espera(400)
     const limpo = nome.trim()
-    if (!limpo || limpo.length > NOME_DA_CHAVE_MAX) throw new ErroApi('invalido', 'O servidor recusou os dados enviados. Confira os campos e tente de novo.', 422, 'nome_invalido')
+    if (!limpo || limpo.length > NOME_DA_CHAVE_MAX) throw new ErroApi('invalido', t('O servidor recusou os dados enviados. Confira os campos e tente de novo.'), 422, 'nome_invalido')
     if (chavesAtuais.filter((c) => !c.revogada_em).length >= LIMITE_DE_CHAVES_ATIVAS) {
-      throw new ErroApi('conflito', 'A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.', 409, 'limite_de_chaves')
+      throw new ErroApi('conflito', t('A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.'), 409, 'limite_de_chaves')
     }
     // Chave de demonstração: tem a forma de uma chave, começa por DEMO e não abre nada.
     const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
@@ -847,7 +885,7 @@ export const api = {
     }
     await espera(250)
     const atual = chavesAtuais.find((c) => c.id === id)
-    if (!atual) throw new ErroApi('nao_encontrado', 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, 'chave_nao_encontrada')
+    if (!atual) throw new ErroApi('nao_encontrado', t('Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.'), 404, 'chave_nao_encontrada')
     const revogada: ChaveApi = atual.revogada_em ? atual : { ...atual, revogada_em: new Date().toISOString() }
     chavesAtuais = chavesAtuais.map((c) => (c.id === id ? revogada : c))
     return revogada
@@ -859,9 +897,9 @@ export const api = {
     return {
       ok: true,
       passos: [
-        { rotulo: 'Chave live aceita', ok: true, detalhe: 'crai_live_7f3a autenticou.' },
-        { rotulo: 'Webhook respondeu', ok: true, detalhe: 'HTTP 200 em 180 ms, assinatura conferida.' },
-        { rotulo: 'Evento de teste recebido', ok: true, detalhe: 'cobranca.falhou (teste) chegou e foi ignorado, como esperado.' },
+        { rotulo: t('Chave live aceita'), ok: true, detalhe: t('crai_live_7f3a autenticou.') },
+        { rotulo: t('Webhook respondeu'), ok: true, detalhe: t('HTTP 200 em 180 ms, assinatura conferida.') },
+        { rotulo: t('Evento de teste recebido'), ok: true, detalhe: t('cobranca.falhou (teste) chegou e foi ignorado, como esperado.') },
       ],
     }
   },
@@ -923,15 +961,15 @@ export const api = {
     if (!idCliente.trim()) return null
     return {
       cliente: idCliente,
-      decisao: 'Agendar 3 tentativas de cobrança (dias 04/10, 06/10 e 07/10) e, se falharem, enviar uma mensagem de lembrete cordial por WhatsApp.',
+      decisao: t('Agendar 3 tentativas de cobrança (dias 04/10, 06/10 e 07/10) e, se falharem, enviar uma mensagem de lembrete cordial por WhatsApp.'),
       quando: new Date(AGORA_MS - 3 * 86_400_000).toISOString(),
       fatores: [
-        { fator: 'Causa da falha: saldo insuficiente', pontos: 14 },
-        { fator: 'Cliente há mais de 2 anos', pontos: 12 },
-        { fator: 'Bom histórico de pagamento', pontos: 6 },
-        { fator: 'Valor alto para o perfil', pontos: -5 },
+        { fator: t('Causa da falha: saldo insuficiente'), pontos: 14 },
+        { fator: t('Cliente há mais de 2 anos'), pontos: 12 },
+        { fator: t('Bom histórico de pagamento'), pontos: 6 },
+        { fator: t('Valor alto para o perfil'), pontos: -5 },
       ],
-      revisao_humana: 'A mensagem foi escolhida por um administrador da empresa em 07/10, não pelo sistema.',
+      revisao_humana: t('A mensagem foi escolhida por um administrador da empresa em 07/10, não pelo sistema.'),
     }
   },
 }

@@ -10,7 +10,9 @@ import { Carregando, ErroCarregar, Vazio } from '../components/ui/Estados'
 import { StatTile } from '../components/ui/StatTile'
 import { ErroApi, agoraDaTela, api, etiquetaDeDemonstracao } from '../data/api'
 import { fmt } from '../lib/format'
+import { localeAtual, t } from '../lib/idioma'
 import { useCarregar } from '../lib/useCarregar'
+import { useModoMensagem } from '../lib/useModoMensagem'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { GraficoTrintaDias } from './visao/GraficoTrintaDias'
 import {
@@ -24,11 +26,11 @@ import {
   saudeGeral,
 } from './visao/Blocos'
 
-const dataLonga = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'long' })
+const dataLonga = new Intl.DateTimeFormat(localeAtual(), { day: 'numeric', month: 'long' })
 const periodoTexto = (de: string, ate: string) => {
   const a = dataLonga.format(new Date(`${de}T12:00:00`))
   const b = dataLonga.format(new Date(`${ate}T12:00:00`))
-  return `${a} a ${b}`
+  return t('{de} a {ate}', { de: a, ate: b })
 }
 
 type AbaVisao = 'mantido' | 'caminho' | 'funciona' | 'extrato' | 'atividade' | 'saude'
@@ -47,15 +49,15 @@ function Divisao({ inv, vol }: { inv: number; vol: number | null }) {
       <dl className="mt-3 grid grid-cols-2 gap-3 text-sobre-destaque">
         <div>
           <dt className="t-label flex items-center gap-1.5 text-sobre-destaque">
-            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/70" aria-hidden="true" /> Recuperado (involuntário)
+            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/70" aria-hidden="true" /> {t('Recuperado (involuntário)')}
           </dt>
           <dd className="mt-0.5 text-[17px] font-[640] tracking-[-0.01em]">{fmt.brlInteiro(inv)}</dd>
         </div>
         <div>
           <dt className="t-label flex items-center gap-1.5 text-sobre-destaque">
-            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/25" aria-hidden="true" /> Retido (voluntário)
+            <span className="h-2 w-2 rounded-[2px] bg-sobre-destaque/25" aria-hidden="true" /> {t('Retido (voluntário)')}
           </dt>
-          <dd className="mt-0.5 text-[17px] font-[640] tracking-[-0.01em]">{vol !== null ? fmt.brlInteiro(vol) : 'Plano premium'}</dd>
+          <dd className="mt-0.5 text-[17px] font-[640] tracking-[-0.01em]">{vol !== null ? fmt.brlInteiro(vol) : t('Plano premium')}</dd>
         </div>
       </dl>
     </div>
@@ -64,6 +66,7 @@ function Divisao({ inv, vol }: { inv: number; vol: number | null }) {
 
 export function VisaoGeral() {
   const { modo, empresa } = usePainel()
+  const automatico = useModoMensagem() === 'automatico'
   const sim = modo === 'simulacao'
   const premium = empresa?.plano === 'premium'
 
@@ -97,19 +100,19 @@ export function VisaoGeral() {
   const geral = saudeGeral(saude)
 
   const abas: Aba<AbaVisao>[] = [
-    { valor: 'mantido', rotulo: 'Dinheiro mantido' },
-    { valor: 'caminho', rotulo: 'Funil de recuperação' },
-    { valor: 'funciona', rotulo: 'O que mais funciona' },
-    { valor: 'extrato', rotulo: 'Extrato' },
-    { valor: 'atividade', rotulo: 'Atividade' },
+    { valor: 'mantido', rotulo: t('Dinheiro mantido') },
+    { valor: 'caminho', rotulo: t('Funil de recuperação') },
+    { valor: 'funciona', rotulo: t('O que mais funciona') },
+    { valor: 'extrato', rotulo: t('Extrato') },
+    { valor: 'atividade', rotulo: t('Atividade') },
     {
       valor: 'saude',
-      rotulo: 'Saúde do sistema',
+      rotulo: t('Saúde do sistema'),
       extra:
         geral === 'carregando' ? null : (
           <span
             className={geral === 'ok' ? 'h-1.5 w-1.5 rounded-full bg-ok' : 'h-1.5 w-1.5 rounded-full bg-danger'}
-            aria-label={geral === 'ok' ? 'Tudo funcionando' : 'Precisa de atenção'}
+            aria-label={geral === 'ok' ? t('Tudo funcionando') : t('Precisa de atenção')}
           />
         ),
     },
@@ -133,20 +136,20 @@ export function VisaoGeral() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="t-h2 text-paper">Visão geral</h2>
-          <p className="t-apoio mt-1 text-silver">Tudo o que a CRAI recuperou e manteve para você, nos dois tipos de churn.</p>
+          <h2 className="t-h2 text-paper">{t('Visão geral')}</h2>
+          <p className="t-apoio mt-1 text-silver">{t('Tudo o que a CRAI recuperou e manteve para você, nos dois tipos de churn.')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {sim ? <Badge tone="amber">Inclui demonstração</Badge> : null}
+          {sim ? <Badge tone="amber">{t('Inclui demonstração')}</Badge> : null}
           {resumo?.piloto ? (
             <span className="t-label rounded-[8px] border border-line bg-slate/50 px-3 py-1.5 text-silver" data-piloto>
-              Período de piloto: sem taxa
+              {t('Período de piloto: sem taxa')}
             </span>
           ) : null}
           <span className="t-label rounded-[8px] border border-line bg-slate/50 px-3 py-1.5 text-silver">
-            Últimos 30 dias{resumo ? ` · ${periodoTexto(resumo.periodo.de, resumo.periodo.ate)}` : ''}
+            {t('Últimos 30 dias')}{resumo ? ` · ${periodoTexto(resumo.periodo.de, resumo.periodo.ate)}` : ''}
           </span>
-          <button type="button" onClick={() => irPara('saude')} className="rounded-full" aria-label="Abrir a saúde do sistema">
+          <button type="button" onClick={() => irPara('saude')} className="rounded-full" aria-label={t('Abrir a saúde do sistema')}>
             <SeloSaude geral={geral} compacto />
           </button>
         </div>
@@ -155,49 +158,57 @@ export function VisaoGeral() {
       {carga.erro ? <ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} /> : null}
 
       {/* Bento: o laranja é o único colorido */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6" aria-label="Resumo dos últimos 30 dias">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6" aria-label={t('Resumo dos últimos 30 dias')}>
         <StatTile
           className="row-span-2 min-h-[230px] sm:col-span-2"
           tone="orange"
           hero
           demo={demo}
-          rotulo="Mantido para você nos últimos 30 dias"
+          rotulo={t('Mantido para você nos últimos 30 dias')}
           valor={mantido !== null ? fmt.brlInteiro(mantido) : '—'}
           apoio={
             <>
-              <span>{resumo?.piloto ? 'Recuperado mais retido. No período de piloto, a CRAI não cobra taxa.' : 'Recuperado mais retido, já descontada a taxa da CRAI.'}</span>
+              <span>{resumo?.piloto ? t('Recuperado mais retido. No período de piloto, a CRAI não cobra taxa.') : t('Recuperado mais retido, já descontada a taxa da CRAI.')}</span>
               {resumo ? <Divisao inv={resumo.recuperado_involuntario} vol={resumo.retido_voluntario} /> : null}
             </>
           }
         />
         <StatTile
           demo={demo}
-          rotulo="Recuperado do involuntário"
+          rotulo={t('Recuperado do involuntário')}
           valor={resumo ? fmt.brlInteiro(resumo.recuperado_involuntario) : '—'}
-          apoio={resumo ? `${resumo.cobrancas_recuperadas} ${resumo.cobrancas_recuperadas === 1 ? 'cobrança Pix que voltou' : 'cobranças Pix que voltaram'}` : ''}
+          apoio={resumo ? (resumo.cobrancas_recuperadas === 1 ? t('{n} cobrança Pix que voltou', { n: resumo.cobrancas_recuperadas }) : t('{n} cobranças Pix que voltaram', { n: resumo.cobrancas_recuperadas })) : ''}
           icone={<IconRefresh width={17} height={17} />}
         />
         <StatTile
           demo={demo}
-          rotulo="Retido do voluntário"
+          rotulo={t('Retido do voluntário')}
           valor={resumo ? (resumo.retido_voluntario !== null ? fmt.brlInteiro(resumo.retido_voluntario) : '—') : '—'}
           apoio={
             resumo
               ? resumo.retido_voluntario !== null
-                ? `${resumo.clientes_mantidos ?? 0} ${resumo.clientes_mantidos === 1 ? 'cliente que ficou' : 'clientes que ficaram'}`
-                : 'Disponível no plano premium'
+                ? resumo.clientes_mantidos === 1
+                  ? t('{n} cliente que ficou', { n: resumo.clientes_mantidos ?? 0 })
+                  : t('{n} clientes que ficaram', { n: resumo.clientes_mantidos ?? 0 })
+                : t('Disponível no plano premium')
               : ''
           }
           icone={<IconUsers width={17} height={17} />}
         />
         <StatTile
           demo={demo}
-          rotulo="Ciclos ativos"
+          rotulo={t('Ciclos ativos')}
           valor={resumo?.ciclos_ativos ?? '—'}
           apoio={
             resumo ? (
               <Link to="/involuntario" className="inline-flex items-center gap-1 hover:text-paper">
-                {resumo.aguardando_escolha ? `${resumo.aguardando_escolha} aguardando sua escolha` : 'Ver no involuntário'}
+                {resumo.aguardando_escolha
+                  ? automatico
+                    ? resumo.aguardando_escolha === 1
+                      ? t('{n} mensagem a enviar', { n: resumo.aguardando_escolha })
+                      : t('{n} mensagens a enviar', { n: resumo.aguardando_escolha })
+                    : t('{n} aguardando sua escolha', { n: resumo.aguardando_escolha })
+                  : t('Ver no involuntário')}
                 <IconArrowRight width={13} height={13} />
               </Link>
             ) : (
@@ -208,20 +219,20 @@ export function VisaoGeral() {
         />
         <StatTile
           demo={demo}
-          rotulo="Clientes em risco grave"
+          rotulo={t('Clientes em risco grave')}
           valor={premium ? (resumo?.clientes_risco_grave ?? '—') : '—'}
-          apoio={premium ? (resumo && resumo.risco_grave_com_oferta !== null ? `${resumo.risco_grave_com_oferta} já ${resumo.risco_grave_com_oferta === 1 ? 'recebeu' : 'receberam'} uma oferta` : '') : 'Disponível no plano premium'}
+          apoio={premium ? (resumo && resumo.risco_grave_com_oferta !== null ? (resumo.risco_grave_com_oferta === 1 ? t('{n} já recebeu uma oferta', { n: resumo.risco_grave_com_oferta }) : t('{n} já receberam uma oferta', { n: resumo.risco_grave_com_oferta })) : '') : t('Disponível no plano premium')}
           icone={<IconAlert width={17} height={17} />}
         />
         <StatTile
           demo={demo}
-          rotulo="Taxa de recuperação"
+          rotulo={t('Taxa de recuperação')}
           valor={resumo && resumo.taxa_recuperacao !== null ? fmt.pontos(resumo.taxa_recuperacao * 100) : '—'}
           apoio={
             resumo
               ? resumo.taxa_recuperacao === null
-                ? 'Nenhuma cobrança teve desfecho no período'
-                : `Das ${resumo.ciclos_com_desfecho} cobranças que já tiveram desfecho`
+                ? t('Nenhuma cobrança teve desfecho no período')
+                : t('Das {n} cobranças que já tiveram desfecho', { n: resumo.ciclos_com_desfecho })
               : ''
           }
         />
@@ -231,8 +242,8 @@ export function VisaoGeral() {
       </section>
 
       {/* Uma coisa por vez: cada gráfico na sua aba */}
-      <section aria-label="Detalhes" className="flex flex-col gap-4">
-        <Abas abas={abas} ativa={aba} onChange={irPara} rotulo="Detalhes da visão geral" idBase="visao" />
+      <section aria-label={t('Detalhes')} className="flex flex-col gap-4">
+        <Abas abas={abas} ativa={aba} onChange={irPara} rotulo={t('Detalhes da visão geral')} idBase="visao" />
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={aba}
@@ -250,12 +261,12 @@ export function VisaoGeral() {
                 {serie ? (
                   serie.every((p) => p.involuntario === 0 && p.voluntario === 0) ? (
                     <Vazio
-                      titulo="Nada mantido ainda nos últimos 30 dias"
-                      texto="O gráfico aparece quando a primeira cobrança for recuperada ou o primeiro cliente aceitar uma oferta. Se a integração é nova, isso costuma levar poucos dias."
+                      titulo={t('Nada mantido ainda nos últimos 30 dias')}
+                      texto={t('O gráfico aparece quando a primeira cobrança for recuperada ou o primeiro cliente aceitar uma oferta. Se a integração é nova, isso costuma levar poucos dias.')}
                       icone={<IconSpark width={22} height={22} />}
                       acao={
                         <Link to="/simulacao" className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">
-                          Ver o sistema agindo na simulação
+                          {t('Ver o sistema agindo na simulação')}
                         </Link>
                       }
                     />
@@ -270,7 +281,7 @@ export function VisaoGeral() {
               <Card className="p-5 md:p-6">
                 {funil ? (
                   funil.etapas[0]?.chegaram === 0 ? (
-                    <Vazio titulo={`Nenhuma cobrança falhou em ${fmt.mesPorExtenso(funil.mes)}`} texto="Quando uma cobrança Pix falhar, o caminho dela aparece aqui: tentativas, mensagem e desfecho." />
+                    <Vazio titulo={t('Nenhuma cobrança falhou em {mes}', { mes: fmt.mesPorExtenso(funil.mes) })} texto={t('Quando uma cobrança Pix falhar, o caminho dela aparece aqui: tentativas, mensagem e desfecho.')} />
                   ) : (
                     <FunilInvoluntario funil={funil} />
                   )
@@ -287,8 +298,8 @@ export function VisaoGeral() {
                 {extrato === 'sem_permissao' ? (
                   <div className="p-5">
                     <Vazio
-                      titulo="O extrato é só para o dono e os administradores"
-                      texto="Ele traz a taxa da CRAI de cada valor recuperado ou mantido. Peça a um administrador da sua empresa para abrir esta aba."
+                      titulo={t('O extrato é só para o dono e os administradores')}
+                      texto={t('Ele traz a taxa da CRAI de cada valor recuperado ou mantido. Peça a um administrador da sua empresa para abrir esta aba.')}
                     />
                   </div>
                 ) : extrato ? (

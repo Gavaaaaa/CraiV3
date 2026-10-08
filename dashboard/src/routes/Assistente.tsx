@@ -11,6 +11,7 @@ import { ErroApi, MODO_REAL, api } from '../data/api'
 import { PERGUNTAS_PRONTAS } from '../data/assistente'
 import type { RespostaAssistente } from '../data/tipos'
 import { cx } from '../lib/cx'
+import { t } from '../lib/idioma'
 import { useReducedMotion } from '../lib/useReducedMotion'
 
 interface Mensagem {
@@ -69,14 +70,14 @@ export function Assistente() {
       const r = await api.assistente(p)
       setMensagens((m) => [...m, { id: proximoId.current++, de: 'assistente', texto: r.texto, links: r.links, sugestoes: r.sugestoes, origem: r.origem }])
     } catch (e) {
-      const texto = e instanceof ErroApi ? e.message : 'Algo deu errado.'
+      const texto = e instanceof ErroApi ? e.message : t('Algo deu errado.')
       setMensagens((m) => [
         ...m,
         {
           id: proximoId.current++,
           de: 'assistente',
-          texto: `${texto} Não consegui responder agora. Os números continuam certos nas páginas do painel; tente de novo em instantes.`,
-          links: [{ rotulo: 'Ir para a visão geral', para: '/' }],
+          texto: t('{erro} Não consegui responder agora. Os números continuam certos nas páginas do painel; tente de novo em instantes.', { erro: texto }),
+          links: [{ rotulo: t('Ir para a visão geral'), para: '/' }],
           sugestoes: [p],
           origem: 'texto_fixo',
         },
@@ -106,13 +107,13 @@ export function Assistente() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="t-h2 flex items-center gap-2 text-paper">
-            Assistente <Demonstracao de={['assistente']} />
+            {t('Assistente')} <Demonstracao de={['assistente']} />
           </h2>
-          <p className="t-apoio mt-1 text-silver">Perguntas sobre os seus números e sobre como o sistema funciona, em português claro.</p>
+          <p className="t-apoio mt-1 text-silver">{t('Perguntas sobre os seus números e sobre como o sistema funciona, em português claro.')}</p>
         </div>
         {mensagens.length ? (
           <Button variant="quiet" size="sm" onClick={() => setMensagens([])}>
-            <IconUndo width={15} height={15} /> Limpar conversa
+            <IconUndo width={15} height={15} /> {t('Limpar conversa')}
           </Button>
         ) : null}
       </div>
@@ -120,15 +121,15 @@ export function Assistente() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         {/* A conversa */}
         <Card className="flex min-h-[560px] flex-col p-0">
-          <div className="scroll-fino flex-1 overflow-y-auto px-5 pt-5 pb-2 md:px-6" aria-live="polite" aria-label="Conversa">
+          <div className="scroll-fino flex-1 overflow-y-auto px-5 pt-5 pb-2 md:px-6" aria-live="polite" aria-label={t('Conversa')}>
             {vazio ? (
               <div className="flex h-full min-h-[300px] flex-col items-center justify-center text-center">
                 <span className="flex h-12 w-12 items-center justify-center rounded-[14px] bg-paper/[0.06] text-amber">
                   <IconChat width={24} height={24} />
                 </span>
-                <div className="t-h3 mt-4 text-paper">Olá{empresa ? `, ${empresa.nome}` : ''}. O que você quer saber?</div>
+                <div className="t-h3 mt-4 text-paper">{empresa ? t('Olá, {nome}. O que você quer saber?', { nome: empresa.nome }) : t('Olá. O que você quer saber?')}</div>
                 <p className="t-apoio mt-1 max-w-md text-silver">
-                  Eu leio os mesmos números que aparecem no painel e explico como o sistema decide. Comece por uma das perguntas abaixo ou escreva a sua.
+                  {t('Eu leio os mesmos números que aparecem no painel e explico como o sistema decide. Comece por uma das perguntas abaixo ou escreva a sua.')}
                 </p>
               </div>
             ) : (
@@ -144,7 +145,7 @@ export function Assistente() {
                     >
                       {m.de === 'voce' ? (
                         <div className="max-w-[85%] rounded-[16px] rounded-br-[6px] bg-paper px-4 py-2.5 text-apoio leading-[1.55] text-ink">
-                          <span className="sr-only">Você: </span>
+                          <span className="sr-only">{t('Você: ')}</span>
                           {m.texto}
                         </div>
                       ) : (
@@ -153,9 +154,9 @@ export function Assistente() {
                             <IconChat width={15} height={15} />
                           </span>
                           <div className="min-w-0">
-                            <span className="sr-only">Assistente: </span>
+                            <span className="sr-only">{t('Assistente: ')}</span>
                             <div className={cx('rounded-[16px] rounded-tl-[6px] border px-4 py-3 text-paper/90', m.origem === 'texto_fixo' ? 'border-warn/40 bg-warn/[0.06]' : 'border-line bg-ink/30')}>
-                              {m.origem === 'texto_fixo' ? <Badge tone="warn" className="mb-2">Resposta fixa</Badge> : null}
+                              {m.origem === 'texto_fixo' ? <Badge tone="warn" className="mb-2">{t('Resposta fixa')}</Badge> : null}
                               <Texto texto={m.texto} />
                               {m.links?.length ? (
                                 <div className="mt-3 flex flex-wrap gap-2">
@@ -178,7 +179,7 @@ export function Assistente() {
                   ))}
                 </AnimatePresence>
                 {pensando ? (
-                  <li className="flex gap-3" aria-label="O assistente está escrevendo">
+                  <li className="flex gap-3" aria-label={t('O assistente está escrevendo')}>
                     <span className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-orange/15 text-orange" aria-hidden="true">
                       <IconChat width={15} height={15} />
                     </span>
@@ -191,7 +192,7 @@ export function Assistente() {
                           aria-hidden="true"
                         />
                       ))}
-                      <span className="sr-only">Escrevendo…</span>
+                      <span className="sr-only">{t('Escrevendo…')}</span>
                     </div>
                   </li>
                 ) : null}
@@ -203,7 +204,7 @@ export function Assistente() {
           {/* Sugestões e campo */}
           <div className="border-t border-line px-5 py-4 md:px-6">
             {sugestoes.length ? (
-              <div className="mb-3 flex flex-wrap gap-2" aria-label="Perguntas prontas">
+              <div className="mb-3 flex flex-wrap gap-2" aria-label={t('Perguntas prontas')}>
                 {sugestoes.map((s) => (
                   <button
                     key={s}
@@ -219,24 +220,24 @@ export function Assistente() {
             ) : null}
             <form onSubmit={enviar} className="flex items-end gap-2">
               <label className="flex-1">
-                <span className="sr-only">Sua pergunta</span>
+                <span className="sr-only">{t('Sua pergunta')}</span>
                 <textarea
                   ref={campo}
                   value={texto}
                   onChange={(e) => setTexto(e.target.value.slice(0, LIMITE))}
                   onKeyDown={teclado}
                   rows={1}
-                  placeholder="Escreva a sua pergunta"
+                  placeholder={t('Escreva a sua pergunta')}
                   className="scroll-fino max-h-32 min-h-[44px] w-full resize-none rounded-[12px] border border-campo bg-ink/40 px-4 py-2.5 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
                 />
               </label>
-              <Button type="submit" size="md" disabled={!texto.trim() || pensando} aria-label="Enviar pergunta">
+              <Button type="submit" size="md" disabled={!texto.trim() || pensando} aria-label={t('Enviar pergunta')}>
                 <IconSend width={16} height={16} />
-                <span className="hidden sm:inline">Enviar</span>
+                <span className="hidden sm:inline">{t('Enviar')}</span>
               </Button>
             </form>
             <div className="t-label mt-2 flex flex-wrap items-center justify-between gap-2 text-muted">
-              <span>Enter envia; Shift+Enter quebra a linha.</span>
+              <span>{t('Enter envia; Shift+Enter quebra a linha.')}</span>
               <span className="tabular">
                 {texto.length}/{LIMITE}
               </span>
@@ -251,21 +252,21 @@ export function Assistente() {
               <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-ok/15 text-ok">
                 <IconShield width={16} height={16} />
               </span>
-              <h3 className="t-h3 text-paper">O que o assistente vê</h3>
+              <h3 className="t-h3 text-paper">{t('O que o assistente vê')}</h3>
             </div>
             <ul className="mt-4 flex flex-col gap-2.5 text-apoio leading-[1.5]">
-              <Item ok>Os mesmos números que o painel mostra: valores, contagens, faixas de risco, funil.</Item>
-              <Item ok>Como o sistema funciona: tentativas, mensagens, ofertas, taxa, prazos.</Item>
-              <Item>E-mail, telefone, CPF ou chave Pix dos seus clientes. Nunca.</Item>
-              {MODO_REAL ? <Item>O nome ou o identificador de qualquer cliente: ele lê só os totais.</Item> : null}
-              <Item>O texto das mensagens enviadas.</Item>
-              <Item>Esta conversa depois que você sair: nada é guardado.</Item>
+              <Item ok>{t('Os mesmos números que o painel mostra: valores, contagens, faixas de risco, funil.')}</Item>
+              <Item ok>{t('Como o sistema funciona: tentativas, mensagens, ofertas, taxa, prazos.')}</Item>
+              <Item>{t('E-mail, telefone, CPF ou chave Pix dos seus clientes. Nunca.')}</Item>
+              {MODO_REAL ? <Item>{t('O nome ou o identificador de qualquer cliente: ele lê só os totais.')}</Item> : null}
+              <Item>{t('O texto das mensagens enviadas.')}</Item>
+              <Item>{t('Esta conversa depois que você sair: nada é guardado.')}</Item>
             </ul>
           </Card>
           <Card className="p-5">
-            <h3 className="t-h3 text-paper">Ele não muda nada</h3>
+            <h3 className="t-h3 text-paper">{t('Ele não muda nada')}</h3>
             <p className="t-apoio mt-2 text-silver">
-              O assistente só lê e explica. Para escolher uma mensagem, mudar o modo de envio ou anexar a base, use as páginas do painel; ele indica o caminho.
+              {t('O assistente só lê e explica. Para escolher uma mensagem, mudar o modo de envio ou anexar a base, use as páginas do painel; ele indica o caminho.')}
             </p>
           </Card>
         </aside>
@@ -279,7 +280,7 @@ function Item({ ok, children }: { ok?: boolean; children: React.ReactNode }) {
     <li className="flex gap-2.5">
       <span className={cx('mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full', ok ? 'bg-ok' : 'bg-danger')} aria-hidden="true" />
       <span className={ok ? 'text-paper' : 'text-silver'}>
-        <span className="sr-only">{ok ? 'Vê: ' : 'Não vê: '}</span>
+        <span className="sr-only">{ok ? t('Vê: ') : t('Não vê: ')}</span>
         {children}
       </span>
     </li>

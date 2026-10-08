@@ -7,6 +7,7 @@
  * Regra de honestidade: os modelos "veem" só o que está em `pensando` e nos campos do
  * ciclo. A `verdade` do cliente fictício só é lida pelo PSP simulado, aqui embaixo.
  */
+import { t, localeAtual } from '../lib/idioma'
 import { AGORA, TAXA } from './mock'
 import type {
   Abordagem,
@@ -41,42 +42,42 @@ const somaDias = (iso: string, dias: number, hora = 9) => {
   return x.toISOString()
 }
 const diasEntre = (a: string, b: string) => Math.round((new Date(b).setHours(12, 0, 0, 0) - new Date(a).setHours(12, 0, 0, 0)) / 86_400_000)
-const dataCurta = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+const dataCurta = (iso: string) => new Date(iso).toLocaleDateString(localeAtual(), { day: '2-digit', month: '2-digit' })
 const centavos = (v: number) => Math.round(v * 100) / 100
 
 /* ---------- o que o sistema estima (sem ver a verdade) ---------- */
 
 /** Dia provável de saldo por perfil, em dias a partir da cobrança. É a estimativa do sistema, não a verdade. */
 const ESTIMATIVA_SALDO: Record<ClienteFicticio['perfil'], { dias: number; texto: string }> = {
-  clt: { dias: 5, texto: 'Perfil CLT: o salário costuma entrar até o 5º dia útil' },
-  pj: { dias: 4, texto: 'Perfil PJ: o caixa costuma ter entrada na primeira semana' },
-  freelancer: { dias: 2, texto: 'Perfil freelancer: entradas irregulares; o sistema tenta cedo e espalha as tentativas' },
+  clt: { dias: 5, texto: t('Perfil CLT: o salário costuma entrar até o 5º dia útil') },
+  pj: { dias: 4, texto: t('Perfil PJ: o caixa costuma ter entrada na primeira semana') },
+  freelancer: { dias: 2, texto: t('Perfil freelancer: entradas irregulares; o sistema tenta cedo e espalha as tentativas') },
 }
 
 function diagnostico(cliente: ClienteFicticio, causa: CausaFalha): { chance: number; contribuicoes: Contribuicao[] } {
   const c: Contribuicao[] = []
   let pontos = 50
   if (causa === 'insufficient_funds') {
-    c.push({ fator: 'Causa: saldo insuficiente (passa quando o dinheiro entra)', pontos: 14 })
+    c.push({ fator: t('Causa: saldo insuficiente (passa quando o dinheiro entra)'), pontos: 14 })
     pontos += 14
   } else if (causa === 'processing_error') {
-    c.push({ fator: 'Causa: erro no processamento (costuma passar na próxima)', pontos: 20 })
+    c.push({ fator: t('Causa: erro no processamento (costuma passar na próxima)'), pontos: 20 })
     pontos += 20
   } else if (causa === 'authorization_revoked') {
-    c.push({ fator: 'Causa: autorização revogada (só a mensagem resolve)', pontos: -18 })
+    c.push({ fator: t('Causa: autorização revogada (só a mensagem resolve)'), pontos: -18 })
     pontos -= 18
   }
   const perfil = { clt: 8, pj: 4, freelancer: -5 }[cliente.perfil]
-  c.push({ fator: { clt: 'Perfil CLT: renda previsível', pj: 'Perfil PJ: caixa razoavelmente previsível', freelancer: 'Perfil freelancer: renda irregular' }[cliente.perfil], pontos: perfil })
+  c.push({ fator: { clt: t('Perfil CLT: renda previsível'), pj: t('Perfil PJ: caixa razoavelmente previsível'), freelancer: t('Perfil freelancer: renda irregular') }[cliente.perfil], pontos: perfil })
   pontos += perfil
   if (cliente.mensalidade > 2000) {
-    c.push({ fator: 'Valor alto para o perfil', pontos: -7 })
+    c.push({ fator: t('Valor alto para o perfil'), pontos: -7 })
     pontos -= 7
   } else if (cliente.mensalidade < 500) {
-    c.push({ fator: 'Valor baixo: fácil de regularizar', pontos: 5 })
+    c.push({ fator: t('Valor baixo: fácil de regularizar'), pontos: 5 })
     pontos += 5
   }
-  c.push({ fator: 'Cliente fictício: sem histórico de pagamento', pontos: -3 })
+  c.push({ fator: t('Cliente fictício: sem histórico de pagamento'), pontos: -3 })
   pontos -= 3
   return { chance: Math.min(0.95, Math.max(0.05, pontos / 100)), contribuicoes: c }
 }
@@ -85,14 +86,17 @@ function diagnostico(cliente: ClienteFicticio, causa: CausaFalha): { chance: num
 function semCrai(cliente: ClienteFicticio): EstadoSimulacao['sem_crai'] {
   const v = cliente.verdade
   if (v.vai_revogar) {
-    return { resultado: 'perdido', explicacao: 'O cliente revoga a autorização. Sem a CRAI, ninguém fala com ele e a assinatura acaba.' }
+    return { resultado: 'perdido', explicacao: t('O cliente revoga a autorização. Sem a CRAI, ninguém fala com ele e a assinatura acaba.') }
   }
   if (v.dias_ate_saldo === 0 && v.chance_pagar >= 0.5) {
-    return { resultado: 'recuperado', explicacao: 'O dinheiro já está na conta. O próprio banco resolveria na segunda janela do dia do vencimento.' }
+    return { resultado: 'recuperado', explicacao: t('O dinheiro já está na conta. O próprio banco resolveria na segunda janela do dia do vencimento.') }
   }
   return {
     resultado: 'perdido',
-    explicacao: `Sem a CRAI, o banco só tenta de novo no dia do vencimento (duas janelas). O dinheiro entra em ${v.dias_ate_saldo} ${v.dias_ate_saldo === 1 ? 'dia' : 'dias'}, então a cobrança se perde e a empresa precisa correr atrás por conta própria.`,
+    explicacao:
+      v.dias_ate_saldo === 1
+        ? t('Sem a CRAI, o banco só tenta de novo no dia do vencimento (duas janelas). O dinheiro entra em {n} dia, então a cobrança se perde e a empresa precisa correr atrás por conta própria.', { n: v.dias_ate_saldo })
+        : t('Sem a CRAI, o banco só tenta de novo no dia do vencimento (duas janelas). O dinheiro entra em {n} dias, então a cobrança se perde e a empresa precisa correr atrás por conta própria.', { n: v.dias_ate_saldo }),
   }
 }
 
@@ -119,7 +123,7 @@ function sugestoesPara(cliente: ClienteFicticio, causa: CausaFalha, chance: numb
   const v = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cliente.mensalidade)
   const recomendada: Abordagem = causa === 'authorization_revoked' ? 'facilitacao' : chance >= 0.55 ? 'lembrete_cordial' : 'urgencia_com_respeito'
   const canal = 'whatsapp' as const
-  const motivo = 'Canal padrão da demonstração (o cliente fictício não tem contato real)'
+  const motivo = t('Canal padrão da demonstração (o cliente fictício não tem contato real)')
   return [
     {
       abordagem: 'lembrete_cordial',
@@ -207,8 +211,8 @@ export function iniciar(cliente: ClienteFicticio): EstadoSimulacao {
     e.etapa_atual = 'desfecho'
     e.etapas_concluidas = [...ORDEM]
     e.desfecho = { tipo: 'recuperado', via: 'tentativa', tentativa: 0, valor_liquido: cliente.mensalidade, em: e.hoje }
-    e.pensando = ['A cobrança passou de primeira. Não há ciclo para abrir e a CRAI não cobra nada por isso.']
-    evento(e, { em: e.hoje, tipo: 'desfecho', titulo: 'Cobrança aprovada de primeira', detalhe: 'Nada para a CRAI fazer.', tom: 'ok' })
+    e.pensando = [t('A cobrança passou de primeira. Não há ciclo para abrir e a CRAI não cobra nada por isso.')]
+    evento(e, { em: e.hoje, tipo: 'desfecho', titulo: t('Cobrança aprovada de primeira'), detalhe: t('Nada para a CRAI fazer.'), tom: 'ok' })
     return e
   }
 
@@ -226,19 +230,19 @@ export function iniciar(cliente: ClienteFicticio): EstadoSimulacao {
   const dias = [d1, d1 + 2, 7]
   e.tentativas = dias.map((d, i) => ({ numero: i + 1, agendada_para: somaDias(e.hoje, d), resultado: 'agendada', causa: null }))
   e.fase = 'recusada'
-  e.proxima_acao = { quando: e.tentativas[0].agendada_para, descricao: 'Tentativa 1' }
+  e.proxima_acao = { quando: e.tentativas[0].agendada_para, descricao: t('Tentativa {n}', { n: 1 }) }
   e.pensando = [
-    `Causa da falha: ${CAUSA[causa]}.`,
-    `${est.texto}. Dia provável de saldo: ${dataCurta(e.dia_provavel_saldo)}.`,
-    `Chance de recuperar: ${Math.round(chance * 100)}%.`,
-    `Plano: 3 tentativas dentro de 7 dias, nos dias ${dias.map((d) => dataCurta(somaDias(e.hoje, d))).join(', ')}. Nenhuma mensagem antes de as três falharem.`,
+    t('Causa da falha: {causa}.', { causa: CAUSA[causa] }),
+    t('{estimativa}. Dia provável de saldo: {data}.', { estimativa: est.texto, data: dataCurta(e.dia_provavel_saldo) }),
+    t('Chance de recuperar: {pct}%.', { pct: Math.round(chance * 100) }),
+    t('Plano: 3 tentativas dentro de 7 dias, nos dias {dias}. Nenhuma mensagem antes de as três falharem.', { dias: dias.map((d) => dataCurta(somaDias(e.hoje, d))).join(', ') }),
   ]
-  evento(e, { em: e.hoje, tipo: 'abertura', titulo: 'Cobrança falhou', detalhe: `${CAUSA[causa]}`, tom: 'danger' })
+  evento(e, { em: e.hoje, tipo: 'abertura', titulo: t('Cobrança falhou'), detalhe: `${CAUSA[causa]}`, tom: 'danger' })
   evento(e, {
     em: e.hoje,
     tipo: 'diagnostico',
-    titulo: `Diagnóstico: ${Math.round(chance * 100)}% de chance de recuperar`,
-    detalhe: `Dia provável de saldo: ${dataCurta(e.dia_provavel_saldo)}. 3 tentativas agendadas: ${dias.map((d) => dataCurta(somaDias(e.hoje, d))).join(', ')}.`,
+    titulo: t('Diagnóstico: {pct}% de chance de recuperar', { pct: Math.round(chance * 100) }),
+    detalhe: t('Dia provável de saldo: {data}. 3 tentativas agendadas: {dias}.', { data: dataCurta(e.dia_provavel_saldo), dias: dias.map((d) => dataCurta(somaDias(e.hoje, d))).join(', ') }),
   })
   return e
 }
@@ -274,8 +278,8 @@ export function avancar(estado: EstadoSimulacao, dias: number): EstadoSimulacao 
           e.desfecho = { tipo: 'encerrado', via: 'mensagem', tentativa: null, valor_liquido: 0, em: e.hoje }
           e.proxima_acao = null
           concluir(e, 'desfecho')
-          e.pensando = [...e.pensando, 'O cliente não respondeu à mensagem. O ciclo encerra sem recuperação e fica registrado no funil.']
-          evento(e, { em: e.hoje, tipo: 'desfecho', titulo: 'Encerrado sem recuperação', detalhe: 'Sem resposta em 2 dias. Nada mais é tentado.', tom: 'neutro' })
+          e.pensando = [...e.pensando, t('O cliente não respondeu à mensagem. O ciclo encerra sem recuperação e fica registrado no funil.')]
+          evento(e, { em: e.hoje, tipo: 'desfecho', titulo: t('Encerrado sem recuperação'), detalhe: t('Sem resposta em 2 dias. Nada mais é tentado.'), tom: 'neutro' })
         }
         return e
       }
@@ -283,17 +287,17 @@ export function avancar(estado: EstadoSimulacao, dias: number): EstadoSimulacao 
     }
 
     // Tentativa agendada para hoje?
-    const t = e.tentativas.find((x) => x.resultado === 'agendada' && diasEntre(x.agendada_para, e.hoje) === 0)
-    if (!t) continue
+    const tent = e.tentativas.find((x) => x.resultado === 'agendada' && diasEntre(x.agendada_para, e.hoje) === 0)
+    if (!tent) continue
 
-    const r = pspResponde(cliente, rel, t.numero)
-    t.resultado = r.pagou ? 'paga' : 'falhou'
-    t.causa = r.causa
-    const etapa = `tentativa_${t.numero}` as EtapaSimulacao
+    const r = pspResponde(cliente, rel, tent.numero)
+    tent.resultado = r.pagou ? 'paga' : 'falhou'
+    tent.causa = r.causa
+    const etapa = `tentativa_${tent.numero}` as EtapaSimulacao
     concluir(e, etapa)
 
     if (r.pagou) {
-      fechar(e, 'recuperado', 'tentativa', t.numero)
+      fechar(e, 'recuperado', 'tentativa', tent.numero)
       return e
     }
 
@@ -303,20 +307,20 @@ export function avancar(estado: EstadoSimulacao, dias: number): EstadoSimulacao 
       e.tentativas.filter((x) => x.resultado === 'agendada').forEach((x) => (x.resultado = 'cancelada'))
       concluir(e, 'tentativa_3')
       e.etapa_atual = 'mensagem'
-      evento(e, { em: e.hoje, tipo: 'tentativa', titulo: `Tentativa ${t.numero}: autorização revogada`, detalhe: 'O cliente cancelou o Pix Automático. As outras tentativas são canceladas.', tom: 'danger' })
-      e.pensando = [...e.pensando, 'Autorização revogada: cobrar de novo não adianta. O sistema pula para a mensagem, com a abordagem de facilitação (outro meio de pagar).']
+      evento(e, { em: e.hoje, tipo: 'tentativa', titulo: t('Tentativa {n}: autorização revogada', { n: tent.numero }), detalhe: t('O cliente cancelou o Pix Automático. As outras tentativas são canceladas.'), tom: 'danger' })
+      e.pensando = [...e.pensando, t('Autorização revogada: cobrar de novo não adianta. O sistema pula para a mensagem, com a abordagem de facilitação (outro meio de pagar).')]
       abrirMensagens(e)
       return e
     }
 
-    evento(e, { em: e.hoje, tipo: 'tentativa', titulo: `Tentativa ${t.numero} falhou`, detalhe: CAUSA[r.causa!], tom: 'danger' })
+    evento(e, { em: e.hoje, tipo: 'tentativa', titulo: t('Tentativa {n} falhou', { n: tent.numero }), detalhe: CAUSA[r.causa!], tom: 'danger' })
     const prox = e.tentativas.find((x) => x.resultado === 'agendada')
     if (prox) {
       e.fase = 'recusada'
-      e.proxima_acao = { quando: prox.agendada_para, descricao: `Tentativa ${prox.numero}` }
-      e.pensando = [...e.pensando, `Tentativa ${t.numero} não passou (${CAUSA[r.causa!]}). Próxima: ${dataCurta(prox.agendada_para)}. Ainda sem mensagem.`]
+      e.proxima_acao = { quando: prox.agendada_para, descricao: t('Tentativa {n}', { n: prox.numero }) }
+      e.pensando = [...e.pensando, t('Tentativa {n} não passou ({causa}). Próxima: {data}. Ainda sem mensagem.', { n: tent.numero, causa: CAUSA[r.causa!], data: dataCurta(prox.agendada_para) })]
     } else {
-      e.pensando = [...e.pensando, 'As 3 tentativas falharam. Agora sim: 3 mensagens escritas para este cliente, e a empresa escolhe (ou o sistema manda a recomendada em 8 h).']
+      e.pensando = [...e.pensando, t('As 3 tentativas falharam. Agora sim: 3 mensagens escritas para este cliente, e a empresa escolhe (ou o sistema manda a recomendada em 8 h).')]
       abrirMensagens(e)
     }
     return e
@@ -327,8 +331,8 @@ export function avancar(estado: EstadoSimulacao, dias: number): EstadoSimulacao 
 function abrirMensagens(e: EstadoSimulacao) {
   e.sugestoes = sugestoesPara(e.cliente!, e.causa!, e.chance_recuperar ?? 0.5)
   e.fase = 'mensagens'
-  e.proxima_acao = { quando: somaDias(e.hoje, 0, 17), descricao: 'Envio automático da recomendada' }
-  evento(e, { em: e.hoje, tipo: 'sugestoes', titulo: '3 mensagens sugeridas', detalhe: `Recomendada: ${ABORDAGEM[e.sugestoes.find((s) => s.recomendada)!.abordagem]}, por WhatsApp.` })
+  e.proxima_acao = { quando: somaDias(e.hoje, 0, 17), descricao: t('Envio automático da recomendada') }
+  evento(e, { em: e.hoje, tipo: 'sugestoes', titulo: t('3 mensagens sugeridas'), detalhe: t('Recomendada: {abordagem}, por WhatsApp.', { abordagem: ABORDAGEM[e.sugestoes.find((s) => s.recomendada)!.abordagem] }) })
 }
 
 export function escolherMensagem(estado: EstadoSimulacao, abordagem: Abordagem, por: 'owner' | 'admin'): EstadoSimulacao {
@@ -345,15 +349,15 @@ function enviarMensagem(e: EstadoSimulacao, abordagem: Abordagem, por: 'owner' |
   e.mensagem_enviada = { abordagem, canal: s.canal, em: quando, escolhida_por: por }
   e.fase = 'mensagem_enviada'
   concluir(e, 'mensagem')
-  e.proxima_acao = { quando: somaDias(quando, 2, 9), descricao: 'Prazo para resposta do cliente' }
+  e.proxima_acao = { quando: somaDias(quando, 2, 9), descricao: t('Prazo para resposta do cliente') }
   evento(e, {
     em: quando,
     tipo: 'mensagem',
-    titulo: `Mensagem enviada: ${ABORDAGEM[abordagem]}`,
-    detalhe: por === 'automatico' ? 'Sem escolha no prazo de 8 h, o sistema enviou a recomendada.' : 'Escolhida por você. A decisão fica na trilha com revisão humana.',
+    titulo: t('Mensagem enviada: {abordagem}', { abordagem: ABORDAGEM[abordagem] }),
+    detalhe: por === 'automatico' ? t('Sem escolha no prazo de 8 h, o sistema enviou a recomendada.') : t('Escolhida por você. A decisão fica na trilha com revisão humana.'),
     tom: 'ok',
   })
-  e.pensando = [...e.pensando, por === 'automatico' ? 'Prazo de 8 h venceu sem escolha: a recomendada foi enviada por WhatsApp.' : 'Mensagem escolhida por uma pessoa e enviada por WhatsApp. Agora o sistema espera 2 dias pela resposta.']
+  e.pensando = [...e.pensando, por === 'automatico' ? t('Prazo de 8 h venceu sem escolha: a recomendada foi enviada por WhatsApp.') : t('Mensagem escolhida por uma pessoa e enviada por WhatsApp. Agora o sistema espera 2 dias pela resposta.')]
 }
 
 function fechar(e: EstadoSimulacao, tipo: 'recuperado', via: 'tentativa' | 'mensagem', tentativa: number | null) {
@@ -364,9 +368,14 @@ function fechar(e: EstadoSimulacao, tipo: 'recuperado', via: 'tentativa' | 'mens
   e.proxima_acao = null
   e.etapas_concluidas = [...ORDEM]
   e.etapa_atual = 'desfecho'
-  const como = via === 'tentativa' ? `na ${tentativa}ª tentativa` : 'pelo link da mensagem'
-  e.pensando = [...e.pensando, `Pagamento recuperado ${como}. O ciclo fecha e o valor entra no extrato.`]
-  evento(e, { em: e.hoje, tipo: 'desfecho', titulo: `Pagamento recuperado ${como}`, detalhe: `Líquido para a empresa: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(liquido)}.`, tom: 'ok' })
+  const titulo = via === 'tentativa' ? t('Pagamento recuperado na {n}ª tentativa', { n: tentativa ?? '' }) : t('Pagamento recuperado pelo link da mensagem')
+  e.pensando = [
+    ...e.pensando,
+    via === 'tentativa'
+      ? t('Pagamento recuperado na {n}ª tentativa. O ciclo fecha e o valor entra no extrato.', { n: tentativa ?? '' })
+      : t('Pagamento recuperado pelo link da mensagem. O ciclo fecha e o valor entra no extrato.'),
+  ]
+  evento(e, { em: e.hoje, tipo: 'desfecho', titulo, detalhe: t('Líquido para a empresa: {valor}.', { valor: new Intl.NumberFormat(localeAtual(), { style: 'currency', currency: 'BRL' }).format(liquido) }), tom: 'ok' })
 }
 
 /** Quantos dias até a próxima ação agendada (para "Avançar até a próxima ação"). */
@@ -377,17 +386,17 @@ export function diasAteProximaAcao(e: EstadoSimulacao): number {
 }
 
 export const CAUSA: Record<CausaFalha, string> = {
-  insufficient_funds: 'Saldo insuficiente',
-  limit_exceeded: 'Limite do Pix excedido',
-  authorization_revoked: 'Autorização revogada',
-  processing_error: 'Erro no processamento',
-  generic_decline: 'Recusa sem motivo informado',
+  insufficient_funds: t('Saldo insuficiente'),
+  limit_exceeded: t('Limite do Pix excedido'),
+  authorization_revoked: t('Autorização revogada'),
+  processing_error: t('Erro no processamento'),
+  generic_decline: t('Recusa sem motivo informado'),
 }
 
 export const ABORDAGEM: Record<Abordagem, string> = {
-  lembrete_cordial: 'Lembrete cordial',
-  facilitacao: 'Facilitação',
-  urgencia_com_respeito: 'Urgência com respeito',
+  lembrete_cordial: t('Lembrete cordial'),
+  facilitacao: t('Facilitação'),
+  urgencia_com_respeito: t('Urgência com respeito'),
 }
 
 /* ---------- voluntário: cliente fictício em risco ---------- */
@@ -396,10 +405,10 @@ export const ABORDAGEM: Record<Abordagem, string> = {
 export const MRR_ALTO = 3000
 
 export const OFERTA: Record<OfertaRetencao, string> = {
-  desconto_10: 'Desconto de 10% por 3 meses',
-  desconto_20: 'Desconto de 20% por 3 meses',
-  pausa_1_mes: 'Pausa de 1 mês na assinatura, sem custo',
-  pix_boleto_flash: 'Troca para Pix ou boleto em 1 clique',
+  desconto_10: t('Desconto de 10% por 3 meses'),
+  desconto_20: t('Desconto de 20% por 3 meses'),
+  pausa_1_mes: t('Pausa de 1 mês na assinatura, sem custo'),
+  pix_boleto_flash: t('Troca para Pix ou boleto em 1 clique'),
 }
 
 /** Quanto do MRR o desconto concedido tira, com 1 mês contado (a mesma conta do backend). */
@@ -413,26 +422,26 @@ export function simularRetencao(c: ClienteRiscoFicticio): ResultadoRetencaoSimul
   const mrrAlto = c.mrr >= MRR_ALTO
   const faixa = c.sinais.abriu_cancelamento || (sinais >= 2 && !mrrAlto) ? 'grave' : sinais >= 1 ? 'preocupante' : 'sem_risco'
   const motivos: string[] = []
-  if (c.sinais.abriu_cancelamento) motivos.push('abriu a página de cancelamento')
-  if (c.sinais.uso_caiu) motivos.push('sem entrar há 24 dias, usando 1 funcionalidade')
-  if (c.sinais.tickets) motivos.push('abriu 3 chamados de suporte no mês')
-  if (c.sinais.atraso) motivos.push('teve 2 pagamentos com falha em 90 dias')
-  let motivo = motivos.length ? motivos.join(', ').replace(/^./, (x) => x.toUpperCase()) + '.' : 'Nenhum sinal de risco nos dados de comportamento.'
-  if (faixa === 'preocupante' && sinais >= 2 && mrrAlto) motivo += ' Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.'
+  if (c.sinais.abriu_cancelamento) motivos.push(t('abriu a página de cancelamento'))
+  if (c.sinais.uso_caiu) motivos.push(t('sem entrar há 24 dias, usando 1 funcionalidade'))
+  if (c.sinais.tickets) motivos.push(t('abriu 3 chamados de suporte no mês'))
+  if (c.sinais.atraso) motivos.push(t('teve 2 pagamentos com falha em 90 dias'))
+  let motivo = motivos.length ? motivos.join(', ').replace(/^./, (x) => x.toUpperCase()) + '.' : t('Nenhum sinal de risco nos dados de comportamento.')
+  if (faixa === 'preocupante' && sinais >= 2 && mrrAlto) motivo += ' ' + t('Mensalidade alta: entra como Preocupante e só sobe para Grave se os sinais continuarem.')
 
   const risco = faixa === 'grave' ? 0.9 : faixa === 'preocupante' ? 0.8 : 0.1
   const base = { faixa, motivo, decidido_por: 'regua', risco, corte_de_intervencao: 0.6, sem_oferta_porque: null, meses_de_mrr: 1, prazo_estorno_dias: 30 } as const
   if (faixa === 'sem_risco') {
-    return { ...base, oferta: null, oferta_legivel: null, canal_legivel: null, porque: null, aceitou: null, valor_mantido_liquido: 0, sem_crai: 'O sistema não interveio: com ou sem a CRAI, este cliente segue como está.' }
+    return { ...base, oferta: null, oferta_legivel: null, canal_legivel: null, porque: null, aceitou: null, valor_mantido_liquido: 0, sem_crai: t('O sistema não interveio: com ou sem a CRAI, este cliente segue como está.') }
   }
 
   // O que o sistema decide (sem ver a propensão): pela combinação de sinais e valor
   const oferta: OfertaRetencao = c.sinais.atraso ? 'pix_boleto_flash' : c.sinais.uso_caiu && c.mrr >= 2000 ? 'pausa_1_mes' : c.sinais.tickets ? 'desconto_20' : 'desconto_10'
   const porque = {
-    pix_boleto_flash: 'Pagamentos atrasados indicam atrito na cobrança, não no produto: trocar o meio de pagamento resolve sem dar desconto.',
-    pausa_1_mes: 'Uso em queda com mensalidade alta: uma pausa segura o cliente sem descontar em cima de um valor grande.',
-    desconto_20: 'Chamados abertos indicam insatisfação: o desconto maior é a oferta mais aceita nesse caso.',
-    desconto_10: 'Para este perfil, o desconto curto é a oferta mais aceita nos últimos 30 dias.',
+    pix_boleto_flash: t('Pagamentos atrasados indicam atrito na cobrança, não no produto: trocar o meio de pagamento resolve sem dar desconto.'),
+    pausa_1_mes: t('Uso em queda com mensalidade alta: uma pausa segura o cliente sem descontar em cima de um valor grande.'),
+    desconto_20: t('Chamados abertos indicam insatisfação: o desconto maior é a oferta mais aceita nesse caso.'),
+    desconto_10: t('Para este perfil, o desconto curto é a oferta mais aceita nos últimos 30 dias.'),
   }[oferta]
 
   const aceitou = semente(`${c.nome}:oferta:${oferta}`) < c.propensao[oferta]
@@ -446,6 +455,6 @@ export function simularRetencao(c: ClienteRiscoFicticio): ResultadoRetencaoSimul
     porque,
     aceitou,
     valor_mantido_liquido: valor,
-    sem_crai: 'Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.',
+    sem_crai: t('Sem a CRAI, ninguém perceberia os sinais até o pedido de cancelamento, quando já é tarde para oferecer algo.'),
   }
 }

@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 import { IconChat, IconGear, IconGrid, IconKey, IconPlay, IconRefresh, IconUsers } from '../icons/Icons'
 
 interface Item {
@@ -13,21 +14,21 @@ interface Item {
 /** Do vídeo: barra estreita, só ícones, o ativo "encaixado" com um recorte na borda. */
 export function Sidebar({ premium }: { premium: boolean }) {
   const itens: Item[] = [
-    { to: '/simulacao', rotulo: 'Simulação do gateway', Icone: IconPlay, selo: 'Demo' },
-    { to: '/', rotulo: 'Visão geral', Icone: IconGrid },
-    { to: '/involuntario', rotulo: 'Churn involuntário', Icone: IconRefresh },
-    { to: '/voluntario', rotulo: 'Churn voluntário', Icone: IconUsers, bloqueado: !premium },
-    { to: '/assistente', rotulo: 'Assistente', Icone: IconChat },
+    { to: '/simulacao', rotulo: t('Simulação do gateway'), Icone: IconPlay, selo: t('Demo') },
+    { to: '/', rotulo: t('Visão geral'), Icone: IconGrid },
+    { to: '/involuntario', rotulo: t('Churn involuntário'), Icone: IconRefresh },
+    { to: '/voluntario', rotulo: t('Churn voluntário'), Icone: IconUsers, bloqueado: !premium },
+    { to: '/assistente', rotulo: t('Assistente'), Icone: IconChat },
     // A aba API abre em qualquer plano: no essencial a empresa vê e revoga; só gerar é do premium.
-    { to: '/api', rotulo: 'API', Icone: IconKey },
+    { to: '/api', rotulo: t('API'), Icone: IconKey },
   ]
   return (
     <nav
-      aria-label="Seções do painel"
+      aria-label={t('Seções do painel')}
       className="fixed inset-y-0 left-0 z-30 flex w-[76px] flex-col items-center bg-bar py-5"
     >
       {/* Wordmark tipográfico, como no site: o A em silver cruzado por uma seta laranja */}
-      <NavLink to="/" className="mb-6 select-none" aria-label="CRAI, visão geral">
+      <NavLink to="/" className="mb-6 select-none" aria-label={t('CRAI, visão geral')}>
         <span className="relative inline-flex items-baseline text-[22px] leading-none font-[680] tracking-[-0.04em] text-paper">
           <span>CR</span>
           <span className="relative text-silver">
@@ -54,7 +55,7 @@ export function Sidebar({ premium }: { premium: boolean }) {
             <NavLink
               to={to}
               end={to === '/'}
-              title={bloqueado ? `${rotulo} (plano premium)` : rotulo}
+              title={bloqueado ? t('{rotulo} (plano premium)', { rotulo }) : rotulo}
               aria-label={rotulo}
               aria-disabled={bloqueado || undefined}
               className={({ isActive }) =>
@@ -88,7 +89,7 @@ export function Sidebar({ premium }: { premium: boolean }) {
                     className="pointer-events-none absolute left-[calc(100%+14px)] z-40 rounded-[8px] max-md:hidden border border-line bg-slate px-2.5 py-1.5 text-rotulo whitespace-nowrap text-paper opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
                   >
                     {rotulo}
-                    {bloqueado ? <span className="text-silver"> · Plano premium</span> : null}
+                    {bloqueado ? <span className="text-silver"> · {t('Plano premium')}</span> : null}
                   </span>
                 </>
               )}
@@ -100,7 +101,7 @@ export function Sidebar({ premium }: { premium: boolean }) {
       <div className="mt-auto flex flex-col items-center gap-1.5">
         <NavLink
           to="/configuracao"
-          aria-label="Configuração"
+          aria-label={t('Configuração')}
           className={({ isActive }) =>
             cx(
               'group relative flex h-12 w-12 items-center justify-center rounded-[14px] transition-colors duration-200',

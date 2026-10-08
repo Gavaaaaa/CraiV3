@@ -6,13 +6,14 @@ import { Carregando, ErroCarregar } from '../components/ui/Estados'
 import { ENDERECO_DA_API, ErroApi, agoraDaTela, api } from '../data/api'
 import type { ChaveApi, ChavesDaEmpresa } from '../data/tipos'
 import { fmt } from '../lib/format'
+import { t } from '../lib/idioma'
 import { PainelOQueAApiFaz } from './api/OQueAApiFaz'
 import { Aviso, campo } from './configuracao/comuns'
 
 /** O marcador que fica no lugar da chave no exemplo. Nunca uma chave de verdade. */
 export const MARCADOR_DA_CHAVE = 'SUA_CHAVE_AQUI'
 
-export const AVISO_DA_CHAVE = 'Copie agora. Por segurança, ela não aparece de novo.'
+export const AVISO_DA_CHAVE = t('Copie agora. Por segurança, ela não aparece de novo.')
 
 /** A chave como a lista a mostra: o começo, seis pontos e o final. */
 export const mascarar = (c: ChaveApi) => `${c.inicio}••••••${c.final}`
@@ -37,7 +38,7 @@ function exemploDeEvento(endereco: string): string {
 }
 
 /** Um botão "Copiar" que confirma por alguns segundos. O texto copiado não é guardado aqui. */
-function Copiar({ texto, rotulo = 'Copiar' }: { texto: string; rotulo?: string }) {
+function Copiar({ texto, rotulo = t('Copiar') }: { texto: string; rotulo?: string }) {
   const [copiado, setCopiado] = useState(false)
   async function copiar() {
     try {
@@ -50,7 +51,7 @@ function Copiar({ texto, rotulo = 'Copiar' }: { texto: string; rotulo?: string }
   }
   return (
     <Button size="sm" variant="ghost" onClick={() => void copiar()}>
-      {copiado ? <IconCheck width={15} height={15} /> : null} {copiado ? 'Copiado' : rotulo}
+      {copiado ? <IconCheck width={15} height={15} /> : null} {copiado ? t('Copiado') : rotulo}
     </Button>
   )
 }
@@ -85,7 +86,7 @@ export function PaginaApi() {
         if (vivo) setDados(r)
       })
       .catch((e: unknown) => {
-        if (vivo) setErro(e instanceof ErroApi ? e.message : 'Algo deu errado ao carregar. Tente de novo.')
+        if (vivo) setErro(e instanceof ErroApi ? e.message : t('Algo deu errado ao carregar. Tente de novo.'))
       })
     return () => {
       vivo = false
@@ -105,7 +106,7 @@ export function PaginaApi() {
       setDados((d) => (d ? { ...d, chaves: [r.chave, ...d.chaves.filter((c) => c.id !== r.chave.id)], ativas: d.ativas + 1 } : d))
       recarregar()
     } catch (falha) {
-      setErroAcao(falha instanceof ErroApi ? falha.message : 'Não deu para gerar a chave. Tente de novo.')
+      setErroAcao(falha instanceof ErroApi ? falha.message : t('Não deu para gerar a chave. Tente de novo.'))
     }
     setGerando(false)
   }
@@ -118,7 +119,7 @@ export function PaginaApi() {
       setInteiras(({ [chave.id]: _revogada, ...resto }) => resto)
       recarregar()
     } catch (falha) {
-      setErroAcao(falha instanceof ErroApi ? falha.message : 'Não deu para revogar a chave. Tente de novo.')
+      setErroAcao(falha instanceof ErroApi ? falha.message : t('Não deu para revogar a chave. Tente de novo.'))
     }
     setRevogando(null)
     setConfirmando(null)
@@ -135,20 +136,20 @@ export function PaginaApi() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="t-h2 text-paper">API</h2>
         <Button variant="ghost" onClick={() => setExplicacao(true)}>
-          O que a API faz
+          {t('O que a API faz')}
         </Button>
       </div>
 
-      <Card as="section" className="p-5 md:p-6" aria-label="Endereço da API">
-        <h3 className="t-h3 text-paper">Endereço da API</h3>
+      <Card as="section" className="p-5 md:p-6" aria-label={t('Endereço da API')}>
+        <h3 className="t-h3 text-paper">{t('Endereço da API')}</h3>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <input readOnly value={ENDERECO_DA_API} aria-label="Endereço da API" className={`${campo} tabular min-w-0 flex-1`} />
+          <input readOnly value={ENDERECO_DA_API} aria-label={t('Endereço da API')} className={`${campo} tabular min-w-0 flex-1`} />
           <Copiar texto={ENDERECO_DA_API} />
         </div>
       </Card>
 
-      <Card as="section" className="p-5 md:p-6" aria-label="Chave de API">
-        <h3 className="t-h3 text-paper">Chave de API</h3>
+      <Card as="section" className="p-5 md:p-6" aria-label={t('Chave de API')}>
+        <h3 className="t-h3 text-paper">{t('Chave de API')}</h3>
 
         <div className="mt-3 flex flex-col gap-4">
           {erroAcao ? <Aviso tom="danger">{erroAcao}</Aviso> : null}
@@ -159,7 +160,7 @@ export function PaginaApi() {
             <Carregando altura={96} />
           ) : (
             <>
-              {ativas.length === 0 ? <p className="t-apoio text-silver">Você ainda não tem uma chave</p> : null}
+              {ativas.length === 0 ? <p className="t-apoio text-silver">{t('Você ainda não tem uma chave')}</p> : null}
 
               {ativas.map((c) => {
                 const inteira = inteiras[c.id]
@@ -169,13 +170,13 @@ export function PaginaApi() {
                       <input
                         readOnly
                         value={inteira ?? mascarar(c)}
-                        aria-label={inteira ? 'Chave de API, inteira' : 'Chave de API'}
+                        aria-label={inteira ? t('Chave de API, inteira') : t('Chave de API')}
                         className={`${campo} tabular min-w-0 flex-1`}
                       />
                       {inteira ? <Copiar texto={inteira} /> : null}
                       {dados.pode_revogar && confirmando !== c.id ? (
                         <Button size="sm" variant="quiet" onClick={() => setConfirmando(c.id)}>
-                          Revogar
+                          {t('Revogar')}
                         </Button>
                       ) : null}
                     </div>
@@ -186,43 +187,43 @@ export function PaginaApi() {
                     ) : null}
                     {confirmando === c.id ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="t-apoio text-paper">Revogar esta chave? O sistema que a usa para na hora.</span>
+                        <span className="t-apoio text-paper">{t('Revogar esta chave? O sistema que a usa para na hora.')}</span>
                         <Button
                           size="sm"
                           disabled={revogando === c.id}
                           onClick={() => void revogar(c)}
                           className="border border-danger/60 !bg-danger/20 !text-danger-aviso hover:!bg-danger/30"
                         >
-                          {revogando === c.id ? 'Revogando…' : 'Confirmar'}
+                          {revogando === c.id ? t('Revogando…') : t('Confirmar')}
                         </Button>
                         <Button size="sm" variant="quiet" disabled={revogando === c.id} onClick={() => setConfirmando(null)}>
-                          Cancelar
+                          {t('Cancelar')}
                         </Button>
                       </div>
                     ) : null}
                     <p className="t-label mt-1.5 text-muted">
-                      Criada em {fmt.dataCurta(c.criada_em)} · Último uso: {c.ultimo_uso ? fmt.relativo(c.ultimo_uso, agoraDaTela()) : 'nunca'}
+                      {t('Criada em {data} · Último uso: {uso}', { data: fmt.dataCurta(c.criada_em), uso: c.ultimo_uso ? fmt.relativo(c.ultimo_uso, agoraDaTela()) : t('nunca') })}
                     </p>
                   </div>
                 )
               })}
 
               {!dados.plano_permite_gerar ? (
-                <Aviso>Gerar chave faz parte do plano Premium.</Aviso>
+                <Aviso>{t('Gerar chave faz parte do plano Premium.')}</Aviso>
               ) : !dados.pode_gerar ? (
-                <Aviso>Seu papel não permite gerar nem revogar chaves.</Aviso>
+                <Aviso>{t('Seu papel não permite gerar nem revogar chaves.')}</Aviso>
               ) : noLimite ? (
-                <Aviso>Limite de {dados.limite_ativas} chaves ativas. Revogue uma para gerar outra.</Aviso>
+                <Aviso>{t('Limite de {n} chaves ativas. Revogue uma para gerar outra.', { n: dados.limite_ativas })}</Aviso>
               ) : ativas.length === 0 ? (
                 <div>
                   <Button onClick={() => void gerar()} disabled={gerando}>
-                    {gerando ? 'Gerando…' : 'Gerar chave'}
+                    {gerando ? t('Gerando…') : t('Gerar chave')}
                   </Button>
                 </div>
               ) : (
                 <div>
                   <button type="button" onClick={() => void gerar()} disabled={gerando} className={linkDiscreto}>
-                    {gerando ? 'Gerando…' : 'Gerar outra chave'}
+                    {gerando ? t('Gerando…') : t('Gerar outra chave')}
                   </button>
                 </div>
               )}
@@ -230,14 +231,14 @@ export function PaginaApi() {
               {revogadas.length ? (
                 <div>
                   <button type="button" aria-expanded={verRevogadas} onClick={() => setVerRevogadas((v) => !v)} className={linkDiscreto}>
-                    {verRevogadas ? 'Esconder' : 'Ver'} chaves revogadas ({revogadas.length})
+                    {verRevogadas ? t('Esconder chaves revogadas ({n})', { n: revogadas.length }) : t('Ver chaves revogadas ({n})', { n: revogadas.length })}
                   </button>
                   {verRevogadas ? (
-                    <ul className="mt-2 flex flex-col gap-1.5" aria-label="Chaves revogadas">
+                    <ul className="mt-2 flex flex-col gap-1.5" aria-label={t('Chaves revogadas')}>
                       {revogadas.map((c) => (
                         <li key={c.id} className="t-label flex flex-wrap items-baseline gap-x-3 text-muted">
                           <span className="tabular text-silver line-through">{mascarar(c)}</span>
-                          <span>Revogada em {c.revogada_em ? fmt.dataCurta(c.revogada_em) : ''}</span>
+                          <span>{t('Revogada em {data}', { data: c.revogada_em ? fmt.dataCurta(c.revogada_em) : '' })}</span>
                         </li>
                       ))}
                     </ul>
@@ -249,16 +250,16 @@ export function PaginaApi() {
         </div>
       </Card>
 
-      <Card as="section" className="p-5 md:p-6" aria-label="Exemplo de uso">
+      <Card as="section" className="p-5 md:p-6" aria-label={t('Exemplo de uso')}>
         <button
           type="button"
           aria-expanded={verExemplo}
           onClick={() => setVerExemplo((v) => !v)}
           className="t-h3 flex w-full items-center justify-between gap-3 text-left text-paper"
         >
-          Exemplo de uso
+          {t('Exemplo de uso')}
           <span aria-hidden="true" className="t-label text-silver">
-            {verExemplo ? 'Fechar' : 'Abrir'}
+            {verExemplo ? t('Fechar') : t('Abrir')}
           </span>
         </button>
         {verExemplo ? (
@@ -267,20 +268,20 @@ export function PaginaApi() {
               <code>{exemplo}</code>
             </pre>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <Copiar texto={exemplo} rotulo="Copiar exemplo" />
-              <span className="t-label text-muted">Troque {MARCADOR_DA_CHAVE} pela sua chave.</span>
+              <Copiar texto={exemplo} rotulo={t('Copiar exemplo')} />
+              <span className="t-label text-muted">{t('Troque {marcador} pela sua chave.', { marcador: MARCADOR_DA_CHAVE })}</span>
             </div>
 
-            <h4 className="t-label mt-5 font-[600] text-paper">Avisar um evento</h4>
+            <h4 className="t-label mt-5 font-[600] text-paper">{t('Avisar um evento')}</h4>
             <p className="t-label mt-1 text-silver">
-              O cliente c-001 abriu a página de cancelamento. Use em userId o mesmo identificador do cadastro. O messageId evita que um reenvio conte duas vezes.
+              {t('O cliente c-001 abriu a página de cancelamento. Use em userId o mesmo identificador do cadastro. O messageId evita que um reenvio conte duas vezes.')}
             </p>
             <pre data-exemplo="evento" className="scroll-fino mt-2 overflow-x-auto rounded-[12px] border border-line bg-ink/60 p-4 text-rotulo leading-[1.6] text-paper/90">
               <code>{exemploEvento}</code>
             </pre>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <Copiar texto={exemploEvento} rotulo="Copiar exemplo do evento" />
-              <span className="t-label text-muted">Esta chamada sai do servidor da sua empresa. A chave é secreta: não a coloque em página nem em aplicativo.</span>
+              <Copiar texto={exemploEvento} rotulo={t('Copiar exemplo do evento')} />
+              <span className="t-label text-muted">{t('Esta chamada sai do servidor da sua empresa. A chave é secreta: não a coloque em página nem em aplicativo.')}</span>
             </div>
           </div>
         ) : null}

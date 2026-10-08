@@ -6,7 +6,9 @@ import { ErroCarregar, Vazio } from '../../components/ui/Estados'
 import { agoraDaTela, api } from '../../data/api'
 import type { CicloDetalhe, CicloResumo, SugestaoDoCiclo } from '../../data/tipos'
 import { fmt } from '../../lib/format'
+import { t } from '../../lib/idioma'
 import { useCarregar } from '../../lib/useCarregar'
+import { useModoMensagem } from '../../lib/useModoMensagem'
 import { ABORDAGEM, CANAL, textoDoPrazo } from './CicloDrawer'
 
 /** Uma cobrança que espera a escolha: a linha da lista e, quando deu para ler, o detalhe dela. */
@@ -39,18 +41,24 @@ export function carregarPendentes(incluirSimulados: boolean): Promise<Pendente[]
 /**
  * A aba "Mensagens" do Involuntário: cada linha é uma cobrança esperando a escolha da mensagem.
  * `onEscolher` abre o ciclo já na escolha; `onAbrir` abre o ciclo de costume (a cobrança sem canal).
+ *
+ * No modo automático não há escolha: a lista mostra o que o sistema vai enviar sozinho, sem
+ * prazo e sem o botão "Escolher a mensagem" (o backend recusa a escolha nesse modo).
  */
 export function AbaMensagens({ incluirSimulados, onEscolher, onAbrir }: { incluirSimulados: boolean; onEscolher: (id: number) => void; onAbrir: (id: number) => void }) {
   const carga = useCarregar(() => carregarPendentes(incluirSimulados), [incluirSimulados])
   const pendentes = carga.dados
   const agora = agoraDaTela()
+  const automatico = useModoMensagem() === 'automatico'
 
   return (
     <Card className="p-0" data-aba-mensagens>
       <div className="border-b border-line px-5 py-4">
-        <h3 className="t-h3 text-paper">Mensagens esperando a sua escolha</h3>
+        <h3 className="t-h3 text-paper">{automatico ? t('Mensagens que o sistema vai enviar') : t('Mensagens esperando a sua escolha')}</h3>
         <p className="t-apoio mt-1 text-silver">
-          O sistema escreveu três mensagens para cada cobrança. Sem escolha no prazo, a recomendada é enviada.
+          {automatico
+            ? t('Modo automático: a recomendada de cada cobrança sai sozinha, dentro do horário de contato. Para escolher você mesmo, mude o modo na Configuração.')
+            : t('O sistema escreveu três mensagens para cada cobrança. Sem escolha no prazo, a recomendada é enviada.')}
         </p>
       </div>
       {carga.erro ? (
@@ -58,7 +66,7 @@ export function AbaMensagens({ incluirSimulados, onEscolher, onAbrir }: { inclui
           <ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} />
         </div>
       ) : pendentes === null ? (
-        <ul className="flex flex-col" aria-busy="true" aria-label="Carregando as mensagens">
+        <ul className="flex flex-col" aria-busy="true" aria-label={t('Carregando as mensagens')}>
           {Array.from({ length: 3 }).map((_, i) => (
             <li key={i} className="border-t border-line px-5 py-4 first:border-t-0">
               <div className="h-4 w-1/2 animate-pulse rounded bg-paper/[0.06]" />
@@ -68,12 +76,16 @@ export function AbaMensagens({ incluirSimulados, onEscolher, onAbrir }: { inclui
         </ul>
       ) : pendentes.length === 0 ? (
         <Vazio
-          titulo="Nenhuma cobrança espera a sua escolha agora"
-          texto="Quando o sistema escrever as três mensagens de uma cobrança, ela aparece aqui."
+          titulo={automatico ? t('Nenhuma mensagem pendente agora') : t('Nenhuma cobrança espera a sua escolha agora')}
+          texto={
+            automatico
+              ? t('No modo automático, a recomendada de cada cobrança sai sozinha. As enviadas ficam na linha do tempo de cada cobrança.')
+              : t('Quando o sistema escrever as três mensagens de uma cobrança, ela aparece aqui.')
+          }
           icone={<IconChat width={22} height={22} />}
         />
       ) : (
-        <ul className="flex flex-col" aria-label="Cobranças esperando a escolha da mensagem">
+        <ul className="flex flex-col" aria-label={automatico ? t('Mensagens que o sistema vai enviar') : t('Cobranças esperando a escolha da mensagem')}>
           {pendentes.map(({ resumo, detalhe }) => {
             const recomendada = recomendadaDe(detalhe)
             const prazo = detalhe?.escolha_ate ?? null
@@ -82,16 +94,16 @@ export function AbaMensagens({ incluirSimulados, onEscolher, onAbrir }: { inclui
               <li key={resumo.id} className="flex flex-col gap-3 border-t border-line px-5 py-4 first:border-t-0 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-[560] text-paper">{resumo.cliente ?? <span className="text-silver">Cliente sem cadastro</span>}</span>
+                    <span className="font-[560] text-paper">{resumo.cliente ?? <span className="text-silver">{t('Cliente sem cadastro')}</span>}</span>
                     <span className="tabular font-[560] text-paper">{fmt.brl(resumo.valor_cobranca)}</span>
-                    {resumo.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
+                    {resumo.simulado ? <Badge tone="amber">{t('Demonstração')}</Badge> : null}
                   </div>
                   <div className="t-label mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-muted">
                     <span>{resumo.id_recorrencia}</span>
-                    {recomendada ? <span>Canal: {CANAL[recomendada.canal]}</span> : null}
-                    {prazo && !semCanal ? (
+                    {recomendada ? <span>{t('Canal: {canal}', { canal: CANAL[recomendada.canal] })}</span> : null}
+                    {prazo && !semCanal && !automatico ? (
                       <span className="text-warn">
-                        Escolha até {fmt.dataHora(prazo)} · {textoDoPrazo(prazo, agora)}
+                        {t('Escolha até {data} · {prazo}', { data: fmt.dataHora(prazo), prazo: textoDoPrazo(prazo, agora) })}
                       </span>
                     ) : null}
                   </div>
@@ -100,26 +112,27 @@ export function AbaMensagens({ incluirSimulados, onEscolher, onAbrir }: { inclui
                     // `enviar_mensagem_escolhida` (reconfere o contato a cada passagem) e em
                     // `varrer_sem_canal_vencidos` (30 dias sem contato: o ciclo é encerrado).
                     <p className="t-apoio mt-2 text-warn" data-sem-canal>
-                      <span className="font-[560]">Nada será enviado: {recomendada.motivo_canal.replace(/^./, (c) => c.toLowerCase())}.</span>{' '}
-                      O sistema reconfere o contato na sua base a cada passagem; se ele aparecer, a mensagem recomendada sai. Sem contato em 30 dias, a cobrança é encerrada sem recuperação.
+                      <span className="font-[560]">{t('Nada será enviado: {motivo}.', { motivo: recomendada.motivo_canal.replace(/^./, (c) => c.toLowerCase()) })}</span>{' '}
+                      {t('O sistema reconfere o contato na sua base a cada passagem; se ele aparecer, a mensagem recomendada sai. Sem contato em 30 dias, a cobrança é encerrada sem recuperação.')}
                     </p>
                   ) : recomendada ? (
                     <p className="t-apoio mt-2 line-clamp-2 text-silver">
-                      <span className="font-[560] text-paper">Recomendada: {ABORDAGEM[recomendada.abordagem]}.</span>{' '}
-                      {recomendada.texto ?? 'O texto desta mensagem foi apagado depois do prazo de guarda.'}
+                      <span className="font-[560] text-paper">{t('Recomendada: {abordagem}.', { abordagem: ABORDAGEM[recomendada.abordagem] })}</span>{' '}
+                      {recomendada.texto ?? t('O texto desta mensagem foi apagado depois do prazo de guarda.')}
                     </p>
                   ) : (
-                    <p className="t-apoio mt-2 text-silver">{detalhe ? 'As mensagens desta cobrança ainda não foram geradas.' : 'Abra a cobrança para ver as mensagens.'}</p>
+                    <p className="t-apoio mt-2 text-silver">{detalhe ? t('As mensagens desta cobrança ainda não foram geradas.') : t('Abra a cobrança para ver as mensagens.')}</p>
                   )}
                 </div>
-                {semCanal ? (
-                  // Escolher não faz sentido sem canal: o que resolve é o contato na base. O botão abre o ciclo.
+                {semCanal || automatico ? (
+                  // Escolher não faz sentido sem canal (o que resolve é o contato na base) nem no modo
+                  // automático (a recomendada sai sozinha). O botão abre o ciclo.
                   <Button size="sm" variant="ghost" className="shrink-0" onClick={() => onAbrir(resumo.id)}>
-                    Ver a cobrança <IconArrowRight width={15} height={15} />
+                    {t('Ver a cobrança')} <IconArrowRight width={15} height={15} />
                   </Button>
                 ) : (
                   <Button size="sm" variant="primary" className="shrink-0" onClick={() => onEscolher(resumo.id)}>
-                    Escolher a mensagem <IconArrowRight width={15} height={15} />
+                    {t('Escolher a mensagem')} <IconArrowRight width={15} height={15} />
                   </Button>
                 )}
               </li>

@@ -1,5 +1,6 @@
 import { etiquetaDeDemonstracao } from '../../data/api'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 import { Badge } from './Badge'
 
 /**
@@ -14,7 +15,7 @@ export function Demonstracao({ de, escuro = false, className }: { de: string[]; 
   if (!etiquetaDeDemonstracao(...de)) return null
   return (
     <Badge tone={escuro ? 'ink' : 'amber'} className={className}>
-      Demonstração
+      {t('Demonstração')}
     </Badge>
   )
 }
@@ -24,8 +25,8 @@ export function FaixaDemonstracao({ de, className }: { de: string[]; className?:
   if (!etiquetaDeDemonstracao(...de)) return null
   return (
     <div className={cx('mb-2 flex items-center justify-end gap-2', className)}>
-      <span className="t-label text-muted">Este bloco ainda usa dados fictícios</span>
-      <Badge tone="amber">Demonstração</Badge>
+      <span className="t-label text-muted">{t('Este bloco ainda usa dados fictícios')}</span>
+      <Badge tone="amber">{t('Demonstração')}</Badge>
     </div>
   )
 }

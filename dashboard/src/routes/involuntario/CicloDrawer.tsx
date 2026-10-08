@@ -10,20 +10,21 @@ import { CAUSA_LEGIVEL } from '../../data/mock'
 import type { Abordagem, CicloDetalhe, Configuracao, EventoLinhaDoTempo, Sugestao, SugestaoDoCiclo } from '../../data/tipos'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { t } from '../../lib/idioma'
 import { ATUALIZAR_CICLO_ABERTO_MS, mesmoConteudo, useAtualizarACada } from '../../lib/useAtualizarACada'
 import { useReducedMotion } from '../../lib/useReducedMotion'
 
 export const ABORDAGEM: Record<Abordagem, string> = {
-  lembrete_cordial: 'Lembrete cordial',
-  facilitacao: 'Facilitação',
-  urgencia_com_respeito: 'Urgência com respeito',
+  lembrete_cordial: t('Lembrete cordial'),
+  facilitacao: t('Facilitação'),
+  urgencia_com_respeito: t('Urgência com respeito'),
 }
 
 export const CANAL: Record<Sugestao['canal'], string> = {
   whatsapp: 'WhatsApp',
-  email: 'E-mail',
+  email: t('E-mail'),
   sms: 'SMS',
-  sem_canal: 'Sem canal disponível',
+  sem_canal: t('Sem canal disponível'),
 }
 
 const TOM: Record<NonNullable<EventoLinhaDoTempo['tom']>, string> = {
@@ -36,11 +37,11 @@ const TOM: Record<NonNullable<EventoLinhaDoTempo['tom']>, string> = {
 /** "Envio automático em 6 h 40 min", calculado do prazo que o backend manda (`escolha_ate`). */
 export function textoDoPrazo(escolhaAte: string, agora: Date): string {
   const minutos = Math.floor((new Date(escolhaAte).getTime() - agora.getTime()) / 60_000)
-  if (minutos <= 0) return 'Envio automático a qualquer momento'
+  if (minutos <= 0) return t('Envio automático a qualquer momento')
   const h = Math.floor(minutos / 60)
   const m = minutos % 60
-  if (h === 0) return `Envio automático em ${m} min`
-  return m === 0 ? `Envio automático em ${h} h` : `Envio automático em ${h} h ${m} min`
+  if (h === 0) return t('Envio automático em {m} min', { m })
+  return m === 0 ? t('Envio automático em {h} h', { h }) : t('Envio automático em {h} h {m} min', { h, m })
 }
 
 /**
@@ -76,13 +77,13 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
         .ciclo(id)
         .then((c) => {
           if (c === null) {
-            setErro('Não encontramos este ciclo.')
+            setErro(t('Não encontramos este ciclo.'))
             return
           }
           setCiclo(c)
           setSugestoes(c.sugestoes)
         })
-        .catch((e: unknown) => setErro(e instanceof ErroApi ? e.message : 'Não deu para abrir este ciclo.'))
+        .catch((e: unknown) => setErro(e instanceof ErroApi ? e.message : t('Não deu para abrir este ciclo.')))
     },
     [id],
   )
@@ -118,7 +119,7 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
       const novas = await api.regerarSugestoes(id)
       setSugestoes((atuais) => [...atuais, ...novas])
     } catch (e) {
-      setErroAcao(e instanceof ErroApi ? e.message : 'Não deu para gerar outras mensagens.')
+      setErroAcao(e instanceof ErroApi ? e.message : t('Não deu para gerar outras mensagens.'))
     }
     setRegerando(false)
   }
@@ -130,7 +131,7 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
       await api.escolherMensagem(id, s.rodada, s.abordagem)
       await carregar() // o painel recarrega: estado, escolhida e linha do tempo vêm do servidor
     } catch (e) {
-      setErroAcao(e instanceof ErroApi ? e.message : 'Não deu para enviar esta mensagem.')
+      setErroAcao(e instanceof ErroApi ? e.message : t('Não deu para enviar esta mensagem.'))
     }
     setEnviando(false)
   }
@@ -152,8 +153,8 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
   }, [irParaEscolha, ciclo, reduced])
 
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Detalhe do ciclo">
-      <button type="button" aria-label="Fechar" onClick={onClose} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={t('Detalhe do ciclo')}>
+      <button type="button" aria-label={t('Fechar')} onClick={onClose} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
       <motion.aside
         initial={reduced ? false : { x: 40, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -162,27 +163,27 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
       >
         {erro ? (
           <div className="p-6">
-            <button type="button" onClick={onClose} aria-label="Fechar" className="mb-4 rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
+            <button type="button" onClick={onClose} aria-label={t('Fechar')} className="mb-4 rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
               <IconClose />
             </button>
             <ErroCarregar mensagem={erro} onTentar={onClose} />
           </div>
         ) : ciclo === null ? (
-          <div className="p-6 text-silver">Carregando…</div>
+          <div className="p-6 text-silver">{t('Carregando…')}</div>
         ) : (
           <div className="flex flex-col gap-6 p-6">
             <header className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="t-h2 text-paper">{ciclo.cliente ?? 'Cliente sem cadastro'}</h2>
-                  {ciclo.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
+                  <h2 className="t-h2 text-paper">{ciclo.cliente ?? t('Cliente sem cadastro')}</h2>
+                  {ciclo.simulado ? <Badge tone="amber">{t('Demonstração')}</Badge> : null}
                 </div>
                 <div className="t-apoio mt-1 text-silver">
                   {fmt.brl(ciclo.valor_cobranca)} · {ciclo.causa_legivel ?? CAUSA_LEGIVEL[ciclo.causa]} · <span className="text-muted">{ciclo.id_recorrencia}</span>
                 </div>
                 <div className="mt-3"><StatusPill status={ciclo.status} /></div>
               </div>
-              <button type="button" onClick={onClose} aria-label="Fechar" className="rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
+              <button type="button" onClick={onClose} aria-label={t('Fechar')} className="rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
                 <IconClose />
               </button>
             </header>
@@ -190,14 +191,14 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
             {/* Diagnóstico em linguagem simples (as contribuições do SHAP) */}
             <section className="rounded-[14px] border border-line bg-ink/40 p-4">
               <div className="flex items-baseline justify-between">
-                <h3 className="t-h3 text-paper">Por que o sistema agiu assim</h3>
+                <h3 className="t-h3 text-paper">{t('Por que o sistema agiu assim')}</h3>
                 <span className="t-number text-orange">{ciclo.chance_recuperar !== null ? `${Math.round(ciclo.chance_recuperar * 100)}%` : '—'}</span>
               </div>
               <p className="t-apoio mt-1 text-silver">
-                {ciclo.chance_recuperar !== null ? 'Chance de recuperar, estimada na abertura do ciclo' : 'Este ciclo não tem estimativa de recuperação registrada'}
+                {ciclo.chance_recuperar !== null ? t('Chance de recuperar, estimada na abertura do ciclo') : t('Este ciclo não tem estimativa de recuperação registrada')}
               </p>
               {ciclo.chance_recuperar !== null && ciclo.desconto_anomalia_pct !== null ? (
-                <p className="t-label mt-1 text-muted">Já com o desconto de {ciclo.desconto_anomalia_pct}% por comportamento fora do padrão.</p>
+                <p className="t-label mt-1 text-muted">{t('Já com o desconto de {pct}% por comportamento fora do padrão.', { pct: ciclo.desconto_anomalia_pct })}</p>
               ) : null}
               {ciclo.contribuicoes.length ? (
                 <ul className="mt-3 flex flex-col gap-1.5">
@@ -206,14 +207,15 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
                       <span className="text-paper">{c.fator}</span>
                       {c.efeito ? (
                         <span className={cx('text-right font-[560]', c.efeito.startsWith('Aumentou') ? 'text-ok' : c.efeito.startsWith('Reduziu') ? 'text-danger-texto' : 'text-silver')}>
-                          {c.efeito}
+                          {/* A cor vem do texto original (em português, como o backend manda); a tela mostra a tradução. */}
+                          {t(c.efeito)}
                         </span>
                       ) : null}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="t-label mt-3 text-muted">Sem fatores registrados: o diagnóstico deste ciclo foi feito por regra fixa.</p>
+                <p className="t-label mt-3 text-muted">{t('Sem fatores registrados: o diagnóstico deste ciclo foi feito por regra fixa.')}</p>
               )}
             </section>
 
@@ -221,15 +223,16 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
             {daRodada.length ? (
               <section ref={secaoDaEscolha} data-secao="escolha" className="scroll-mt-6">
                 <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="t-h3 text-paper">Mensagens sugeridas{rodada > 1 ? <span className="t-label ml-2 text-silver">{rodada}ª rodada</span> : null}</h3>
-                  {aguardando && ciclo.escolha_ate ? <span className="t-label text-warn">{textoDoPrazo(ciclo.escolha_ate, agoraDaTela())}</span> : null}
+                  <h3 className="t-h3 text-paper">{t('Mensagens sugeridas')}{rodada > 1 ? <span className="t-label ml-2 text-silver">{t('{n}ª rodada', { n: rodada })}</span> : null}</h3>
+                  {/* O prazo só existe no modo escolha: no automático não há escolha a esperar. */}
+                  {modoEscolha && aguardando && ciclo.escolha_ate ? <span className="t-label text-warn">{textoDoPrazo(ciclo.escolha_ate, agoraDaTela())}</span> : null}
                 </div>
                 <p className="t-apoio mt-1 text-silver">
                   {escolhida
-                    ? 'A mensagem marcada como escolhida é a que foi enviada, ou a que sai quando houver canal e horário permitido.'
+                    ? t('A mensagem marcada como escolhida é a que foi enviada, ou a que sai quando houver canal e horário permitido.')
                     : modoEscolha
-                      ? 'Escolha uma ou peça outras três. Sem escolha no prazo, a recomendada é enviada.'
-                      : 'A recomendada será enviada automaticamente. Para escolher, mude o modo na configuração.'}
+                      ? t('Escolha uma ou peça outras três. Sem escolha no prazo, a recomendada é enviada.')
+                      : t('A recomendada será enviada automaticamente. Para escolher, mude o modo na configuração.')}
                 </p>
                 {erroAcao ? (
                   <p role="alert" className="mt-3 rounded-[10px] border border-danger/40 bg-danger/[0.06] px-3 py-2 text-apoio text-danger-aviso">
@@ -247,16 +250,16 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-[600] text-paper">{ABORDAGEM[s.abordagem]}</span>
-                        {s.recomendada ? <Badge tone="orange">Recomendada</Badge> : null}
-                        {s.escolhida ? <Badge tone="ok">Escolhida</Badge> : null}
+                        {s.recomendada ? <Badge tone="orange">{t('Recomendada')}</Badge> : null}
+                        {s.escolhida ? <Badge tone="ok">{t('Escolhida')}</Badge> : null}
                         <Badge tone="neutral" className="ml-auto">{CANAL[s.canal]}</Badge>
                       </div>
-                      <p className="t-apoio mt-2 text-paper/90">{s.texto ?? 'O texto desta mensagem foi apagado depois do prazo de guarda (90 dias depois do desfecho).'}</p>
+                      <p className="t-apoio mt-2 text-paper/90">{s.texto ?? t('O texto desta mensagem foi apagado depois do prazo de guarda (90 dias depois do desfecho).')}</p>
                       <div className="mt-3 flex items-center justify-between gap-3">
                         <span className="t-label text-muted">{s.motivo_canal}</span>
                         {modoEscolha && aguardando ? (
                           <Button size="sm" variant={s.recomendada ? 'primary' : 'ghost'} disabled={ocupado} onClick={() => escolher(s)}>
-                            <IconCheck width={15} height={15} /> Enviar esta
+                            <IconCheck width={15} height={15} /> {t('Enviar esta')}
                           </Button>
                         ) : null}
                       </div>
@@ -268,7 +271,7 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button size="sm" variant="ghost" onClick={regerar} disabled={ocupado}>
                       <IconRefresh width={15} height={15} className={regerando ? 'animate-spin' : undefined} />
-                      {regerando ? 'Gerando outras três…' : 'Quero outro tipo de mensagem'}
+                      {regerando ? t('Gerando outras três…') : t('Quero outro tipo de mensagem')}
                     </Button>
                   </div>
                 ) : null}
@@ -278,7 +281,7 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
 
             {/* Linha do tempo */}
             <section>
-              <h3 className="t-h3 text-paper">Linha do tempo</h3>
+              <h3 className="t-h3 text-paper">{t('Linha do tempo')}</h3>
               <ol className="relative mt-4 ml-2 flex flex-col gap-5 border-l border-line pl-6">
                 {ciclo.linha_do_tempo.map((e, i) => (
                   <li key={i} className="relative">
@@ -293,17 +296,17 @@ export function CicloDrawer({ id, onClose, irParaEscolha = false }: { id: number
 
             {ciclo.valor_liquido !== null ? (
               <section className="rounded-[14px] border border-ok/30 bg-ok/[0.06] p-4">
-                <div className="t-label text-ok">Recuperado</div>
+                <div className="t-label text-ok">{t('Recuperado')}</div>
                 <div className="mt-1 flex items-baseline justify-between">
-                  <span className="text-paper">Líquido para você</span>
+                  <span className="text-paper">{t('Líquido para você')}</span>
                   <span className="t-number tabular text-paper">{fmt.brl(ciclo.valor_liquido)}</span>
                 </div>
-                <div className="t-label mt-1 text-silver">Cobrança de {fmt.brl(ciclo.valor_cobranca)}, já descontada a taxa da CRAI.</div>
+                <div className="t-label mt-1 text-silver">{t('Cobrança de {valor}, já descontada a taxa da CRAI.', { valor: fmt.brl(ciclo.valor_cobranca) })}</div>
               </section>
             ) : null}
             {ciclo.motivo_descarte ? (
               <section className="rounded-[14px] border border-line bg-ink/40 p-4">
-                <div className="t-label text-silver">Encerrado sem ação</div>
+                <div className="t-label text-silver">{t('Encerrado sem ação')}</div>
                 <div className="mt-1 text-paper">{ciclo.motivo_descarte}</div>
               </section>
             ) : null}

@@ -1,4 +1,5 @@
 import { Card } from '../components/ui/Card'
+import { t } from '../lib/idioma'
 
 export function EmConstrucao({ titulo, descricao }: { titulo: string; descricao: string }) {
   return (
@@ -9,8 +10,8 @@ export function EmConstrucao({ titulo, descricao }: { titulo: string; descricao:
       </div>
       <Card className="flex min-h-[320px] items-center justify-center p-8 text-center">
         <div>
-          <div className="t-h3 text-paper">Esta página entra na próxima etapa</div>
-          <p className="t-apoio mt-2 max-w-md text-silver">O desenho está no plano; a página é construída depois da aprovação do visual do involuntário.</p>
+          <div className="t-h3 text-paper">{t('Esta página entra na próxima etapa')}</div>
+          <p className="t-apoio mt-2 max-w-md text-silver">{t('O desenho está no plano; a página é construída depois da aprovação do visual do involuntário.')}</p>
         </div>
       </Card>
     </div>

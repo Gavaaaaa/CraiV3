@@ -8,6 +8,7 @@
  * - Nenhum dado de resposta vai para o console.
  */
 import { ErroApi } from './erros'
+import { t } from '../lib/idioma'
 import type { Papel } from './tipos'
 
 export const API_URL = String(import.meta.env.VITE_CRAI_API_URL ?? '')
@@ -65,7 +66,7 @@ async function requisitar(caminho: string, init: RequestInit): Promise<Response>
   try {
     return await fetch(`${API_URL}${caminho}`, init)
   } catch {
-    throw new ErroApi('rede', 'Não foi possível falar com o servidor da CRAI.')
+    throw new ErroApi('rede', t('Não foi possível falar com o servidor da CRAI.'))
   }
 }
 
@@ -88,8 +89,8 @@ async function obterToken(): Promise<string> {
         throw new ErroApi(
           'nao_autorizado',
           r.status === 404
-            ? 'O login de desenvolvimento não existe neste servidor. Ele só funciona com o backend em modo de desenvolvimento.'
-            : 'Não foi possível entrar no servidor da CRAI.',
+            ? t('O login de desenvolvimento não existe neste servidor. Ele só funciona com o backend em modo de desenvolvimento.')
+            : t('Não foi possível entrar no servidor da CRAI.'),
           r.status,
         )
       }
@@ -114,49 +115,49 @@ export async function iniciarSessao(): Promise<void> {
 }
 
 const CONFLITOS: Record<string, string> = {
-  ciclo_nao_aguarda_escolha: 'Este ciclo não está mais esperando uma escolha. A mensagem já foi escolhida ou enviada.',
-  prazo_de_escolha_vencido: 'O prazo de escolha acabou. A mensagem recomendada é enviada pelo sistema.',
-  modo_automatico: 'A empresa está no modo automático: a mensagem sai sem esperar escolha.',
-  limite_de_chaves: 'A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.',
+  ciclo_nao_aguarda_escolha: t('Este ciclo não está mais esperando uma escolha. A mensagem já foi escolhida ou enviada.'),
+  prazo_de_escolha_vencido: t('O prazo de escolha acabou. A mensagem recomendada é enviada pelo sistema.'),
+  modo_automatico: t('A empresa está no modo automático: a mensagem sai sem esperar escolha.'),
+  limite_de_chaves: t('A empresa já tem o máximo de chaves ativas. Revogue uma para gerar outra.'),
   // A simulação do gateway (Rodada 3)
-  sem_cliente_ficticio: 'Crie o cliente fictício antes de cobrar.',
-  cliente_ja_cobrado: 'Este cliente fictício já foi cobrado. Avance o relógio ou comece outra simulação.',
-  sem_simulacao: 'Não há simulação em andamento. Crie um cliente fictício para começar.',
-  simulacao_em_uso: 'A simulação está sendo usada por outra ação. Tente de novo em instantes.',
+  sem_cliente_ficticio: t('Crie o cliente fictício antes de cobrar.'),
+  cliente_ja_cobrado: t('Este cliente fictício já foi cobrado. Avance o relógio ou comece outra simulação.'),
+  sem_simulacao: t('Não há simulação em andamento. Crie um cliente fictício para começar.'),
+  simulacao_em_uso: t('A simulação está sendo usada por outra ação. Tente de novo em instantes.'),
   // Direitos do titular (Rodada 3)
-  marca_da_anonimizacao: 'Este cliente foi anonimizado: os contatos dele foram apagados, e não dá para voltar a contatá-lo.',
+  marca_da_anonimizacao: t('Este cliente foi anonimizado: os contatos dele foram apagados, e não dá para voltar a contatá-lo.'),
 }
 
 /** O que não foi encontrado (404), quando o backend diz o quê. */
 const NAO_ENCONTRADO: Record<string, string> = {
-  titular_nao_encontrado: 'Não há dado deste identificador na sua empresa. Confira o identificador que a sua base usa.',
-  cliente_nao_encontrado: 'Não encontramos este cliente na sua base. Confira o identificador.',
+  titular_nao_encontrado: t('Não há dado deste identificador na sua empresa. Confira o identificador que a sua base usa.'),
+  cliente_nao_encontrado: t('Não encontramos este cliente na sua base. Confira o identificador.'),
 }
 
 const SEM_PERMISSAO: Record<string, string> = {
-  plano_sem_api: 'Gerar chave faz parte do plano Premium.',
+  plano_sem_api: t('Gerar chave faz parte do plano Premium.'),
 }
 
 /** Os limites de uso (429). */
 const LIMITES: Record<string, string> = {
-  limite_do_assistente: 'A sua empresa chegou ao limite de perguntas ao assistente nesta hora. Tente de novo mais tarde.',
+  limite_do_assistente: t('A sua empresa chegou ao limite de perguntas ao assistente nesta hora. Tente de novo mais tarde.'),
 }
 
 /** O que o formulário da simulação do gateway recusa (`POST /simulacao/cliente` e `/simulacao/retencao`). */
 const SIMULACAO_RECUSADA: Record<string, string> = {
-  dado_que_parece_real: 'O nome parece um dado real (CPF, e-mail, telefone ou chave Pix). Aqui só entra um nome inventado.',
-  campo_desconhecido: 'A simulação só aceita os campos do formulário. Nenhum outro dado é enviado.',
+  dado_que_parece_real: t('O nome parece um dado real (CPF, e-mail, telefone ou chave Pix). Aqui só entra um nome inventado.'),
+  campo_desconhecido: t('A simulação só aceita os campos do formulário. Nenhum outro dado é enviado.'),
 }
 
 /** O arquivo da base recusado inteiro (`POST /clientes/importar`). */
 const ARQUIVO_RECUSADO: Record<string, string> = {
-  extensao_nao_suportada: 'Só CSV ou XLSX. Outros formatos não são lidos.',
-  arquivo_vazio: 'O arquivo está vazio.',
-  arquivo_grande_demais: 'O arquivo é grande demais. Divida em duas partes.',
-  linhas_demais: 'O arquivo tem linhas demais para uma importação. Divida em duas partes.',
-  arquivo_ilegivel: 'Não foi possível ler o arquivo. Confira se ele abre na sua planilha.',
-  sem_linhas: 'O arquivo só tem o cabeçalho, sem nenhuma linha de cliente.',
-  encoding_desconhecido: 'Não foi possível ler o texto do arquivo. Salve como CSV UTF-8 e tente de novo.',
+  extensao_nao_suportada: t('Só CSV ou XLSX. Outros formatos não são lidos.'),
+  arquivo_vazio: t('O arquivo está vazio.'),
+  arquivo_grande_demais: t('O arquivo é grande demais. Divida em duas partes.'),
+  linhas_demais: t('O arquivo tem linhas demais para uma importação. Divida em duas partes.'),
+  arquivo_ilegivel: t('Não foi possível ler o arquivo. Confira se ele abre na sua planilha.'),
+  sem_linhas: t('O arquivo só tem o cabeçalho, sem nenhuma linha de cliente.'),
+  encoding_desconhecido: t('Não foi possível ler o texto do arquivo. Salve como CSV UTF-8 e tente de novo.'),
 }
 
 async function erroDaResposta(r: Response): Promise<ErroApi> {
@@ -173,32 +174,32 @@ async function erroDaResposta(r: Response): Promise<ErroApi> {
   }
   switch (r.status) {
     case 401:
-      return new ErroApi('nao_autorizado', 'O servidor não aceitou a sua sessão. Recarregue a página para entrar de novo.', 401, motivo)
+      return new ErroApi('nao_autorizado', t('O servidor não aceitou a sua sessão. Recarregue a página para entrar de novo.'), 401, motivo)
     case 403:
-      return new ErroApi('sem_permissao', (motivo && SEM_PERMISSAO[motivo]) || 'Seu papel não permite esta ação.', 403, motivo)
+      return new ErroApi('sem_permissao', (motivo && SEM_PERMISSAO[motivo]) || t('Seu papel não permite esta ação.'), 403, motivo)
     case 404:
-      return new ErroApi('nao_encontrado', (motivo && NAO_ENCONTRADO[motivo]) || 'Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.', 404, motivo)
+      return new ErroApi('nao_encontrado', (motivo && NAO_ENCONTRADO[motivo]) || t('Não encontramos o que você pediu. Pode ter sido removido ou não ser da sua empresa.'), 404, motivo)
     case 409:
       return new ErroApi(
         'conflito',
-        (motivo && CONFLITOS[motivo]) || 'Esta ação não é mais possível: a situação mudou enquanto a tela estava aberta. Atualize e tente de novo.',
+        (motivo && CONFLITOS[motivo]) || t('Esta ação não é mais possível: a situação mudou enquanto a tela estava aberta. Atualize e tente de novo.'),
         409,
         motivo,
       )
     case 413:
     case 415:
-      return new ErroApi('invalido', (motivo && ARQUIVO_RECUSADO[motivo]) || 'O servidor recusou o arquivo enviado.', r.status, motivo)
+      return new ErroApi('invalido', (motivo && ARQUIVO_RECUSADO[motivo]) || t('O servidor recusou o arquivo enviado.'), r.status, motivo)
     case 422:
       return new ErroApi(
         'invalido',
-        (motivo && (ARQUIVO_RECUSADO[motivo] || SIMULACAO_RECUSADA[motivo])) || 'O servidor recusou os dados enviados. Confira os campos e tente de novo.',
+        (motivo && (ARQUIVO_RECUSADO[motivo] || SIMULACAO_RECUSADA[motivo])) || t('O servidor recusou os dados enviados. Confira os campos e tente de novo.'),
         422,
         motivo,
       )
     case 429:
-      return new ErroApi('servidor', (motivo && LIMITES[motivo]) || 'Muitas chamadas em pouco tempo. Tente de novo em instantes.', 429, motivo)
+      return new ErroApi('servidor', (motivo && LIMITES[motivo]) || t('Muitas chamadas em pouco tempo. Tente de novo em instantes.'), 429, motivo)
     default:
-      return new ErroApi('servidor', 'O servidor da CRAI respondeu com erro. Tente de novo em instantes.', r.status, motivo)
+      return new ErroApi('servidor', t('O servidor da CRAI respondeu com erro. Tente de novo em instantes.'), r.status, motivo)
   }
 }
 

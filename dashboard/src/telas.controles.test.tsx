@@ -42,6 +42,30 @@ const DETALHE_SEM_CANAL = {
   mensagens: DETALHE_DO_CICLO.mensagens.map((m) => ({ ...m, canal: 'sem_canal', motivo_canal: 'sem_contato', nao_entregavel: true })),
 }
 const SEM_CANAL = { ...COM_PENDENCIA, 'GET /ciclos/2': DETALHE_SEM_CANAL }
+/**
+ * A empresa no modo automático, com uma cobrança que ainda não saiu (o relógio passa a cada
+ * minuto). O detalhe traz de propósito um prazo velho: a tela não pode mostrá-lo.
+ */
+const CONFIG_AUTOMATICO = {
+  configuracao: {
+    modo_mensagem_involuntario: 'automatico',
+    prazo_escolha_horas: 8,
+    janela_contato_inicio: '08:00',
+    janela_contato_fim: '20:00',
+    canais_permitidos: ['whatsapp', 'email'],
+    intervalo_minimo_ofertas_dias: 30,
+    retencao_mensagens_dias: 90,
+    retencao_ciclos_meses: 24,
+    retencao_base_meses_apos_contrato: 6,
+    retencao_trilha_anos: 5,
+  },
+  pode_editar: true,
+}
+const AUTOMATICO = {
+  ...COM_PENDENCIA,
+  'GET /configuracao': CONFIG_AUTOMATICO,
+  'GET /ciclos/2': { ...DETALHE_DO_CICLO, modo_mensagem: 'automatico' },
+}
 
 beforeEach(() => {
   prepararJsdom()
@@ -274,5 +298,35 @@ describe('catraca: nenhum controle morto nas páginas', () => {
       const reage = typeof p.onClick === 'function' || el.matches(INTERATIVO) || el.querySelector('input, select, button') !== null
       expect(reage, `cursor de clique sem ação: ${descrever(el)}`).toBe(true)
     }
+  })
+})
+
+describe('no modo automático', () => {
+  it('a aba Mensagens não pede escolha: diz que o sistema envia sozinho, sem prazo e sem "Escolher a mensagem"', async () => {
+    ligarBackendFalso(AUTOMATICO)
+    abrir('/involuntario?aba=mensagens')
+    const painel = await screen.findByRole('list', { name: 'Mensagens que o sistema vai enviar' }, ESPERA)
+    expect(screen.getByText('Mensagens que o sistema vai enviar', { selector: 'h3' })).toBeTruthy()
+    expect(screen.queryByText('Mensagens esperando a sua escolha')).toBeNull()
+    const linha = within(painel).getAllByRole('listitem')[0]
+    expect(within(linha).getByText('Recomendada: Facilitação.')).toBeTruthy()
+    expect(within(linha).queryByText(/Escolha até/)).toBeNull()
+    expect(within(linha).queryByRole('button', { name: 'Escolher a mensagem' })).toBeNull()
+    fireEvent.click(within(linha).getByRole('button', { name: 'Ver a cobrança' }))
+    const dialogo = await screen.findByRole('dialog', {}, ESPERA)
+    await within(dialogo).findByText('Mensagens sugeridas', {}, ESPERA)
+    // No painel do ciclo: nenhum "Enviar esta", nenhum prazo, e a frase do modo automático.
+    expect(within(dialogo).queryAllByRole('button', { name: /Enviar esta/ })).toHaveLength(0)
+    expect(within(dialogo).queryByText(/Envio automático em/)).toBeNull()
+    expect(within(dialogo).getByText(/A recomendada será enviada automaticamente/)).toBeTruthy()
+  })
+
+  it('o sino e o cartão do mês falam de mensagens a enviar, não de escolha', async () => {
+    ligarBackendFalso(AUTOMATICO)
+    abrir('/involuntario')
+    await waitFor(() => expect(screen.getByRole('button', { name: '1 mensagem que o sistema vai enviar sozinho' })).toBeTruthy(), ESPERA)
+    expect(await screen.findByText('Mensagens a enviar', {}, ESPERA)).toBeTruthy()
+    expect(screen.getByText('O sistema envia sozinho (modo automático)')).toBeTruthy()
+    expect(screen.queryByText('Aguardando sua escolha')).toBeNull()
   })
 })

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { useLocation } from 'react-router-dom'
 import { MODO_REAL, api, iniciarSessao, trocarPapelDeDesenvolvimento } from '../../data/api'
 import type { Empresa, Papel } from '../../data/tipos'
+import { t } from '../../lib/idioma'
 import { ModoToggle, type Modo } from './ModoToggle'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
@@ -46,7 +47,7 @@ export function Shell({ children }: { children: ReactNode }) {
           href="#conteudo"
           className="sr-only z-50 rounded-[8px] bg-paper px-3 py-2 text-apoio font-[600] text-ink focus:not-sr-only focus:fixed focus:top-3 focus:left-[88px]"
         >
-          Pular para o conteúdo
+          {t('Pular para o conteúdo')}
         </a>
         <Sidebar premium={empresa?.plano === 'premium'} />
         <div className="pl-[76px]">

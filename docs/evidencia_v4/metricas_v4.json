@@ -1,0 +1,1442 @@
+{
+  "modelo": "failure_classifier_v4 (experimento, NAO promovido)",
+  "treinado_em": "2026-10-08T02:00:22",
+  "semente": 42,
+  "algoritmo": "XGBClassifier (0,7) + RandomForestClassifier (0,3), hiperparametros de producao",
+  "amostra_clientes": null,
+  "base": {
+    "pasta": "<repo>/app/data/v4",
+    "sha256": "2e3bafa1f2a6356016a686d0b40d628d39acbbb206136682250b987f0a8c428c",
+    "hash_canonico": "267acb1ba9230808a66a9fe3d0e554b3d2e2aacf019491efc6945f475c4e1470",
+    "taxa_recuperacao": 0.3656,
+    "rotulo": "sintetico, por mecanismo desenhado pelo projeto; NAO e recuperacao observada"
+  },
+  "split": {
+    "tipo": "por_cliente",
+    "fracao_de_teste": 0.2,
+    "semente": 42,
+    "linhas_treino": 95911,
+    "linhas_teste": 24089,
+    "clientes_treino": 26541,
+    "clientes_teste": 6636,
+    "taxa_recuperacao_teste": 0.3666,
+    "mesmo_holdout_da_v2": "as mesmas cobrancas (mesma regra, mesma semente), com o rotulo novo"
+  },
+  "cenarios": {
+    "A": {
+      "features": [
+        "tenure_months",
+        "day_of_month",
+        "invoice_amount",
+        "avg_ticket",
+        "payment_history_score",
+        "failure_count_90d",
+        "hour_of_day",
+        "day_of_week",
+        "attempt_count",
+        "gateway_error_code",
+        "metodo_pagamento"
+      ],
+      "n_features": 11,
+      "holdout": {
+        "auc": 0.7363,
+        "brier": 0.198,
+        "erro_de_calibracao": 0.0427,
+        "auc_no_treino": 0.7578
+      },
+      "groupkfold": {
+        "auc": {
+          "por_dobra": [
+            0.7281,
+            0.7296,
+            0.7341,
+            0.7343,
+            0.7262
+          ],
+          "media": 0.7305,
+          "desvio": 0.0036
+        },
+        "precisao_em_recall_0_90": {
+          "por_dobra": [
+            0.4592,
+            0.4517,
+            0.4569,
+            0.4577,
+            0.4385
+          ],
+          "media": 0.4528,
+          "desvio": 0.0085
+        }
+      },
+      "limiar": {
+        "regra": "maior limiar da grade (0,01) com recall >= 0.9 nas predicoes fora-da-dobra do GroupKFold do treino",
+        "escolhido": 0.28,
+        "no_limiar_escolhido": {
+          "limiar": 0.28,
+          "matriz": {
+            "tn": 5714,
+            "fp": 9544,
+            "fn": 867,
+            "tp": 7964
+          },
+          "recall": 0.9018,
+          "precisao": 0.4549,
+          "especificidade": 0.3745,
+          "acuracia": 0.5678,
+          "fracao_marcada": 0.7268,
+          "recuperaveis_perdidos": 867
+        },
+        "no_limiar_em_uso_hoje": {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 4961,
+            "fp": 10297,
+            "fn": 680,
+            "tp": 8151
+          },
+          "recall": 0.923,
+          "precisao": 0.4418,
+          "especificidade": 0.3251,
+          "acuracia": 0.5443,
+          "fracao_marcada": 0.7658,
+          "recuperaveis_perdidos": 680
+        },
+        "no_limiar_0_50": {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 12621,
+            "fp": 2637,
+            "fn": 4679,
+            "tp": 4152
+          },
+          "recall": 0.4702,
+          "precisao": 0.6116,
+          "especificidade": 0.8272,
+          "acuracia": 0.6963,
+          "fracao_marcada": 0.2818,
+          "recuperaveis_perdidos": 4679
+        }
+      },
+      "precisao_em_recall_fixo": {
+        "0.938": {
+          "precisao": 0.4298,
+          "falsos_positivos": 10991,
+          "taxa_de_falsos_positivos": 0.7203,
+          "ganho_sobre_a_taxa_de_base": 1.1723,
+          "fracao_marcada": 0.8002
+        },
+        "0.9": {
+          "precisao": 0.4561,
+          "falsos_positivos": 9479,
+          "taxa_de_falsos_positivos": 0.6212,
+          "ganho_sobre_a_taxa_de_base": 1.2441,
+          "fracao_marcada": 0.7234
+        },
+        "0.8": {
+          "precisao": 0.4916,
+          "falsos_positivos": 7305,
+          "taxa_de_falsos_positivos": 0.4788,
+          "ganho_sobre_a_taxa_de_base": 1.3411,
+          "fracao_marcada": 0.5965
+        },
+        "0.7": {
+          "precisao": 0.5335,
+          "falsos_positivos": 5406,
+          "taxa_de_falsos_positivos": 0.3543,
+          "ganho_sobre_a_taxa_de_base": 1.4552,
+          "fracao_marcada": 0.481
+        },
+        "0.5": {
+          "precisao": 0.602,
+          "falsos_positivos": 2919,
+          "taxa_de_falsos_positivos": 0.1913,
+          "ganho_sobre_a_taxa_de_base": 1.6422,
+          "fracao_marcada": 0.3045
+        }
+      },
+      "faixas_do_score": [
+        {
+          "faixa": "alta",
+          "score_de": 0.4875,
+          "score_ate": null,
+          "fracao_das_cobrancas": 0.3055,
+          "taxa_de_recuperacao": 0.6013
+        },
+        {
+          "faixa": "media",
+          "score_de": 0.2345,
+          "score_ate": 0.4875,
+          "fracao_das_cobrancas": 0.4934,
+          "taxa_de_recuperacao": 0.3246
+        },
+        {
+          "faixa": "baixa",
+          "score_de": null,
+          "score_ate": 0.2345,
+          "fracao_das_cobrancas": 0.2011,
+          "taxa_de_recuperacao": 0.1133
+        }
+      ],
+      "curva_de_limiares": [
+        {
+          "limiar": 0.1,
+          "matriz": {
+            "tn": 596,
+            "fp": 14662,
+            "fn": 12,
+            "tp": 8819
+          },
+          "recall": 0.9986,
+          "precisao": 0.3756,
+          "especificidade": 0.0391,
+          "acuracia": 0.3908,
+          "fracao_marcada": 0.9748,
+          "recuperaveis_perdidos": 12
+        },
+        {
+          "limiar": 0.15,
+          "matriz": {
+            "tn": 1073,
+            "fp": 14185,
+            "fn": 26,
+            "tp": 8805
+          },
+          "recall": 0.9971,
+          "precisao": 0.383,
+          "especificidade": 0.0703,
+          "acuracia": 0.4101,
+          "fracao_marcada": 0.9544,
+          "recuperaveis_perdidos": 26
+        },
+        {
+          "limiar": 0.2,
+          "matriz": {
+            "tn": 2435,
+            "fp": 12823,
+            "fn": 214,
+            "tp": 8617
+          },
+          "recall": 0.9758,
+          "precisao": 0.4019,
+          "especificidade": 0.1596,
+          "acuracia": 0.4588,
+          "fracao_marcada": 0.89,
+          "recuperaveis_perdidos": 214
+        },
+        {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 4961,
+            "fp": 10297,
+            "fn": 680,
+            "tp": 8151
+          },
+          "recall": 0.923,
+          "precisao": 0.4418,
+          "especificidade": 0.3251,
+          "acuracia": 0.5443,
+          "fracao_marcada": 0.7658,
+          "recuperaveis_perdidos": 680
+        },
+        {
+          "limiar": 0.3,
+          "matriz": {
+            "tn": 6058,
+            "fp": 9200,
+            "fn": 970,
+            "tp": 7861
+          },
+          "recall": 0.8902,
+          "precisao": 0.4608,
+          "especificidade": 0.397,
+          "acuracia": 0.5778,
+          "fracao_marcada": 0.7082,
+          "recuperaveis_perdidos": 970
+        },
+        {
+          "limiar": 0.35,
+          "matriz": {
+            "tn": 7359,
+            "fp": 7899,
+            "fn": 1481,
+            "tp": 7350
+          },
+          "recall": 0.8323,
+          "precisao": 0.482,
+          "especificidade": 0.4823,
+          "acuracia": 0.6106,
+          "fracao_marcada": 0.633,
+          "recuperaveis_perdidos": 1481
+        },
+        {
+          "limiar": 0.4,
+          "matriz": {
+            "tn": 9341,
+            "fp": 5917,
+            "fn": 2390,
+            "tp": 6441
+          },
+          "recall": 0.7294,
+          "precisao": 0.5212,
+          "especificidade": 0.6122,
+          "acuracia": 0.6552,
+          "fracao_marcada": 0.513,
+          "recuperaveis_perdidos": 2390
+        },
+        {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 12621,
+            "fp": 2637,
+            "fn": 4679,
+            "tp": 4152
+          },
+          "recall": 0.4702,
+          "precisao": 0.6116,
+          "especificidade": 0.8272,
+          "acuracia": 0.6963,
+          "fracao_marcada": 0.2818,
+          "recuperaveis_perdidos": 4679
+        },
+        {
+          "limiar": 0.6,
+          "matriz": {
+            "tn": 14331,
+            "fp": 927,
+            "fn": 6857,
+            "tp": 1974
+          },
+          "recall": 0.2235,
+          "precisao": 0.6805,
+          "especificidade": 0.9392,
+          "acuracia": 0.6769,
+          "fracao_marcada": 0.1204,
+          "recuperaveis_perdidos": 6857
+        },
+        {
+          "limiar": 0.7,
+          "matriz": {
+            "tn": 15004,
+            "fp": 254,
+            "fn": 8156,
+            "tp": 675
+          },
+          "recall": 0.0764,
+          "precisao": 0.7266,
+          "especificidade": 0.9834,
+          "acuracia": 0.6509,
+          "fracao_marcada": 0.0386,
+          "recuperaveis_perdidos": 8156
+        }
+      ],
+      "por_causa": {
+        "authorization_revoked": {
+          "cobrancas": 3318,
+          "taxa_real": 0.2089,
+          "recall": 0.3709,
+          "precisao": 0.4656,
+          "fracao_marcada": 0.1664
+        },
+        "generic_decline": {
+          "cobrancas": 2161,
+          "taxa_real": 0.4822,
+          "recall": 0.9904,
+          "precisao": 0.5122,
+          "fracao_marcada": 0.9324
+        },
+        "insufficient_funds": {
+          "cobrancas": 11027,
+          "taxa_real": 0.3291,
+          "recall": 0.8947,
+          "precisao": 0.4154,
+          "fracao_marcada": 0.7089
+        },
+        "limit_exceeded": {
+          "cobrancas": 4354,
+          "taxa_real": 0.3468,
+          "recall": 0.9768,
+          "precisao": 0.3652,
+          "fracao_marcada": 0.9277
+        },
+        "processing_error": {
+          "cobrancas": 3229,
+          "taxa_real": 0.6061,
+          "recall": 0.998,
+          "precisao": 0.6331,
+          "fracao_marcada": 0.9554
+        }
+      },
+      "por_metodo": {
+        "boleto": {
+          "cobrancas": 3633,
+          "taxa_real": 0.4544,
+          "recall": 0.9933,
+          "precisao": 0.4787,
+          "fracao_marcada": 0.943
+        },
+        "pix_automatico": {
+          "cobrancas": 20456,
+          "taxa_real": 0.351,
+          "recall": 0.8808,
+          "precisao": 0.4491,
+          "fracao_marcada": 0.6884
+        }
+      },
+      "permutacao_do_rotulo": {
+        "sementes": [
+          0,
+          1,
+          2
+        ],
+        "auc_holdout": [
+          0.4895,
+          0.5284,
+          0.5054
+        ]
+      },
+      "ablacao": {
+        "tenure_months": {
+          "auc_sem_ela": 0.7333,
+          "queda": 0.003
+        },
+        "day_of_month": {
+          "auc_sem_ela": 0.7027,
+          "queda": 0.0336
+        },
+        "invoice_amount": {
+          "auc_sem_ela": 0.7107,
+          "queda": 0.0256
+        },
+        "avg_ticket": {
+          "auc_sem_ela": 0.7196,
+          "queda": 0.0167
+        },
+        "payment_history_score": {
+          "auc_sem_ela": 0.7241,
+          "queda": 0.0122
+        },
+        "failure_count_90d": {
+          "auc_sem_ela": 0.7367,
+          "queda": -0.0004
+        },
+        "hour_of_day": {
+          "auc_sem_ela": 0.7368,
+          "queda": -0.0005
+        },
+        "day_of_week": {
+          "auc_sem_ela": 0.7363,
+          "queda": 0.0
+        },
+        "attempt_count": {
+          "auc_sem_ela": 0.7314,
+          "queda": 0.0049
+        },
+        "gateway_error_code": {
+          "auc_sem_ela": 0.6564,
+          "queda": 0.0799
+        },
+        "metodo_pagamento": {
+          "auc_sem_ela": 0.7168,
+          "queda": 0.0195
+        }
+      },
+      "tempos_s": {
+        "treino_principal_s": 7.3,
+        "groupkfold_s": 28.98,
+        "permutacao_s": 20.21,
+        "ablacao_s": 80.47
+      }
+    },
+    "B": {
+      "features": [
+        "tenure_months",
+        "day_of_month",
+        "invoice_amount",
+        "avg_ticket",
+        "payment_history_score",
+        "failure_count_90d",
+        "hour_of_day",
+        "day_of_week",
+        "attempt_count",
+        "gateway_error_code",
+        "metodo_pagamento",
+        "perfil_pagador_cod",
+        "razao_fatura_ticket"
+      ],
+      "n_features": 13,
+      "holdout": {
+        "auc": 0.7803,
+        "brier": 0.1826,
+        "erro_de_calibracao": 0.0468,
+        "auc_no_treino": 0.7966
+      },
+      "groupkfold": {
+        "auc": {
+          "por_dobra": [
+            0.7752,
+            0.7738,
+            0.7773,
+            0.7764,
+            0.7728
+          ],
+          "media": 0.7751,
+          "desvio": 0.0018
+        },
+        "precisao_em_recall_0_90": {
+          "por_dobra": [
+            0.4786,
+            0.4742,
+            0.475,
+            0.4751,
+            0.4593
+          ],
+          "media": 0.4724,
+          "desvio": 0.0075
+        }
+      },
+      "limiar": {
+        "regra": "maior limiar da grade (0,01) com recall >= 0.9 nas predicoes fora-da-dobra do GroupKFold do treino",
+        "escolhido": 0.29,
+        "no_limiar_escolhido": {
+          "limiar": 0.29,
+          "matriz": {
+            "tn": 5978,
+            "fp": 9280,
+            "fn": 720,
+            "tp": 8111
+          },
+          "recall": 0.9185,
+          "precisao": 0.4664,
+          "especificidade": 0.3918,
+          "acuracia": 0.5849,
+          "fracao_marcada": 0.7219,
+          "recuperaveis_perdidos": 720
+        },
+        "no_limiar_em_uso_hoje": {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 5021,
+            "fp": 10237,
+            "fn": 458,
+            "tp": 8373
+          },
+          "recall": 0.9481,
+          "precisao": 0.4499,
+          "especificidade": 0.3291,
+          "acuracia": 0.556,
+          "fracao_marcada": 0.7726,
+          "recuperaveis_perdidos": 458
+        },
+        "no_limiar_0_50": {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 13050,
+            "fp": 2208,
+            "fn": 4292,
+            "tp": 4539
+          },
+          "recall": 0.514,
+          "precisao": 0.6727,
+          "especificidade": 0.8553,
+          "acuracia": 0.7302,
+          "fracao_marcada": 0.2801,
+          "recuperaveis_perdidos": 4292
+        }
+      },
+      "precisao_em_recall_fixo": {
+        "0.938": {
+          "precisao": 0.4585,
+          "falsos_positivos": 9782,
+          "taxa_de_falsos_positivos": 0.6411,
+          "ganho_sobre_a_taxa_de_base": 1.2508,
+          "fracao_marcada": 0.75
+        },
+        "0.9": {
+          "precisao": 0.4756,
+          "falsos_positivos": 8763,
+          "taxa_de_falsos_positivos": 0.5743,
+          "ganho_sobre_a_taxa_de_base": 1.2974,
+          "fracao_marcada": 0.6937
+        },
+        "0.8": {
+          "precisao": 0.5234,
+          "falsos_positivos": 6432,
+          "taxa_de_falsos_positivos": 0.4215,
+          "ganho_sobre_a_taxa_de_base": 1.4279,
+          "fracao_marcada": 0.5603
+        },
+        "0.7": {
+          "precisao": 0.5853,
+          "falsos_positivos": 4381,
+          "taxa_de_falsos_positivos": 0.2871,
+          "ganho_sobre_a_taxa_de_base": 1.5964,
+          "fracao_marcada": 0.4385
+        },
+        "0.5": {
+          "precisao": 0.6782,
+          "falsos_positivos": 2095,
+          "taxa_de_falsos_positivos": 0.1373,
+          "ganho_sobre_a_taxa_de_base": 1.8501,
+          "fracao_marcada": 0.2703
+        }
+      },
+      "faixas_do_score": [
+        {
+          "faixa": "alta",
+          "score_de": 0.4792,
+          "score_ate": null,
+          "fracao_das_cobrancas": 0.3018,
+          "taxa_de_recuperacao": 0.6581
+        },
+        {
+          "faixa": "media",
+          "score_de": 0.2301,
+          "score_ate": 0.4792,
+          "fracao_das_cobrancas": 0.4944,
+          "taxa_de_recuperacao": 0.3088
+        },
+        {
+          "faixa": "baixa",
+          "score_de": null,
+          "score_ate": 0.2301,
+          "fracao_das_cobrancas": 0.2039,
+          "taxa_de_recuperacao": 0.0753
+        }
+      ],
+      "curva_de_limiares": [
+        {
+          "limiar": 0.1,
+          "matriz": {
+            "tn": 1356,
+            "fp": 13902,
+            "fn": 26,
+            "tp": 8805
+          },
+          "recall": 0.9971,
+          "precisao": 0.3878,
+          "especificidade": 0.0889,
+          "acuracia": 0.4218,
+          "fracao_marcada": 0.9426,
+          "recuperaveis_perdidos": 26
+        },
+        {
+          "limiar": 0.15,
+          "matriz": {
+            "tn": 1741,
+            "fp": 13517,
+            "fn": 37,
+            "tp": 8794
+          },
+          "recall": 0.9958,
+          "precisao": 0.3942,
+          "especificidade": 0.1141,
+          "acuracia": 0.4373,
+          "fracao_marcada": 0.9262,
+          "recuperaveis_perdidos": 37
+        },
+        {
+          "limiar": 0.2,
+          "matriz": {
+            "tn": 3339,
+            "fp": 11919,
+            "fn": 188,
+            "tp": 8643
+          },
+          "recall": 0.9787,
+          "precisao": 0.4203,
+          "especificidade": 0.2188,
+          "acuracia": 0.4974,
+          "fracao_marcada": 0.8536,
+          "recuperaveis_perdidos": 188
+        },
+        {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 5021,
+            "fp": 10237,
+            "fn": 458,
+            "tp": 8373
+          },
+          "recall": 0.9481,
+          "precisao": 0.4499,
+          "especificidade": 0.3291,
+          "acuracia": 0.556,
+          "fracao_marcada": 0.7726,
+          "recuperaveis_perdidos": 458
+        },
+        {
+          "limiar": 0.3,
+          "matriz": {
+            "tn": 6358,
+            "fp": 8900,
+            "fn": 840,
+            "tp": 7991
+          },
+          "recall": 0.9049,
+          "precisao": 0.4731,
+          "especificidade": 0.4167,
+          "acuracia": 0.5957,
+          "fracao_marcada": 0.7012,
+          "recuperaveis_perdidos": 840
+        },
+        {
+          "limiar": 0.35,
+          "matriz": {
+            "tn": 8301,
+            "fp": 6957,
+            "fn": 1590,
+            "tp": 7241
+          },
+          "recall": 0.82,
+          "precisao": 0.51,
+          "especificidade": 0.544,
+          "acuracia": 0.6452,
+          "fracao_marcada": 0.5894,
+          "recuperaveis_perdidos": 1590
+        },
+        {
+          "limiar": 0.4,
+          "matriz": {
+            "tn": 10589,
+            "fp": 4669,
+            "fn": 2479,
+            "tp": 6352
+          },
+          "recall": 0.7193,
+          "precisao": 0.5764,
+          "especificidade": 0.694,
+          "acuracia": 0.7033,
+          "fracao_marcada": 0.4575,
+          "recuperaveis_perdidos": 2479
+        },
+        {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 13050,
+            "fp": 2208,
+            "fn": 4292,
+            "tp": 4539
+          },
+          "recall": 0.514,
+          "precisao": 0.6727,
+          "especificidade": 0.8553,
+          "acuracia": 0.7302,
+          "fracao_marcada": 0.2801,
+          "recuperaveis_perdidos": 4292
+        },
+        {
+          "limiar": 0.6,
+          "matriz": {
+            "tn": 14099,
+            "fp": 1159,
+            "fn": 5626,
+            "tp": 3205
+          },
+          "recall": 0.3629,
+          "precisao": 0.7344,
+          "especificidade": 0.924,
+          "acuracia": 0.7183,
+          "fracao_marcada": 0.1812,
+          "recuperaveis_perdidos": 5626
+        },
+        {
+          "limiar": 0.7,
+          "matriz": {
+            "tn": 14850,
+            "fp": 408,
+            "fn": 7021,
+            "tp": 1810
+          },
+          "recall": 0.205,
+          "precisao": 0.8161,
+          "especificidade": 0.9733,
+          "acuracia": 0.6916,
+          "fracao_marcada": 0.0921,
+          "recuperaveis_perdidos": 7021
+        }
+      ],
+      "por_causa": {
+        "authorization_revoked": {
+          "cobrancas": 3318,
+          "taxa_real": 0.2089,
+          "recall": 0.456,
+          "precisao": 0.3935,
+          "fracao_marcada": 0.242
+        },
+        "generic_decline": {
+          "cobrancas": 2161,
+          "taxa_real": 0.4822,
+          "recall": 0.9779,
+          "precisao": 0.5299,
+          "fracao_marcada": 0.8899
+        },
+        "insufficient_funds": {
+          "cobrancas": 11027,
+          "taxa_real": 0.3291,
+          "recall": 0.9333,
+          "precisao": 0.4328,
+          "fracao_marcada": 0.7097
+        },
+        "limit_exceeded": {
+          "cobrancas": 4354,
+          "taxa_real": 0.3468,
+          "recall": 0.9543,
+          "precisao": 0.3779,
+          "fracao_marcada": 0.8757
+        },
+        "processing_error": {
+          "cobrancas": 3229,
+          "taxa_real": 0.6061,
+          "recall": 0.9954,
+          "precisao": 0.6438,
+          "fracao_marcada": 0.9371
+        }
+      },
+      "por_metodo": {
+        "boleto": {
+          "cobrancas": 3633,
+          "taxa_real": 0.4544,
+          "recall": 0.9843,
+          "precisao": 0.49,
+          "fracao_marcada": 0.9127
+        },
+        "pix_automatico": {
+          "cobrancas": 20456,
+          "taxa_real": 0.351,
+          "recall": 0.9033,
+          "precisao": 0.4608,
+          "fracao_marcada": 0.6881
+        }
+      },
+      "tempos_s": {
+        "treino_principal_s": 7.03,
+        "groupkfold_s": 26.75
+      }
+    },
+    "C": {
+      "features": [
+        "tenure_months",
+        "day_of_month",
+        "invoice_amount",
+        "avg_ticket",
+        "payment_history_score",
+        "failure_count_90d",
+        "hour_of_day",
+        "day_of_week",
+        "attempt_count",
+        "gateway_error_code",
+        "metodo_pagamento",
+        "perfil_pagador_cod",
+        "razao_fatura_ticket",
+        "liquidez_prevista_d2",
+        "liquidez_prevista_d4",
+        "liquidez_prevista_d6",
+        "liquidez_prevista_max_na_janela"
+      ],
+      "n_features": 17,
+      "holdout": {
+        "auc": 0.8438,
+        "brier": 0.1551,
+        "erro_de_calibracao": 0.0484,
+        "auc_no_treino": 0.8571
+      },
+      "groupkfold": {
+        "auc": {
+          "por_dobra": [
+            0.8386,
+            0.8351,
+            0.8437,
+            0.8428,
+            0.8402
+          ],
+          "media": 0.8401,
+          "desvio": 0.0034
+        },
+        "precisao_em_recall_0_90": {
+          "por_dobra": [
+            0.5264,
+            0.5185,
+            0.5378,
+            0.5322,
+            0.5128
+          ],
+          "media": 0.5255,
+          "desvio": 0.0101
+        }
+      },
+      "limiar": {
+        "regra": "maior limiar da grade (0,01) com recall >= 0.9 nas predicoes fora-da-dobra do GroupKFold do treino",
+        "escolhido": 0.28,
+        "no_limiar_escolhido": {
+          "limiar": 0.28,
+          "matriz": {
+            "tn": 7850,
+            "fp": 7408,
+            "fn": 796,
+            "tp": 8035
+          },
+          "recall": 0.9099,
+          "precisao": 0.5203,
+          "especificidade": 0.5145,
+          "acuracia": 0.6594,
+          "fracao_marcada": 0.6411,
+          "recuperaveis_perdidos": 796
+        },
+        "no_limiar_em_uso_hoje": {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 6601,
+            "fp": 8657,
+            "fn": 496,
+            "tp": 8335
+          },
+          "recall": 0.9438,
+          "precisao": 0.4905,
+          "especificidade": 0.4326,
+          "acuracia": 0.62,
+          "fracao_marcada": 0.7054,
+          "recuperaveis_perdidos": 496
+        },
+        "no_limiar_0_50": {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 12925,
+            "fp": 2333,
+            "fn": 3005,
+            "tp": 5826
+          },
+          "recall": 0.6597,
+          "precisao": 0.7141,
+          "especificidade": 0.8471,
+          "acuracia": 0.7784,
+          "fracao_marcada": 0.3387,
+          "recuperaveis_perdidos": 3005
+        }
+      },
+      "precisao_em_recall_fixo": {
+        "0.938": {
+          "precisao": 0.4953,
+          "falsos_positivos": 8442,
+          "taxa_de_falsos_positivos": 0.5533,
+          "ganho_sobre_a_taxa_de_base": 1.351,
+          "fracao_marcada": 0.6943
+        },
+        "0.9": {
+          "precisao": 0.5332,
+          "falsos_positivos": 6957,
+          "taxa_de_falsos_positivos": 0.456,
+          "ganho_sobre_a_taxa_de_base": 1.4546,
+          "fracao_marcada": 0.6187
+        },
+        "0.8": {
+          "precisao": 0.6229,
+          "falsos_positivos": 4278,
+          "taxa_de_falsos_positivos": 0.2804,
+          "ganho_sobre_a_taxa_de_base": 1.699,
+          "fracao_marcada": 0.4709
+        },
+        "0.7": {
+          "precisao": 0.6934,
+          "falsos_positivos": 2733,
+          "taxa_de_falsos_positivos": 0.1791,
+          "ganho_sobre_a_taxa_de_base": 1.8915,
+          "fracao_marcada": 0.3701
+        },
+        "0.5": {
+          "precisao": 0.7883,
+          "falsos_positivos": 1186,
+          "taxa_de_falsos_positivos": 0.0777,
+          "ganho_sobre_a_taxa_de_base": 2.1503,
+          "fracao_marcada": 0.2326
+        }
+      },
+      "faixas_do_score": [
+        {
+          "faixa": "alta",
+          "score_de": 0.5358,
+          "score_ate": null,
+          "fracao_das_cobrancas": 0.307,
+          "taxa_de_recuperacao": 0.7344
+        },
+        {
+          "faixa": "media",
+          "score_de": 0.1629,
+          "score_ate": 0.5358,
+          "fracao_das_cobrancas": 0.4955,
+          "taxa_de_recuperacao": 0.2687
+        },
+        {
+          "faixa": "baixa",
+          "score_de": null,
+          "score_ate": 0.1629,
+          "fracao_das_cobrancas": 0.1975,
+          "taxa_de_recuperacao": 0.0406
+        }
+      ],
+      "curva_de_limiares": [
+        {
+          "limiar": 0.1,
+          "matriz": {
+            "tn": 3501,
+            "fp": 11757,
+            "fn": 81,
+            "tp": 8750
+          },
+          "recall": 0.9908,
+          "precisao": 0.4267,
+          "especificidade": 0.2295,
+          "acuracia": 0.5086,
+          "fracao_marcada": 0.8513,
+          "recuperaveis_perdidos": 81
+        },
+        {
+          "limiar": 0.15,
+          "matriz": {
+            "tn": 4344,
+            "fp": 10914,
+            "fn": 160,
+            "tp": 8671
+          },
+          "recall": 0.9819,
+          "precisao": 0.4427,
+          "especificidade": 0.2847,
+          "acuracia": 0.5403,
+          "fracao_marcada": 0.813,
+          "recuperaveis_perdidos": 160
+        },
+        {
+          "limiar": 0.2,
+          "matriz": {
+            "tn": 5238,
+            "fp": 10020,
+            "fn": 284,
+            "tp": 8547
+          },
+          "recall": 0.9678,
+          "precisao": 0.4603,
+          "especificidade": 0.3433,
+          "acuracia": 0.5723,
+          "fracao_marcada": 0.7708,
+          "recuperaveis_perdidos": 284
+        },
+        {
+          "limiar": 0.25,
+          "matriz": {
+            "tn": 6601,
+            "fp": 8657,
+            "fn": 496,
+            "tp": 8335
+          },
+          "recall": 0.9438,
+          "precisao": 0.4905,
+          "especificidade": 0.4326,
+          "acuracia": 0.62,
+          "fracao_marcada": 0.7054,
+          "recuperaveis_perdidos": 496
+        },
+        {
+          "limiar": 0.3,
+          "matriz": {
+            "tn": 8706,
+            "fp": 6552,
+            "fn": 999,
+            "tp": 7832
+          },
+          "recall": 0.8869,
+          "precisao": 0.5445,
+          "especificidade": 0.5706,
+          "acuracia": 0.6865,
+          "fracao_marcada": 0.5971,
+          "recuperaveis_perdidos": 999
+        },
+        {
+          "limiar": 0.35,
+          "matriz": {
+            "tn": 10410,
+            "fp": 4848,
+            "fn": 1550,
+            "tp": 7281
+          },
+          "recall": 0.8245,
+          "precisao": 0.6003,
+          "especificidade": 0.6823,
+          "acuracia": 0.7344,
+          "fracao_marcada": 0.5035,
+          "recuperaveis_perdidos": 1550
+        },
+        {
+          "limiar": 0.4,
+          "matriz": {
+            "tn": 11412,
+            "fp": 3846,
+            "fn": 1957,
+            "tp": 6874
+          },
+          "recall": 0.7784,
+          "precisao": 0.6412,
+          "especificidade": 0.7479,
+          "acuracia": 0.7591,
+          "fracao_marcada": 0.445,
+          "recuperaveis_perdidos": 1957
+        },
+        {
+          "limiar": 0.5,
+          "matriz": {
+            "tn": 12925,
+            "fp": 2333,
+            "fn": 3005,
+            "tp": 5826
+          },
+          "recall": 0.6597,
+          "precisao": 0.7141,
+          "especificidade": 0.8471,
+          "acuracia": 0.7784,
+          "fracao_marcada": 0.3387,
+          "recuperaveis_perdidos": 3005
+        },
+        {
+          "limiar": 0.6,
+          "matriz": {
+            "tn": 13954,
+            "fp": 1304,
+            "fn": 4243,
+            "tp": 4588
+          },
+          "recall": 0.5195,
+          "precisao": 0.7787,
+          "especificidade": 0.9145,
+          "acuracia": 0.7697,
+          "fracao_marcada": 0.2446,
+          "recuperaveis_perdidos": 4243
+        },
+        {
+          "limiar": 0.7,
+          "matriz": {
+            "tn": 14823,
+            "fp": 435,
+            "fn": 6063,
+            "tp": 2768
+          },
+          "recall": 0.3134,
+          "precisao": 0.8642,
+          "especificidade": 0.9715,
+          "acuracia": 0.7303,
+          "fracao_marcada": 0.133,
+          "recuperaveis_perdidos": 6063
+        }
+      ],
+      "por_causa": {
+        "authorization_revoked": {
+          "cobrancas": 3318,
+          "taxa_real": 0.2089,
+          "recall": 0.5931,
+          "precisao": 0.3299,
+          "fracao_marcada": 0.3755
+        },
+        "generic_decline": {
+          "cobrancas": 2161,
+          "taxa_real": 0.4822,
+          "recall": 0.9501,
+          "precisao": 0.6424,
+          "fracao_marcada": 0.7131
+        },
+        "insufficient_funds": {
+          "cobrancas": 11027,
+          "taxa_real": 0.3291,
+          "recall": 0.9193,
+          "precisao": 0.4792,
+          "fracao_marcada": 0.6314
+        },
+        "limit_exceeded": {
+          "cobrancas": 4354,
+          "taxa_real": 0.3468,
+          "recall": 0.9411,
+          "precisao": 0.4423,
+          "fracao_marcada": 0.7379
+        },
+        "processing_error": {
+          "cobrancas": 3229,
+          "taxa_real": 0.6061,
+          "recall": 0.9591,
+          "precisao": 0.7565,
+          "fracao_marcada": 0.7683
+        }
+      },
+      "por_metodo": {
+        "boleto": {
+          "cobrancas": 3633,
+          "taxa_real": 0.4544,
+          "recall": 0.9431,
+          "precisao": 0.5678,
+          "fracao_marcada": 0.7547
+        },
+        "pix_automatico": {
+          "cobrancas": 20456,
+          "taxa_real": 0.351,
+          "recall": 0.9022,
+          "precisao": 0.51,
+          "fracao_marcada": 0.6209
+        }
+      },
+      "tempos_s": {
+        "treino_principal_s": 10.95,
+        "groupkfold_s": 43.49
+      },
+      "medido": true,
+      "exploratorio": true,
+      "aviso": "entrou depois de ver A e B; fora do criterio declarado. Supoe que o historico de saldo do cliente chega ao sistema (premissa do Modulo 3).",
+      "auc_da_previsao_sozinha": 0.6692,
+      "previsao_de_liquidez_s": 114.1
+    }
+  },
+  "teto_com_o_caixa": {
+    "o_que_e": "a probabilidade de recuperar DADO o caixa simulado dos 7 dias SEGUINTES a cobranca, o gasto do dia da falha e as latentes (oculto_p_recuperacao). E previsao perfeita do futuro: nenhum previsor chega aqui, nem com o historico de saldo. Serve de limite superior, nao de meta.",
+    "auc": 0.9544,
+    "precisao_em_recall_fixo": {
+      "0.938": {
+        "precisao": 0.7597,
+        "falsos_positivos": 2620,
+        "taxa_de_falsos_positivos": 0.1717,
+        "ganho_sobre_a_taxa_de_base": 2.0724,
+        "fracao_marcada": 0.4527
+      },
+      "0.9": {
+        "precisao": 0.7869,
+        "falsos_positivos": 2152,
+        "taxa_de_falsos_positivos": 0.141,
+        "ganho_sobre_a_taxa_de_base": 2.1466,
+        "fracao_marcada": 0.4193
+      },
+      "0.8": {
+        "precisao": 0.8506,
+        "falsos_positivos": 1241,
+        "taxa_de_falsos_positivos": 0.0813,
+        "ganho_sobre_a_taxa_de_base": 2.3202,
+        "fracao_marcada": 0.3448
+      },
+      "0.7": {
+        "precisao": 0.9097,
+        "falsos_positivos": 614,
+        "taxa_de_falsos_positivos": 0.0402,
+        "ganho_sobre_a_taxa_de_base": 2.4813,
+        "fracao_marcada": 0.2821
+      },
+      "0.5": {
+        "precisao": 0.9837,
+        "falsos_positivos": 73,
+        "taxa_de_falsos_positivos": 0.0048,
+        "ganho_sobre_a_taxa_de_base": 2.6834,
+        "fracao_marcada": 0.1864
+      }
+    }
+  },
+  "modelo_de_producao_na_v4": {
+    "medido": true,
+    "auc": 0.5648,
+    "no_limiar_em_uso_hoje": {
+      "limiar": 0.25,
+      "matriz": {
+        "tn": 3048,
+        "fp": 12210,
+        "fn": 1234,
+        "tp": 7597
+      },
+      "recall": 0.8603,
+      "precisao": 0.3836,
+      "especificidade": 0.1998,
+      "acuracia": 0.4419,
+      "fracao_marcada": 0.8222,
+      "recuperaveis_perdidos": 1234
+    },
+    "precisao_em_recall_fixo": {
+      "0.938": {
+        "precisao": 0.3778,
+        "falsos_positivos": 13642,
+        "taxa_de_falsos_positivos": 0.8941,
+        "ganho_sobre_a_taxa_de_base": 1.0306,
+        "fracao_marcada": 0.9102
+      },
+      "0.9": {
+        "precisao": 0.3809,
+        "falsos_positivos": 12919,
+        "taxa_de_falsos_positivos": 0.8467,
+        "ganho_sobre_a_taxa_de_base": 1.039,
+        "fracao_marcada": 0.8662
+      },
+      "0.8": {
+        "precisao": 0.3872,
+        "falsos_positivos": 11182,
+        "taxa_de_falsos_positivos": 0.7329,
+        "ganho_sobre_a_taxa_de_base": 1.0562,
+        "fracao_marcada": 0.7575
+      },
+      "0.7": {
+        "precisao": 0.3974,
+        "falsos_positivos": 9375,
+        "taxa_de_falsos_positivos": 0.6144,
+        "ganho_sobre_a_taxa_de_base": 1.084,
+        "fracao_marcada": 0.6458
+      },
+      "0.5": {
+        "precisao": 0.4124,
+        "falsos_positivos": 6292,
+        "taxa_de_falsos_positivos": 0.4124,
+        "ganho_sobre_a_taxa_de_base": 1.1249,
+        "fracao_marcada": 0.4445
+      }
+    }
+  },
+  "referencia_v2": {
+    "auc": 0.7096,
+    "limiar": 0.25,
+    "matriz_holdout": {
+      "tn": 3676,
+      "fp": 10657,
+      "fn": 606,
+      "tp": 9150
+    },
+    "precisao_em_recall_fixo": {
+      "0.938": 0.462,
+      "0.9": 0.4768,
+      "0.8": 0.5143,
+      "0.7": 0.5477,
+      "0.5": 0.5999
+    }
+  },
+  "v2_medida": {
+    "medido": true,
+    "o_que_e": "o artefato de producao (treinado na v2) no holdout por cliente da v2",
+    "linhas_teste": 24089,
+    "taxa_recuperacao_teste": 0.405,
+    "auc": 0.7096,
+    "no_limiar_em_uso_hoje": {
+      "limiar": 0.25,
+      "matriz": {
+        "tn": 3676,
+        "fp": 10657,
+        "fn": 606,
+        "tp": 9150
+      },
+      "recall": 0.9379,
+      "precisao": 0.462,
+      "especificidade": 0.2565,
+      "acuracia": 0.5324,
+      "fracao_marcada": 0.8222,
+      "recuperaveis_perdidos": 606
+    },
+    "precisao_em_recall_fixo": {
+      "0.938": {
+        "precisao": 0.462,
+        "falsos_positivos": 10659,
+        "taxa_de_falsos_positivos": 0.7437,
+        "ganho_sobre_a_taxa_de_base": 1.1407,
+        "fracao_marcada": 0.8224
+      },
+      "0.9": {
+        "precisao": 0.4768,
+        "falsos_positivos": 9634,
+        "taxa_de_falsos_positivos": 0.6722,
+        "ganho_sobre_a_taxa_de_base": 1.1774,
+        "fracao_marcada": 0.7645
+      },
+      "0.8": {
+        "precisao": 0.5143,
+        "falsos_positivos": 7371,
+        "taxa_de_falsos_positivos": 0.5143,
+        "ganho_sobre_a_taxa_de_base": 1.2699,
+        "fracao_marcada": 0.63
+      },
+      "0.7": {
+        "precisao": 0.5477,
+        "falsos_positivos": 5641,
+        "taxa_de_falsos_positivos": 0.3936,
+        "ganho_sobre_a_taxa_de_base": 1.3523,
+        "fracao_marcada": 0.5177
+      },
+      "0.5": {
+        "precisao": 0.5999,
+        "falsos_positivos": 3254,
+        "taxa_de_falsos_positivos": 0.227,
+        "ganho_sobre_a_taxa_de_base": 1.4811,
+        "fracao_marcada": 0.3376
+      }
+    },
+    "groupkfold_do_algoritmo_no_treino_da_v2": {
+      "auc": {
+        "por_dobra": [
+          0.7114,
+          0.7141,
+          0.7063,
+          0.71,
+          0.7082
+        ],
+        "media": 0.71,
+        "desvio": 0.003
+      },
+      "precisao_em_recall_0_90": {
+        "por_dobra": [
+          0.469,
+          0.4663,
+          0.4654,
+          0.4654,
+          0.4663
+        ],
+        "media": 0.4665,
+        "desvio": 0.0015
+      }
+    },
+    "faixas_do_score": [
+      {
+        "faixa": "alta",
+        "score_de": 0.5236,
+        "score_ate": null,
+        "fracao_das_cobrancas": 0.3114,
+        "taxa_de_recuperacao": 0.6087
+      },
+      {
+        "faixa": "media",
+        "score_de": 0.2637,
+        "score_ate": 0.5236,
+        "fracao_das_cobrancas": 0.4917,
+        "taxa_de_recuperacao": 0.3763
+      },
+      {
+        "faixa": "baixa",
+        "score_de": null,
+        "score_ate": 0.2637,
+        "fracao_das_cobrancas": 0.1969,
+        "taxa_de_recuperacao": 0.1545
+      }
+    ]
+  },
+  "criterio": {
+    "declarado": "A base nova resolve o problema declarado se, no holdout, com recall >= 0,90, a precisao do cenario A passar a da v2 (0,4768 com recall de 0,90) por mais que o desvio da precisao entre as dobras do GroupKFold. Escrito antes de medir. Satisfazer o criterio NAO promove nada.",
+    "precisao_v4_em_recall_0_90": 0.4561,
+    "precisao_v2_em_recall_0_90": 0.4768,
+    "diferenca": -0.0207,
+    "desvio_exigido": 0.0085,
+    "satisfeito": false,
+    "promovido": false,
+    "sem_a_taxa_de_base": {
+      "medido": true,
+      "recall": 0.9,
+      "taxa_de_falsos_positivos_v2": 0.6722,
+      "taxa_de_falsos_positivos_v4_a": 0.6212,
+      "ganho_sobre_a_taxa_de_base_v2": 1.1774,
+      "ganho_sobre_a_taxa_de_base_v4_a": 1.2441,
+      "precisao_do_v4_a_se_a_taxa_de_base_fosse_a_da_v2": 0.4965,
+      "leitura": "o criterio declarado compara precisoes entre bases com taxas de recuperacao diferentes; sem esse efeito, o cenario A marca menos nao-recuperaveis que a v2"
+    }
+  },
+  "versoes": {
+    "python": "3.11.15",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "scikit-learn": "1.5.2",
+    "xgboost": "2.1.1",
+    "torch": "2.13.0+cu130",
+    "prophet": "1.4.0",
+    "pyarrow": "25.0.1"
+  },
+  "duracao_total_s": 327.1
+}

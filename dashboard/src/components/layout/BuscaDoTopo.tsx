@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { BUSCA_MINIMO_DE_LETRAS, ErroApi, api } from '../../data/api'
 import type { ResultadoBusca } from '../../data/tipos'
 import { fmt } from '../../lib/format'
+import { t } from '../../lib/idioma'
 import { Badge } from '../ui/Badge'
 import { StatusPill } from '../ui/StatusPill'
 import { IconSearch } from '../icons/Icons'
@@ -47,7 +48,7 @@ export function BuscaDoTopo() {
         .catch((e: unknown) => {
           if (!vivo) return
           setResultado(null)
-          setErro(e instanceof ErroApi ? e.message : 'Não deu para buscar agora. Tente de novo.')
+          setErro(e instanceof ErroApi ? e.message : t('Não deu para buscar agora. Tente de novo.'))
           setBuscando(false)
         })
     }, ATRASO_DA_BUSCA_MS)
@@ -84,7 +85,7 @@ export function BuscaDoTopo() {
   return (
     <div ref={caixa} className="relative hidden md:block" role="search">
       <label className="relative block">
-        <span className="sr-only">Buscar cliente</span>
+        <span className="sr-only">{t('Buscar cliente')}</span>
         <IconSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" width={17} height={17} />
         <input
           type="search"
@@ -94,8 +95,8 @@ export function BuscaDoTopo() {
             setAberto(true)
           }}
           onFocus={() => setAberto(true)}
-          placeholder="Buscar cliente"
-          aria-label="Buscar cliente pelo nome ou pelo identificador"
+          placeholder={t('Buscar cliente')}
+          aria-label={t('Buscar cliente pelo nome ou pelo identificador')}
           aria-expanded={aberto && procura}
           aria-controls="resultados-da-busca"
           className="h-10 w-56 rounded-[10px] border border-campo bg-slate/60 pr-3 pl-9 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
@@ -105,7 +106,7 @@ export function BuscaDoTopo() {
       {aberto && procura ? (
         <div
           id="resultados-da-busca"
-          aria-label="Resultados da busca"
+          aria-label={t('Resultados da busca')}
           aria-busy={buscando}
           className="scroll-fino absolute top-12 right-0 z-40 max-h-[70vh] w-[min(440px,90vw)] overflow-y-auto rounded-[12px] border border-line bg-card p-2 shadow-flutuante"
         >
@@ -114,20 +115,20 @@ export function BuscaDoTopo() {
               {erro}
             </p>
           ) : resultado === null ? (
-            <p className="px-3 py-2 text-apoio text-silver">Buscando…</p>
+            <p className="px-3 py-2 text-apoio text-silver">{t('Buscando…')}</p>
           ) : nada ? (
-            <p className="px-3 py-2 text-apoio text-silver">Nada encontrado para “{procurado}”. A busca procura pelo nome ou pelo identificador.</p>
+            <p className="px-3 py-2 text-apoio text-silver">{t('Nada encontrado para “{q}”. A busca procura pelo nome ou pelo identificador.', { q: procurado })}</p>
           ) : (
             <>
               {resultado.ciclos.length ? (
-                <section aria-label="Cobranças">
-                  <h3 className="t-label px-3 pt-1 pb-1 text-muted">Cobranças</h3>
+                <section aria-label={t('Cobranças')}>
+                  <h3 className="t-label px-3 pt-1 pb-1 text-muted">{t('Cobranças')}</h3>
                   <ul>
                     {resultado.ciclos.map((c) => (
                       <li key={`ciclo-${c.id}`}>
                         <button type="button" className={item} onClick={() => ir(`/involuntario?ciclo=${c.id}`)}>
                           <span className="min-w-0">
-                            <span className="block truncate text-apoio font-[560] text-paper">{c.cliente ?? 'Cliente sem cadastro'}</span>
+                            <span className="block truncate text-apoio font-[560] text-paper">{c.cliente ?? t('Cliente sem cadastro')}</span>
                             <span className="t-label block truncate text-muted">
                               {c.id_recorrencia} · {fmt.brl(c.valor_cobranca)}
                             </span>
@@ -140,8 +141,8 @@ export function BuscaDoTopo() {
                 </section>
               ) : null}
               {resultado.clientes.length ? (
-                <section aria-label="Clientes" className={resultado.ciclos.length ? 'mt-1 border-t border-line pt-1' : undefined}>
-                  <h3 className="t-label px-3 pt-1 pb-1 text-muted">Clientes</h3>
+                <section aria-label={t('Clientes')} className={resultado.ciclos.length ? 'mt-1 border-t border-line pt-1' : undefined}>
+                  <h3 className="t-label px-3 pt-1 pb-1 text-muted">{t('Clientes')}</h3>
                   <ul>
                     {resultado.clientes.map((c) => (
                       <li key={`cliente-${c.id}`}>
@@ -150,12 +151,12 @@ export function BuscaDoTopo() {
                             <span className="block truncate text-apoio font-[560] text-paper">{c.nome}</span>
                             <span className="t-label block truncate text-muted">
                               {c.id}
-                              {c.mrr !== null ? ` · ${fmt.brl(c.mrr)} por mês` : ''}
+                              {c.mrr !== null ? ` · ${t('{valor} por mês', { valor: fmt.brl(c.mrr) })}` : ''}
                             </span>
                           </span>
                           <span className="flex shrink-0 items-center gap-1.5">
-                            {c.cancelado ? <Badge>Cancelou</Badge> : null}
-                            {c.nao_contatar ? <Badge tone="amber">Não contatar</Badge> : null}
+                            {c.cancelado ? <Badge>{t('Cancelou')}</Badge> : null}
+                            {c.nao_contatar ? <Badge tone="amber">{t('Não contatar')}</Badge> : null}
                           </span>
                         </button>
                       </li>

@@ -8,16 +8,17 @@ import type { BaseClientes, ClienteRisco, ComparacaoReguaModelo, FaixaRisco, Res
 import { baixarCsv } from '../../lib/csv'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
+import { t } from '../../lib/idioma'
 
 /* ------------------------------------------------------------------ */
 /* Faixa de risco: sempre ponto + texto                                */
 /* ------------------------------------------------------------------ */
 
 export const FAIXA: Record<FaixaRisco, { rotulo: string; classe: string; ponto: string; ordem: number }> = {
-  grave: { rotulo: 'Grave', classe: 'border-danger/50 text-danger-texto', ponto: 'bg-danger', ordem: 0 },
-  preocupante: { rotulo: 'Preocupante', classe: 'border-warn/50 text-warn', ponto: 'bg-warn', ordem: 1 },
-  sem_risco: { rotulo: 'Sem risco', classe: 'border-ok/45 text-ok', ponto: 'bg-ok', ordem: 2 },
-  sem_dado: { rotulo: 'Sem dado suficiente', classe: 'border-line text-silver', ponto: 'bg-graphite', ordem: 3 },
+  grave: { rotulo: t('Grave'), classe: 'border-danger/50 text-danger-texto', ponto: 'bg-danger', ordem: 0 },
+  preocupante: { rotulo: t('Preocupante'), classe: 'border-warn/50 text-warn', ponto: 'bg-warn', ordem: 1 },
+  sem_risco: { rotulo: t('Sem risco'), classe: 'border-ok/45 text-ok', ponto: 'bg-ok', ordem: 2 },
+  sem_dado: { rotulo: t('Sem dado suficiente'), classe: 'border-line text-silver', ponto: 'bg-graphite', ordem: 3 },
 }
 
 export function FaixaPill({ faixa, className }: { faixa: FaixaRisco; className?: string }) {
@@ -31,10 +32,10 @@ export function FaixaPill({ faixa, className }: { faixa: FaixaRisco; className?:
 }
 
 const STATUS_OFERTA = {
-  aguardando: { rotulo: 'A enviar', classe: 'text-silver' },
-  enviada: { rotulo: 'Enviada', classe: 'text-amber' },
-  aceita: { rotulo: 'Aceita', classe: 'text-ok' },
-  recusada: { rotulo: 'Recusada', classe: 'text-silver' },
+  aguardando: { rotulo: t('A enviar'), classe: 'text-silver' },
+  enviada: { rotulo: t('Enviada'), classe: 'text-amber' },
+  aceita: { rotulo: t('Aceita'), classe: 'text-ok' },
+  recusada: { rotulo: t('Recusada'), classe: 'text-silver' },
 }
 
 /* ------------------------------------------------------------------ */
@@ -56,21 +57,21 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
   const lista = (clientes ?? []).filter((c) => filtro === 'todos' || c.faixa === filtro)
   const contagem = (f: Filtro) => (clientes ?? []).filter((c) => f === 'todos' || c.faixa === f).length
   const filtros: { valor: Filtro; rotulo: string }[] = [
-    { valor: 'todos', rotulo: 'Todos' },
-    { valor: 'grave', rotulo: 'Grave' },
-    { valor: 'preocupante', rotulo: 'Preocupante' },
-    { valor: 'sem_risco', rotulo: 'Sem risco' },
-    { valor: 'sem_dado', rotulo: 'Sem dado' },
+    { valor: 'todos', rotulo: t('Todos') },
+    { valor: 'grave', rotulo: t('Grave') },
+    { valor: 'preocupante', rotulo: t('Preocupante') },
+    { valor: 'sem_risco', rotulo: t('Sem risco') },
+    { valor: 'sem_dado', rotulo: t('Sem dado') },
   ]
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
-          <h3 className="t-h3 text-paper">Últimos 10 clientes atualizados</h3>
-          <p className="t-apoio mt-0.5 text-silver">Do mais recente ao mais antigo. O motivo é o que pesou na avaliação; a abordagem é o que o sistema fez.</p>
-          <p className="t-label mt-1 text-muted">Grave é o topo 10% da base pelo risco; Preocupante, os 20% seguintes. Sempre com um sinal real de abandono.</p>
+          <h3 className="t-h3 text-paper">{t('Últimos 10 clientes atualizados')}</h3>
+          <p className="t-apoio mt-0.5 text-silver">{t('Do mais recente ao mais antigo. O motivo é o que pesou na avaliação; a abordagem é o que o sistema fez.')}</p>
+          <p className="t-label mt-1 text-muted">{t('Grave é o topo 10% da base pelo risco; Preocupante, os 20% seguintes. Sempre com um sinal real de abandono.')}</p>
         </div>
-        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filtrar por faixa">
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label={t('Filtrar por faixa')}>
           {filtros.map((f) => (
             <button
               key={f.valor}
@@ -93,12 +94,12 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
         <table className="w-full min-w-[900px] text-left">
           <thead>
             <tr className="t-label text-silver">
-              <th className="px-5 py-3 font-[500]">Cliente</th>
-              <th className="px-3 py-3 font-[500]">Mensalidade</th>
-              <th className="px-3 py-3 font-[500]">Risco</th>
-              <th className="px-3 py-3 font-[500]">Motivo</th>
-              <th className="px-3 py-3 font-[500]">Abordagem</th>
-              <th className="px-5 py-3 font-[500]">Quem decidiu</th>
+              <th className="px-5 py-3 font-[500]">{t('Cliente')}</th>
+              <th className="px-3 py-3 font-[500]">{t('Mensalidade')}</th>
+              <th className="px-3 py-3 font-[500]">{t('Risco')}</th>
+              <th className="px-3 py-3 font-[500]">{t('Motivo')}</th>
+              <th className="px-3 py-3 font-[500]">{t('Abordagem')}</th>
+              <th className="px-5 py-3 font-[500]">{t('Quem decidiu')}</th>
             </tr>
           </thead>
           <tbody>
@@ -114,9 +115,9 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
               <tr className="border-t border-line">
                 <td colSpan={6}>
                   {clientes.length === 0 ? (
-                    <Vazio titulo="Nenhum cliente avaliado ainda" texto="Anexe a base na aba “Sua base” ou ligue a API. Assim que a base entrar, os clientes aparecem aqui com a faixa de risco e o motivo." icone={<IconTable width={22} height={22} />} />
+                    <Vazio titulo={t('Nenhum cliente avaliado ainda')} texto={t('Anexe a base na aba “Sua base” ou ligue a API. Assim que a base entrar, os clientes aparecem aqui com a faixa de risco e o motivo.')} icone={<IconTable width={22} height={22} />} />
                   ) : (
-                    <Vazio titulo="Nenhum cliente nesta faixa" texto="Tente outra faixa." />
+                    <Vazio titulo={t('Nenhum cliente nesta faixa')} texto={t('Tente outra faixa.')} />
                   )}
                 </td>
               </tr>
@@ -126,15 +127,15 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
                   <td className="px-5 py-3.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-[560] text-paper">{c.nome}</span>
-                      {buscado?.id === c.id ? <Badge tone="orange">Buscado</Badge> : null}
+                      {buscado?.id === c.id ? <Badge tone="orange">{t('Buscado')}</Badge> : null}
                       {c.nao_contatar ? (
-                        <span title="Pediu para não receber mensagens, ou foi marcado pela empresa. Nenhuma mensagem sai para este cliente.">
-                          <Badge tone="amber">Não contatar</Badge>
+                        <span title={t('Pediu para não receber mensagens, ou foi marcado pela empresa. Nenhuma mensagem sai para este cliente.')}>
+                          <Badge tone="amber">{t('Não contatar')}</Badge>
                         </span>
                       ) : null}
-                      {c.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
+                      {c.simulado ? <Badge tone="amber">{t('Demonstração')}</Badge> : null}
                     </div>
-                    {c.atualizado_em ? <div className="t-label text-muted">Atualizado {fmt.relativo(c.atualizado_em, agoraDaTela())}</div> : null}
+                    {c.atualizado_em ? <div className="t-label text-muted">{t('Atualizado {quando}', { quando: fmt.relativo(c.atualizado_em, agoraDaTela()) })}</div> : null}
                   </td>
                   <td className="tabular px-3 py-3.5 font-[560] whitespace-nowrap text-paper">{c.mrr === null ? '—' : fmt.brl(c.mrr)}</td>
                   <td className="px-3 py-3.5"><FaixaPill faixa={c.faixa} /></td>
@@ -148,7 +149,7 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
                         </div>
                       </>
                     ) : (
-                      <span className="t-label text-muted">{c.faixa === 'sem_dado' ? 'Aguardando dados' : 'Nenhuma; monitorado'}</span>
+                      <span className="t-label text-muted">{c.faixa === 'sem_dado' ? t('Aguardando dados') : t('Nenhuma; monitorado')}</span>
                     )}
                   </td>
                   <td className="px-5 py-3.5">
@@ -156,12 +157,12 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
                       <>
                         <QuemDecidiu por={c.risco_decidido_por} />
                         <div className="t-label mt-1 text-silver">
-                          {c.risco_decidido_por === 'modelo' ? 'Pelo comportamento' : 'Por regras fixas'}
-                          {c.posicao_na_base !== null && total ? ` · ${c.posicao_na_base}º de ${fmt.numero(total)} pelo risco` : ''}
+                          {c.risco_decidido_por === 'modelo' ? t('Pelo comportamento') : t('Por regras fixas')}
+                          {c.posicao_na_base !== null && total ? t(' · {posicao}º de {total} pelo risco', { posicao: c.posicao_na_base, total: fmt.numero(total) }) : ''}
                         </div>
                       </>
                     ) : (
-                      <span className="t-label text-muted">{c.faixa === 'sem_dado' ? 'Sem avaliação' : 'Não registrado'}</span>
+                      <span className="t-label text-muted">{c.faixa === 'sem_dado' ? t('Sem avaliação') : t('Não registrado')}</span>
                     )}
                   </td>
                 </tr>
@@ -177,11 +178,11 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
 export function QuemDecidiu({ por }: { por: 'modelo' | 'regua' }) {
   return por === 'modelo' ? (
     <Badge tone="orange" className="gap-1.5">
-      <IconSpark width={12} height={12} /> Modelo de IA
+      <IconSpark width={12} height={12} /> {t('Modelo de IA')}
     </Badge>
   ) : (
     <Badge className="gap-1.5">
-      <IconTable width={12} height={12} /> Régua
+      <IconTable width={12} height={12} /> {t('Régua')}
     </Badge>
   )
 }
@@ -190,7 +191,7 @@ export function QuemDecidiu({ por }: { por: 'modelo' | 'regua' }) {
 /* Sua base                                                            */
 /* ------------------------------------------------------------------ */
 
-const ORIGEM_DA_BASE = { api: 'Pela API', anexo: 'Por anexo' }
+const ORIGEM_DA_BASE = { api: t('Pela API'), anexo: t('Por anexo') }
 
 /**
  * As colunas que a importação aceita, na ordem do contrato (`crai/churn_voluntary/importacao.py`
@@ -234,8 +235,8 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
 
   async function receber(arquivo: File | undefined) {
     if (!arquivo) return
-    if (!/\.(csv|xlsx)$/i.test(arquivo.name)) return setErro('Só CSV ou XLSX. Outros formatos não são lidos.')
-    if (arquivo.size > 25 * 1024 * 1024) return setErro('O arquivo passa de 25 MB. Divida em duas partes.')
+    if (!/\.(csv|xlsx)$/i.test(arquivo.name)) return setErro(t('Só CSV ou XLSX. Outros formatos não são lidos.'))
+    if (arquivo.size > 25 * 1024 * 1024) return setErro(t('O arquivo passa de 25 MB. Divida em duas partes.'))
     setErro(null)
     setResultado(null)
     setEnviando(true)
@@ -245,7 +246,7 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
       // A base mudou: a página lê de novo os totais e a lista.
       if (!r.demonstracao && r.importados > 0) aoImportar?.()
     } catch (e) {
-      setErro(e instanceof ErroApi ? e.message : 'Não foi possível enviar o arquivo. Tente de novo.')
+      setErro(e instanceof ErroApi ? e.message : t('Não foi possível enviar o arquivo. Tente de novo.'))
     } finally {
       setEnviando(false)
     }
@@ -259,18 +260,18 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
       <div>
-        <h3 className="t-h3 text-paper">Sua base de clientes</h3>
+        <h3 className="t-h3 text-paper">{t('Sua base de clientes')}</h3>
         <p className="t-apoio mt-1 text-silver">
-          Se a sua empresa usa a API da CRAI, a base é atualizada sozinha. O anexo serve para começar ou para corrigir.
+          {t('Se a sua empresa usa a API da CRAI, a base é atualizada sozinha. O anexo serve para começar ou para corrigir.')}
         </p>
         <dl className="mt-5 grid grid-cols-2 gap-3">
-          <Dado rotulo="Clientes na base" valor={base ? fmt.numero(base.total) : '—'} />
-          <Dado rotulo="Com dados de comportamento" valor={base ? fmt.numero(base.com_dados_comportamento) : '—'} apoio={base && base.total ? `${Math.round((base.com_dados_comportamento / base.total) * 100)}% da base; o risco é avaliado para estes` : ''} />
-          <Dado rotulo="Última atualização" valor={base ? fmt.relativo(base.atualizada_em, agoraDaTela()).replace(/^./, (c) => c.toUpperCase()) : '—'} apoio={base ? (base.origem ? ORIGEM_DA_BASE[base.origem] : 'Origem não registrada') : ''} />
-          <Dado rotulo="O que a base precisa ter" valor="Id do cliente e mensalidade" apoio="Opcional: id da recorrência (liga ao involuntário), e-mail, telefone, uso, chamados" pequeno />
+          <Dado rotulo={t('Clientes na base')} valor={base ? fmt.numero(base.total) : '—'} />
+          <Dado rotulo={t('Com dados de comportamento')} valor={base ? fmt.numero(base.com_dados_comportamento) : '—'} apoio={base && base.total ? t('{pct}% da base; o risco é avaliado para estes', { pct: Math.round((base.com_dados_comportamento / base.total) * 100) }) : ''} />
+          <Dado rotulo={t('Última atualização')} valor={base ? fmt.relativo(base.atualizada_em, agoraDaTela()).replace(/^./, (c) => c.toUpperCase()) : '—'} apoio={base ? (base.origem ? ORIGEM_DA_BASE[base.origem] : t('Origem não registrada')) : ''} />
+          <Dado rotulo={t('O que a base precisa ter')} valor={t('Id do cliente e mensalidade')} apoio={t('Opcional: id da recorrência (liga ao involuntário), e-mail, telefone, uso, chamados')} pequeno />
         </dl>
         <button type="button" onClick={baixarPlanilhaModelo} className="t-label mt-4 inline-flex items-center gap-1.5 text-silver underline-offset-4 hover:text-paper hover:underline">
-          <IconDownload width={14} height={14} /> Baixar planilha modelo
+          <IconDownload width={14} height={14} /> {t('Baixar planilha modelo')}
         </button>
       </div>
 
@@ -287,41 +288,41 @@ export function SuaBase({ base, aoImportar }: { base: BaseClientes | null; aoImp
             arrastando ? 'border-amber bg-amber/[0.08]' : 'border-graphite/70 bg-ink/25',
           )}
         >
-          <input ref={input} type="file" accept=".csv,.xlsx" className="sr-only" onChange={(e) => void receber(e.target.files?.[0])} aria-label="Anexar a base em CSV ou XLSX" />
+          <input ref={input} type="file" accept=".csv,.xlsx" className="sr-only" onChange={(e) => void receber(e.target.files?.[0])} aria-label={t('Anexar a base em CSV ou XLSX')} />
           <span className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-paper/[0.06] text-amber">
             <IconTable width={22} height={22} />
           </span>
-          <div className="mt-3 text-normal font-[560] text-paper">{enviando ? 'Lendo o arquivo…' : 'Arraste a base aqui'}</div>
-          <p className="t-apoio mt-1 text-silver">CSV ou XLSX, até 25 MB. Uma linha por cliente.</p>
+          <div className="mt-3 text-normal font-[560] text-paper">{enviando ? t('Lendo o arquivo…') : t('Arraste a base aqui')}</div>
+          <p className="t-apoio mt-1 text-silver">{t('CSV ou XLSX, até 25 MB. Uma linha por cliente.')}</p>
           <Button variant="ghost" size="sm" className="mt-4" onClick={() => input.current?.click()} disabled={enviando}>
-            Escolher arquivo
+            {t('Escolher arquivo')}
           </Button>
           <p className="t-label mt-4 max-w-[380px] text-muted">
-            Os dados ficam só na sua conta. A CRAI usa a base para avaliar risco e falar com o cliente em seu nome; nunca para treinar modelos de outras empresas.
+            {t('Os dados ficam só na sua conta. A CRAI usa a base para avaliar risco e falar com o cliente em seu nome; nunca para treinar modelos de outras empresas.')}
           </p>
         </div>
         {erro ? <p role="alert" className="mt-3 rounded-[10px] border border-danger/50 bg-danger/10 px-3 py-2 text-apoio text-danger-aviso">{erro}</p> : null}
         {resultado ? (
           <div role="status" className="mt-3 rounded-[14px] border border-ok/40 bg-ok/[0.06] p-4">
             <div className="flex items-center gap-2 text-apoio font-[600] text-ok">
-              <IconCheck width={16} height={16} /> Base recebida: {resultado.arquivo}
+              <IconCheck width={16} height={16} /> {t('Base recebida: {arquivo}', { arquivo: resultado.arquivo })}
             </div>
             <ul className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-apoio text-paper sm:grid-cols-4">
-              <li><span className="tabular font-[640]">{fmt.numero(resultado.linhas)}</span> <span className="text-silver">linhas</span></li>
-              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.importados)}</span> <span className="text-silver">na base</span></li>}
-              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.rejeitados)}</span> <span className="text-silver">recusadas</span></li>}
-              {resultado.novos !== null ? <li><span className="tabular font-[640]">{resultado.novos}</span> <span className="text-silver">novos</span></li> : null}
-              {resultado.atualizados !== null ? <li><span className="tabular font-[640]">{resultado.atualizados}</span> <span className="text-silver">corrigidos</span></li> : null}
-              {resultado.sem_id_recorrencia !== null ? <li><span className="tabular font-[640]">{resultado.sem_id_recorrencia}</span> <span className="text-silver">sem id da recorrência</span></li> : null}
-              {resultado.sem_comportamento !== null ? <li><span className="tabular font-[640]">{fmt.numero(resultado.sem_comportamento)}</span> <span className="text-silver">sem dado de comportamento</span></li> : null}
+              <li><span className="tabular font-[640]">{fmt.numero(resultado.linhas)}</span> <span className="text-silver">{t('linhas')}</span></li>
+              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.importados)}</span> <span className="text-silver">{t('na base')}</span></li>}
+              {resultado.demonstracao ? null : <li><span className="tabular font-[640]">{fmt.numero(resultado.rejeitados)}</span> <span className="text-silver">{t('recusadas')}</span></li>}
+              {resultado.novos !== null ? <li><span className="tabular font-[640]">{resultado.novos}</span> <span className="text-silver">{t('novos')}</span></li> : null}
+              {resultado.atualizados !== null ? <li><span className="tabular font-[640]">{resultado.atualizados}</span> <span className="text-silver">{t('corrigidos')}</span></li> : null}
+              {resultado.sem_id_recorrencia !== null ? <li><span className="tabular font-[640]">{resultado.sem_id_recorrencia}</span> <span className="text-silver">{t('sem id da recorrência')}</span></li> : null}
+              {resultado.sem_comportamento !== null ? <li><span className="tabular font-[640]">{fmt.numero(resultado.sem_comportamento)}</span> <span className="text-silver">{t('sem dado de comportamento')}</span></li> : null}
             </ul>
             {resultado.avisos.map((a) => (
               <p key={a} className="t-label mt-2 text-silver">{a}</p>
             ))}
             {resultado.demonstracao ? (
-              <p className="t-label mt-2 text-muted">Demonstração: o arquivo não sai do seu navegador. Na versão final, a base é enviada e a avaliação de risco roda em seguida.</p>
+              <p className="t-label mt-2 text-muted">{t('Demonstração: o arquivo não sai do seu navegador. Na versão final, a base é enviada e a avaliação de risco roda em seguida.')}</p>
             ) : (
-              <p className="t-label mt-2 text-muted">A avaliação de risco já usa a base nova.</p>
+              <p className="t-label mt-2 text-muted">{t('A avaliação de risco já usa a base nova.')}</p>
             )}
           </div>
         ) : null}
@@ -349,67 +350,78 @@ export function QuemDecideORisco({ base, comparacao }: { base: BaseClientes | nu
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
       <div>
-        <h3 className="t-h3 text-paper">Quem decide o risco de cada cliente</h3>
-        <p className="t-apoio mt-1 text-silver">Dois jeitos de avaliar, e a tabela sempre mostra qual foi usado e a posição do cliente na base.</p>
+        <h3 className="t-h3 text-paper">{t('Quem decide o risco de cada cliente')}</h3>
+        <p className="t-apoio mt-1 text-silver">{t('Dois jeitos de avaliar, e a tabela sempre mostra qual foi usado e a posição do cliente na base.')}</p>
         <ul className="mt-5 flex flex-col gap-3">
           <li className="rounded-[14px] border border-orange/30 bg-orange/[0.05] p-4">
             <div className="flex items-center gap-2">
               <QuemDecidiu por="modelo" />
-              <span className="t-label text-silver">{pct !== null ? `${pct}% da base` : ''}</span>
+              <span className="t-label text-silver">{pct !== null ? t('{pct}% da base', { pct }) : ''}</span>
             </div>
             <p className="mt-2 text-apoio leading-[1.5] text-paper">
-              Um modelo de IA aprende com o comportamento: uso, chamados, atrasos, tempo de casa. Decide quando o cliente tem esses dados.
+              {t('Um modelo de IA aprende com o comportamento: uso, chamados, atrasos, tempo de casa. Decide quando o cliente tem esses dados.')}
             </p>
           </li>
           <li className="rounded-[14px] border border-line bg-ink/25 p-4">
             <div className="flex items-center gap-2">
               <QuemDecidiu por="regua" />
-              <span className="t-label text-silver">{pct !== null ? `${100 - pct}% da base` : ''}</span>
+              <span className="t-label text-silver">{pct !== null ? t('{pct}% da base', { pct: 100 - pct }) : ''}</span>
             </div>
             <p className="mt-2 text-apoio leading-[1.5] text-paper">
-              Uma régua de regras fixas (atraso, chamados, queda de uso). Decide quando ainda não há dados de comportamento, como em clientes novos. É previsível, mas avisa menos cedo.
+              {t('Uma régua de regras fixas (atraso, chamados, queda de uso). Decide quando ainda não há dados de comportamento, como em clientes novos. É previsível, mas avisa menos cedo.')}
             </p>
           </li>
         </ul>
         <div className="mt-4 rounded-[14px] border border-line bg-ink/25 p-4">
-          <h4 className="t-h3 text-paper">Como as faixas são definidas</h4>
+          <h4 className="t-h3 text-paper">{t('Como as faixas são definidas')}</h4>
           <ul className="mt-2 flex flex-col gap-1.5 text-apoio leading-[1.5] text-paper">
-            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" /><span><span className="font-[600]">Grave:</span> os 10% da base com mais risco, e só com um sinal real de abandono (uso caindo, chamados, atraso).</span></li>
-            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true" /><span><span className="font-[600]">Preocupante:</span> os 20% seguintes, também com sinal real.</span></li>
-            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ok" aria-hidden="true" /><span><span className="font-[600]">Sem risco:</span> o resto da base com dados. <span className="font-[600]">Sem dado suficiente:</span> ainda não dá para avaliar.</span></li>
+            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" /><span><span className="font-[600]">{t('Grave:')}</span> {t('os 10% da base com mais risco, e só com um sinal real de abandono (uso caindo, chamados, atraso).')}</span></li>
+            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true" /><span><span className="font-[600]">{t('Preocupante:')}</span> {t('os 20% seguintes, também com sinal real.')}</span></li>
+            <li className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ok" aria-hidden="true" /><span><span className="font-[600]">{t('Sem risco:')}</span> {t('o resto da base com dados.')} <span className="font-[600]">{t('Sem dado suficiente:')}</span> {t('ainda não dá para avaliar.')}</span></li>
           </ul>
-          <p className="t-label mt-3 text-silver">Clientes de mensalidade alta entram como Preocupante e só sobem para Grave se os sinais continuarem: uma oferta cara feita cedo demais custa margem sem precisar.</p>
+          <p className="t-label mt-3 text-silver">{t('Clientes de mensalidade alta entram como Preocupante e só sobem para Grave se os sinais continuarem: uma oferta cara feita cedo demais custa margem sem precisar.')}</p>
         </div>
       </div>
       <div>
-        <h3 className="t-h3 text-paper">Régua × modelo nos últimos {comparacao?.dias ?? 30} dias</h3>
+        <h3 className="t-h3 text-paper">{t('Régua × modelo nos últimos {dias} dias', { dias: comparacao?.dias ?? 30 })}</h3>
         <p className="t-apoio mt-1 text-silver">
-          {comparacao ? `Entre os ${fmt.numero(comparacao.clientes_com_dados)} clientes com dados de comportamento, ${comparacao.cancelamentos} cancelaram. Quem tinha avisado antes?` : ''}
+          {comparacao
+            ? t('Entre os {clientes} clientes com dados de comportamento, {cancelamentos} cancelaram. Quem tinha avisado antes?', {
+                clientes: fmt.numero(comparacao.clientes_com_dados),
+                cancelamentos: comparacao.cancelamentos,
+              })
+            : ''}
         </p>
         {!comparacao ? (
           <p className="mt-5 rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-silver">
-            A comparação aparece quando o modelo de IA estiver avaliando a sua base e houver cancelamentos suficientes no período para comparar. Até lá, a tabela mostra quem decidiu o risco de cada cliente.
+            {t('A comparação aparece quando o modelo de IA estiver avaliando a sua base e houver cancelamentos suficientes no período para comparar. Até lá, a tabela mostra quem decidiu o risco de cada cliente.')}
           </p>
         ) : null}
         {comparacao ? (
           <div className="mt-5 flex flex-col gap-5">
             <Comparativo
-              rotulo="Avisou antes do cancelamento"
-              apoio={`De ${comparacao.cancelamentos} cancelamentos`}
+              rotulo={t('Avisou antes do cancelamento')}
+              apoio={t('De {n} cancelamentos', { n: comparacao.cancelamentos })}
               regua={comparacao.regua.avisou_antes}
               modelo={comparacao.modelo.avisou_antes}
               max={comparacao.cancelamentos}
               melhorMaior
             />
             <Comparativo
-              rotulo="Marcou como grave"
-              apoio="Quanto menor, menos ofertas desnecessárias"
+              rotulo={t('Marcou como grave')}
+              apoio={t('Quanto menor, menos ofertas desnecessárias')}
               regua={comparacao.regua.marcou_grave}
               modelo={comparacao.modelo.marcou_grave}
               max={Math.max(comparacao.regua.marcou_grave, comparacao.modelo.marcou_grave)}
             />
             <p className="rounded-[12px] border border-line bg-ink/25 px-3.5 py-3 text-apoio leading-[1.5] text-paper">
-              O modelo tinha marcado {comparacao.modelo.avisou_antes} dos {comparacao.cancelamentos} cancelamentos, com {fmt.numero(comparacao.modelo.marcou_grave)} clientes como graves. A régua tinha marcado {comparacao.regua.avisou_antes}, com {fmt.numero(comparacao.regua.marcou_grave)} como graves. As duas avaliam a mesma base, com os últimos dados de cada cliente.
+              {t('O modelo tinha marcado {modeloAvisou} dos {cancelamentos} cancelamentos, com {modeloGraves} clientes como graves. A régua tinha marcado {reguaAvisou}, com {reguaGraves} como graves. As duas avaliam a mesma base, com os últimos dados de cada cliente.', {
+                modeloAvisou: comparacao.modelo.avisou_antes,
+                cancelamentos: comparacao.cancelamentos,
+                modeloGraves: fmt.numero(comparacao.modelo.marcou_grave),
+                reguaAvisou: comparacao.regua.avisou_antes,
+                reguaGraves: fmt.numero(comparacao.regua.marcou_grave),
+              })}
             </p>
           </div>
         ) : null}
@@ -426,7 +438,7 @@ function Comparativo({ rotulo, apoio, regua, modelo, max, melhorMaior }: { rotul
         <div className="h-2 rounded-full" style={{ width: `${max ? (v / max) * 100 : 0}%`, background: cor }} />
       </div>
       <span className={cx('tabular w-14 shrink-0 text-right text-apoio', destaque ? 'font-[680] text-paper' : 'font-[520] text-silver')}>
-        {v}{melhorMaior ? ` de ${max}` : ''}
+        {v}{melhorMaior ? t(' de {max}', { max }) : ''}
       </span>
     </div>
   )
@@ -438,8 +450,8 @@ function Comparativo({ rotulo, apoio, regua, modelo, max, melhorMaior }: { rotul
         <span className="t-label text-muted">{apoio}</span>
       </div>
       <div className="mt-2 flex flex-col gap-2">
-        {linha('Modelo de IA', modelo, 'var(--color-serie-vol)', modeloMelhor)}
-        {linha('Régua', regua, 'var(--color-silver)', !modeloMelhor)}
+        {linha(t('Modelo de IA'), modelo, 'var(--color-serie-vol)', modeloMelhor)}
+        {linha(t('Régua'), regua, 'var(--color-silver)', !modeloMelhor)}
       </div>
     </div>
   )

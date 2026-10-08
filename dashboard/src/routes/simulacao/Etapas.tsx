@@ -1,14 +1,15 @@
 import { IconCheck } from '../../components/icons/Icons'
 import type { EstadoSimulacao, EtapaSimulacao } from '../../data/tipos'
 import { cx } from '../../lib/cx'
+import { t } from '../../lib/idioma'
 
 const ETAPAS: { valor: EtapaSimulacao; rotulo: string }[] = [
-  { valor: 'cobranca', rotulo: 'Cobrança' },
-  { valor: 'tentativa_1', rotulo: 'Tentativa 1' },
-  { valor: 'tentativa_2', rotulo: 'Tentativa 2' },
-  { valor: 'tentativa_3', rotulo: 'Tentativa 3' },
-  { valor: 'mensagem', rotulo: 'Mensagem' },
-  { valor: 'desfecho', rotulo: 'Desfecho' },
+  { valor: 'cobranca', rotulo: t('Cobrança') },
+  { valor: 'tentativa_1', rotulo: t('Tentativa 1') },
+  { valor: 'tentativa_2', rotulo: t('Tentativa 2') },
+  { valor: 'tentativa_3', rotulo: t('Tentativa 3') },
+  { valor: 'mensagem', rotulo: t('Mensagem') },
+  { valor: 'desfecho', rotulo: t('Desfecho') },
 ]
 
 /** As etapas do ciclo no topo, como no vídeo: check nas concluídas, a atual em laranja. */
@@ -23,7 +24,7 @@ export function Etapas({ estado }: { estado: EstadoSimulacao }) {
   }
 
   return (
-    <ol className="scroll-fino relative flex items-start gap-0 overflow-x-auto pb-1" aria-label="Etapas do ciclo">
+    <ol className="scroll-fino relative flex items-start gap-0 overflow-x-auto pb-1" aria-label={t('Etapas do ciclo')}>
       {ETAPAS.map((e, i) => {
         const concluida = estado.etapas_concluidas.includes(e.valor) && !canceladas.has(e.valor) && !puladas.has(e.valor)
         const atual = comecou && !estado.desfecho && estado.etapa_atual === e.valor
@@ -53,7 +54,7 @@ export function Etapas({ estado }: { estado: EstadoSimulacao }) {
             <span className={cx('mt-2 text-center text-rotulo font-[520] whitespace-nowrap', atual ? 'text-orange' : concluida || fim ? 'text-paper' : 'text-silver')}>
               {e.rotulo}
               <span className="sr-only">
-                {fim ? (ok ? ': recuperado' : ': encerrado') : concluida ? ': concluída' : atual ? ': etapa atual' : cancelada ? ': cancelada' : ''}
+                {fim ? (ok ? t(': recuperado') : t(': encerrado')) : concluida ? t(': concluída') : atual ? t(': etapa atual') : cancelada ? t(': cancelada') : ''}
               </span>
             </span>
           </li>

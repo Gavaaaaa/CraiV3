@@ -1,0 +1,17 @@
+[TREINO-V4] Criterio, declarado antes do treino: A base nova resolve o problema declarado se, no holdout, com recall >= 0,90, a precisao do cenario A passar a da v2 (0,4768 com recall de 0,90) por mais que o desvio da precisao entre as dobras do GroupKFold. Escrito antes de medir. Satisfazer o criterio NAO promove nada.
+Importing plotly failed. Interactive plots will not work.
+[PAYDAY] artefato treinado com fonte=sintetico_calibrado, n_amostras=10000
+[PAYDAY] LSTM + 3 Prophets carregados de <repo>/app/models/
+[CLASSIFIER] artefato treinado com fonte=sintetico_calibrado, n_amostras=120000
+[CLASSIFIER] Modelos carregados de <repo>/app/models/
+[CLASSIFIER] artefato treinado com fonte=sintetico_calibrado, n_amostras=120000
+[CLASSIFIER] Modelos carregados de <repo>/app/models/
+[TREINO-V4] cenario A (11 features): AUC 0.7363 | GroupKFold 0.7305 +- 0.0036 | limiar 0.28 -> recall 0.9018 precisao 0.4549 marcada 0.7268
+[TREINO-V4] cenario B (13 features): AUC 0.7803 | GroupKFold 0.7751 +- 0.0018 | limiar 0.29 -> recall 0.9185 precisao 0.4664 marcada 0.7219
+[TREINO-V4] cenario C (17 features): AUC 0.8438 | GroupKFold 0.8401 +- 0.0034 | limiar 0.28 -> recall 0.9099 precisao 0.5203 marcada 0.6411
+[TREINO-V4] permutacao do rotulo (A): [0.4895, 0.5284, 0.5054]
+[TREINO-V4] teto com o futuro do caixa conhecido: AUC 0.9544
+[TREINO-V4] sem o efeito da taxa de base, recall 0,90: falsos positivos em 0.6722 dos nao-recuperaveis na v2 e em 0.6212 no cenario A
+[TREINO-V4] modelo de producao (v2) na base v4: AUC 0.5648 | no limiar 0,25: recall 0.8603 precisao 0.3836
+[TREINO-V4] criterio: precisao com recall 0,90 = 0.4561 (v2: 0.4768) | diferenca -0.0207 > desvio 0.0085: False (nada promovido)
+[TREINO-V4] tempo total: 327.1 s | artefatos em <repo>/app/models/v4

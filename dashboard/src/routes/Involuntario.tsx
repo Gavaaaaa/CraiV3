@@ -14,7 +14,9 @@ import { CAUSA_LEGIVEL } from '../data/mock'
 import type { PontoSerie, StatusTela } from '../data/tipos'
 import { cx } from '../lib/cx'
 import { fmt } from '../lib/format'
+import { localeAtual, t } from '../lib/idioma'
 import { useCarregar } from '../lib/useCarregar'
+import { useModoMensagem } from '../lib/useModoMensagem'
 import { AbaMensagens } from './involuntario/AbaMensagens'
 import { CicloDrawer } from './involuntario/CicloDrawer'
 
@@ -24,20 +26,20 @@ type Filtro = StatusTela | 'todos' | 'aguardando_escolha'
 /** As duas abas da página: a tela de sempre, e as cobranças esperando a escolha da mensagem. */
 type AbaInv = 'clientes' | 'mensagens'
 
-const nomeDoMes = new Intl.DateTimeFormat('pt-BR', { month: 'long' })
+const nomeDoMes = new Intl.DateTimeFormat(localeAtual(), { month: 'long' })
 /** "2026-09" vira "setembro". Sem o mês (ainda carregando), o texto de sempre. */
 function mesPorExtenso(mes: string | undefined): string {
-  if (!mes) return MODO_REAL ? 'este mês' : 'setembro'
+  if (!mes) return MODO_REAL ? t('este mês') : t('setembro')
   return nomeDoMes.format(new Date(`${mes}-15T12:00:00`))
 }
 
 const FILTROS: { valor: Filtro; rotulo: string }[] = [
-  { valor: 'todos', rotulo: 'Todos' },
+  { valor: 'todos', rotulo: t('Todos') },
   { valor: 'em_analise', rotulo: STATUS.em_analise.rotulo },
   { valor: 'em_processo', rotulo: STATUS.em_processo.rotulo },
   { valor: 'recuperado', rotulo: STATUS.recuperado.rotulo },
-  { valor: 'encerrado', rotulo: 'Encerrado' },
-  { valor: 'aguardando_escolha', rotulo: 'Aguardando escolha' },
+  { valor: 'encerrado', rotulo: t('Encerrado') },
+  { valor: 'aguardando_escolha', rotulo: t('Aguardando escolha') },
 ]
 
 /** Sparkline de 30 dias, na cor da série do involuntário; o último ponto em destaque. */
@@ -52,7 +54,7 @@ function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
   const caminho = xs.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
   const ultimo = xs[xs.length - 1]
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-11 w-full" role="img" aria-label="Valor recuperado por dia nos últimos 30 dias">
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-11 w-full" role="img" aria-label={t('Valor recuperado por dia nos últimos 30 dias')}>
       <path d={caminho} fill="none" stroke="var(--color-sobre-destaque)" strokeOpacity={0.55} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
       <circle cx={ultimo.x} cy={ultimo.y} r={4} fill="var(--color-sobre-destaque)" />
     </svg>
@@ -108,6 +110,8 @@ export function Involuntario() {
   }
 
   const sim = modo === 'simulacao'
+  // No modo automático ninguém escolhe: o número conta as mensagens que o sistema ainda vai enviar.
+  const automatico = useModoMensagem() === 'automatico'
   const topo = useCarregar(() => Promise.all([api.metricasMes({ incluirSimulados: sim }), api.serie({ incluirSimulados: sim })]), [sim])
   const [metricas, serie] = topo.dados ?? [null, []]
   const soEsperando = filtro === 'aguardando_escolha'
@@ -131,18 +135,18 @@ export function Involuntario() {
 
   // O número da aba Mensagens é o do backend: o mesmo do sino e do cartão "Aguardando sua escolha".
   const abas: Aba<AbaInv>[] = [
-    { valor: 'clientes', rotulo: 'Clientes em recuperação' },
-    { valor: 'mensagens', rotulo: 'Mensagens', extra: metricas?.aguardando_escolha ? <Badge tone="orange" className="px-1.5 py-0">{metricas.aguardando_escolha}</Badge> : null },
+    { valor: 'clientes', rotulo: t('Clientes em recuperação') },
+    { valor: 'mensagens', rotulo: t('Mensagens'), extra: metricas?.aguardando_escolha ? <Badge tone="orange" className="px-1.5 py-0">{metricas.aguardando_escolha}</Badge> : null },
   ]
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="t-h2 text-paper">Churn involuntário</h2>
-          <p className="t-apoio mt-1 text-silver">Cobranças Pix que falharam e o que o sistema está fazendo com cada uma.</p>
+          <h2 className="t-h2 text-paper">{t('Churn involuntário')}</h2>
+          <p className="t-apoio mt-1 text-silver">{t('Cobranças Pix que falharam e o que o sistema está fazendo com cada uma.')}</p>
         </div>
-        <Abas abas={abas} ativa={aba} onChange={irParaAba} rotulo="Abas do involuntário" idBase="inv" />
+        <Abas abas={abas} ativa={aba} onChange={irParaAba} rotulo={t('Abas do involuntário')} idBase="inv" />
       </div>
 
       {topo.erro ? <ErroCarregar mensagem={topo.erro} onTentar={topo.recarregar} /> : null}
@@ -154,36 +158,42 @@ export function Involuntario() {
       ) : (
         <div role="tabpanel" id="inv-painel-clientes" aria-labelledby="inv-aba-clientes" className="flex flex-col gap-5">
         {/* Bento: o cartão laranja é o único colorido; os outros são vidro */}
-        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-6" aria-label="Resumo do mês">
+        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-6" aria-label={t('Resumo do mês')}>
           <StatTile
             className="col-span-2 row-span-2 min-h-[210px]"
             tone="orange"
             hero
-            rotulo={`Recuperado para você em ${mesPorExtenso(metricas?.mes)}`}
+            rotulo={t('Recuperado para você em {mes}', { mes: mesPorExtenso(metricas?.mes) })}
             valor={metricas ? fmt.brlInteiro(metricas.valor_liquido_recuperado) : '—'}
             apoio={
               <div className="flex flex-col gap-2">
-                <span>Já descontada a taxa da CRAI. {metricas ? `${metricas.recuperados} cobranças recuperadas.` : ''}</span>
+                <span>{t('Já descontada a taxa da CRAI.')} {metricas ? t('{n} cobranças recuperadas.', { n: metricas.recuperados }) : ''}</span>
                 {serie.length ? <Sparkline pontos={serie} /> : null}
               </div>
             }
           />
-          <StatTile rotulo="Ciclos ativos" valor={metricas?.ciclos_ativos ?? '—'} apoio="Em análise ou em processo" icone={<IconRefresh width={17} height={17} />} />
-          <StatTile rotulo="Recuperados no mês" valor={metricas?.recuperados ?? '—'} apoio={metricas ? `${metricas.encerrados_sem_recuperacao} encerrados sem recuperação` : ''} icone={<IconSpark width={17} height={17} />} />
+          <StatTile rotulo={t('Ciclos ativos')} valor={metricas?.ciclos_ativos ?? '—'} apoio={t('Em análise ou em processo')} icone={<IconRefresh width={17} height={17} />} />
+          <StatTile rotulo={t('Recuperados no mês')} valor={metricas?.recuperados ?? '—'} apoio={metricas ? t('{n} encerrados sem recuperação', { n: metricas.encerrados_sem_recuperacao }) : ''} icone={<IconSpark width={17} height={17} />} />
           <StatTile
-            rotulo="Taxa de recuperação"
+            rotulo={t('Taxa de recuperação')}
             valor={metricas && metricas.taxa_recuperacao !== null ? fmt.pontos(metricas.taxa_recuperacao * 100) : '—'}
-            apoio={metricas && metricas.taxa_recuperacao === null ? 'Ainda sem ciclos com desfecho neste mês' : 'Sobre os ciclos com desfecho'}
+            apoio={metricas && metricas.taxa_recuperacao === null ? t('Ainda sem ciclos com desfecho neste mês') : t('Sobre os ciclos com desfecho')}
           />
           <StatTile
-            rotulo="Aguardando sua escolha"
+            rotulo={automatico ? t('Mensagens a enviar') : t('Aguardando sua escolha')}
             valor={metricas?.aguardando_escolha ?? '—'}
-            apoio={metricas?.aguardando_escolha ? 'Mensagem a escolher hoje' : 'Nenhuma mensagem pendente'}
+            apoio={
+              metricas?.aguardando_escolha
+                ? automatico
+                  ? t('O sistema envia sozinho (modo automático)')
+                  : t('Mensagem a escolher hoje')
+                : t('Nenhuma mensagem pendente')
+            }
             icone={<IconAlert width={17} height={17} />}
           />
           <StatTile
-            rotulo="Próxima ação do sistema"
-            valor={<span className="t-h3 text-paper">{metricas?.proxima_acao?.descricao ?? (metricas ? 'Nada agendado' : '—')}</span>}
+            rotulo={t('Próxima ação do sistema')}
+            valor={<span className="t-h3 text-paper">{metricas?.proxima_acao?.descricao ?? (metricas ? t('Nada agendado') : '—')}</span>}
             apoio={
               metricas?.proxima_acao ? (
                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -192,12 +202,12 @@ export function Involuntario() {
                   </span>
                   {metricas.proxima_acao.ciclo_id ? (
                     <button type="button" onClick={() => metricas.proxima_acao?.ciclo_id && abrirCiclo(metricas.proxima_acao.ciclo_id)} className="font-[560] text-amber underline-offset-2 hover:underline">
-                      Ver o ciclo
+                      {t('Ver o ciclo')}
                     </button>
                   ) : null}
                 </span>
               ) : metricas ? (
-                'Nenhuma tentativa de cobrança nem mensagem pendente agora'
+                t('Nenhuma tentativa de cobrança nem mensagem pendente agora')
               ) : (
                 ''
               )
@@ -210,7 +220,7 @@ export function Involuntario() {
         {/* Tabela */}
         <Card className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
-            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filtrar por status">
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label={t('Filtrar por status')}>
               {FILTROS.map((f) => (
                 <button
                   key={f.valor}
@@ -234,8 +244,8 @@ export function Involuntario() {
               type="search"
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
-              placeholder="Nome ou id da recorrência"
-              aria-label="Buscar na lista"
+              placeholder={t('Nome ou id da recorrência')}
+              aria-label={t('Buscar na lista')}
               className="h-9 w-64 rounded-[8px] border border-campo bg-ink/40 px-3 text-apoio text-paper placeholder:text-muted focus:border-amber/60 focus:outline-none"
             />
           </div>
@@ -247,13 +257,13 @@ export function Involuntario() {
             <table className="w-full min-w-[820px] text-left">
               <thead>
                 <tr className="t-label text-silver">
-                  <th className="px-5 py-3 font-[500]">Cliente</th>
-                  <th className="px-3 py-3 font-[500]">Valor</th>
-                  <th className="px-3 py-3 font-[500]">Motivo da falha</th>
-                  <th className="px-3 py-3 font-[500]">Status</th>
-                  <th className="px-3 py-3 font-[500]">Tentativas</th>
-                  <th className="px-3 py-3 font-[500]">Próxima ação</th>
-                  <th className="px-5 py-3 font-[500]"><span className="sr-only">Abrir</span></th>
+                  <th className="px-5 py-3 font-[500]">{t('Cliente')}</th>
+                  <th className="px-3 py-3 font-[500]">{t('Valor')}</th>
+                  <th className="px-3 py-3 font-[500]">{t('Motivo da falha')}</th>
+                  <th className="px-3 py-3 font-[500]">{t('Status')}</th>
+                  <th className="px-3 py-3 font-[500]">{t('Tentativas')}</th>
+                  <th className="px-3 py-3 font-[500]">{t('Próxima ação')}</th>
+                  <th className="px-5 py-3 font-[500]"><span className="sr-only">{t('Abrir')}</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -276,15 +286,15 @@ export function Involuntario() {
                     <td colSpan={7}>
                       {semFiltro ? (
                         <Vazio
-                          titulo="Nenhuma cobrança em recuperação"
-                          texto="Quando uma cobrança Pix falhar, ela aparece aqui com o status e o que o sistema está fazendo. Se a integração é nova, confira a saúde do sistema na visão geral."
+                          titulo={t('Nenhuma cobrança em recuperação')}
+                          texto={t('Quando uma cobrança Pix falhar, ela aparece aqui com o status e o que o sistema está fazendo. Se a integração é nova, confira a saúde do sistema na visão geral.')}
                           icone={<IconRefresh width={22} height={22} />}
                         />
                       ) : (
                         <Vazio
-                          titulo={soEsperando && !busca.trim() ? 'Nenhuma cobrança esperando a sua escolha' : 'Nenhum cliente neste filtro'}
-                          texto={soEsperando && !busca.trim() ? 'Quando o sistema escrever as 3 mensagens de uma cobrança, ela aparece aqui para você escolher.' : 'Tente outro status ou limpe a busca.'}
-                          acao={<button type="button" onClick={() => { escolherFiltro('todos'); setBusca('') }} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">Limpar filtros</button>}
+                          titulo={soEsperando && !busca.trim() ? t('Nenhuma cobrança esperando a sua escolha') : t('Nenhum cliente neste filtro')}
+                          texto={soEsperando && !busca.trim() ? t('Quando o sistema escrever as 3 mensagens de uma cobrança, ela aparece aqui para você escolher.') : t('Tente outro status ou limpe a busca.')}
+                          acao={<button type="button" onClick={() => { escolherFiltro('todos'); setBusca('') }} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">{t('Limpar filtros')}</button>}
                         />
                       )}
                     </td>
@@ -298,14 +308,14 @@ export function Involuntario() {
                     >
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-[560] text-paper">{c.cliente ?? <span className="text-silver">Cliente sem cadastro</span>}</span>
-                          {c.simulado ? <Badge tone="amber">Demonstração</Badge> : null}
+                          <span className="font-[560] text-paper">{c.cliente ?? <span className="text-silver">{t('Cliente sem cadastro')}</span>}</span>
+                          {c.simulado ? <Badge tone="amber">{t('Demonstração')}</Badge> : null}
                         </div>
                         <div className="t-label text-muted">{c.id_recorrencia}</div>
                       </td>
                       <td className="tabular px-3 py-3.5 font-[560] text-paper">
                         {fmt.brl(c.valor_cobranca)}
-                        {c.valor_liquido !== null ? <div className="t-label font-[500] text-ok">{fmt.brl(c.valor_liquido)} para você</div> : null}
+                        {c.valor_liquido !== null ? <div className="t-label font-[500] text-ok">{t('{valor} para você', { valor: fmt.brl(c.valor_liquido) })}</div> : null}
                       </td>
                       <td className="px-3 py-3.5 text-silver">{c.causa_legivel ?? CAUSA_LEGIVEL[c.causa]}</td>
                       <td className="px-3 py-3.5"><StatusPill status={c.status} /></td>
@@ -350,7 +360,7 @@ export function Involuntario() {
 function Tentativas({ feitas, total }: { feitas: number; total: number }) {
   if (total === 0) return <span className="text-muted">—</span>
   return (
-    <div className="flex items-center gap-2" aria-label={`${feitas} de ${total} tentativas`}>
+    <div className="flex items-center gap-2" aria-label={t('{feitas} de {total} tentativas', { feitas, total })}>
       <div className="flex gap-1">
         {Array.from({ length: total }).map((_, i) => (
           <span key={i} className={cx('h-1.5 w-5 rounded-full', i < feitas ? 'bg-orange' : 'bg-paper/[0.12]')} />

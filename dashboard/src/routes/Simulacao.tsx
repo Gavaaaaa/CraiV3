@@ -11,6 +11,7 @@ import { CAUSA, estadoVazio } from '../data/simulador'
 import type { Abordagem, ClienteFicticio, EstadoSimulacao } from '../data/tipos'
 import { cx } from '../lib/cx'
 import { fmt } from '../lib/format'
+import { t } from '../lib/idioma'
 import { useReducedMotion } from '../lib/useReducedMotion'
 import { CartaoPix, type Brilho } from './simulacao/CartaoPix'
 import { Etapas } from './simulacao/Etapas'
@@ -54,7 +55,7 @@ export function Simulacao() {
       .then((e) => {
         if (vivo) setEstado(e)
       })
-      .catch((e: unknown) => vivo && setErro(e instanceof ErroApi ? e.message : 'Algo deu errado ao carregar a simulação.'))
+      .catch((e: unknown) => vivo && setErro(e instanceof ErroApi ? e.message : t('Algo deu errado ao carregar a simulação.')))
     return () => {
       vivo = false
       if (timer.current) window.clearTimeout(timer.current)
@@ -68,7 +69,7 @@ export function Simulacao() {
     try {
       await f()
     } catch (e) {
-      setErro(e instanceof ErroApi ? e.message : 'Algo deu errado. Tente de novo.')
+      setErro(e instanceof ErroApi ? e.message : t('Algo deu errado. Tente de novo.'))
       setOcupado(false)
     }
   }
@@ -123,8 +124,8 @@ export function Simulacao() {
     })
 
   const abas: Aba<AbaSim>[] = [
-    { valor: 'cobranca', rotulo: 'Cobrança Pix (involuntário)' },
-    { valor: 'retencao', rotulo: 'Cliente em risco (voluntário)', extra: premium ? null : <Badge className="px-1.5 py-0 text-rotulo">Premium</Badge> },
+    { valor: 'cobranca', rotulo: t('Cobrança Pix (involuntário)') },
+    { valor: 'retencao', rotulo: t('Cliente em risco (voluntário)'), extra: premium ? null : <Badge className="px-1.5 py-0 text-rotulo">Premium</Badge> },
   ]
 
   return (
@@ -132,14 +133,14 @@ export function Simulacao() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="t-h2 text-paper">Simulação do gateway</h2>
-            <Badge tone="amber">Demonstração</Badge>
+            <h2 className="t-h2 text-paper">{t('Simulação do gateway')}</h2>
+            <Badge tone="amber">{t('Demonstração')}</Badge>
           </div>
           <p className="t-apoio mt-1 max-w-[720px] text-silver">
-            O gateway de pagamento real será integrado em breve; aqui você vê o sistema agindo sobre um cliente fictício. Nada é enviado a nenhum banco nem a nenhuma pessoa.
+            {t('O gateway de pagamento real será integrado em breve; aqui você vê o sistema agindo sobre um cliente fictício. Nada é enviado a nenhum banco nem a nenhuma pessoa.')}
           </p>
         </div>
-        <Abas abas={abas} ativa={aba} onChange={irPara} rotulo="Tipo de simulação" idBase="sim" />
+        <Abas abas={abas} ativa={aba} onChange={irPara} rotulo={t('Tipo de simulação')} idBase="sim" />
       </div>
 
       {aba === 'retencao' ? (
@@ -147,8 +148,8 @@ export function Simulacao() {
           <RetencaoSimulada />
         ) : (
           <div className="card-glass rounded-[18px] p-8 text-center">
-            <div className="t-h3 text-paper">A simulação do voluntário faz parte do plano premium</div>
-            <p className="t-apoio mx-auto mt-2 max-w-md text-silver">No premium, a CRAI também acompanha os sinais de risco dos seus clientes e faz ofertas antes do cancelamento.</p>
+            <div className="t-h3 text-paper">{t('A simulação do voluntário faz parte do plano premium')}</div>
+            <p className="t-apoio mx-auto mt-2 max-w-md text-silver">{t('No premium, a CRAI também acompanha os sinais de risco dos seus clientes e faz ofertas antes do cancelamento.')}</p>
           </div>
         )
       ) : erro && mostrado === null ? (
@@ -159,12 +160,12 @@ export function Simulacao() {
         <>
         {erro ? (
           <div role="alert" className="rounded-[12px] border border-danger/40 bg-danger/[0.06] px-4 py-3 text-apoio text-paper">
-            {erro} Nada foi perdido; tente a ação de novo.
+            {erro} {t('Nada foi perdido; tente a ação de novo.')}
           </div>
         ) : null}
         <SimulacaoCobranca
           estado={mostrado}
-          empresa={empresa?.nome ?? 'Sua empresa'}
+          empresa={empresa?.nome ?? t('Sua empresa')}
           modoEscolha={mostrado.modo_mensagem === 'escolha'}
           rascunho={rascunho}
           onRascunho={setRascunho}
@@ -221,7 +222,8 @@ function SimulacaoCobranca(p: PropsCobranca) {
             ? 'aguardando'
             : 'nenhum'
 
-  const proximaCobranca = estado.proxima_acao && /Tentativa/.test(estado.proxima_acao.descricao) ? estado.proxima_acao.quando : estado.tentativas[0]?.agendada_para ?? null
+  // A descrição vem do backend; em inglês, `doBackend()` já a traduziu ("Attempt N").
+  const proximaCobranca = estado.proxima_acao && /Tentativa|Attempt/.test(estado.proxima_acao.descricao) ? estado.proxima_acao.quando : estado.tentativas[0]?.agendada_para ?? null
   const ultimaTentativa = [...estado.tentativas].reverse().find((t) => t.resultado === 'paga' || t.resultado === 'falhou')
 
   return (
@@ -256,7 +258,7 @@ function SimulacaoCobranca(p: PropsCobranca) {
                       aria-pressed={p.virado}
                       className="t-label rounded-[8px] px-2 py-1 font-[560] text-silver underline-offset-4 hover:text-paper hover:underline"
                     >
-                      {p.virado ? 'Virar de volta' : 'Ver a verdade escondida (o sistema não vê)'}
+                      {p.virado ? t('Virar de volta') : t('Ver a verdade escondida (o sistema não vê)')}
                     </button>
                   ) : null}
                 </motion.div>
@@ -287,40 +289,40 @@ function FaixaStatus({ estado, processando, ultima }: { estado: EstadoSimulacao;
   if (processando) {
     return (
       <Faixa tom="orange" icone={<IconSend width={15} height={15} />}>
-        Enviando cobrança Pix…
-        <span className="t-label ml-2 text-silver">{ultima === null && estado.fase === 'formulario' ? 'Cobrança do dia' : `Tentativa ${(ultima ?? 0) + 1}`}</span>
+        {t('Enviando cobrança Pix…')}
+        <span className="t-label ml-2 text-silver">{ultima === null && estado.fase === 'formulario' ? t('Cobrança do dia') : t('Tentativa {n}', { n: (ultima ?? 0) + 1 })}</span>
       </Faixa>
     )
   }
   switch (estado.fase) {
     case 'formulario':
-      return <p className="t-label text-center text-muted">Preencha o cliente ao lado e clique em "Simular cobrança".</p>
+      return <p className="t-label text-center text-muted">{t('Preencha o cliente ao lado e clique em "Simular cobrança".')}</p>
     case 'recusada':
       return (
         <Faixa tom="danger" icone={<IconAlert width={15} height={15} />}>
-          Recusada: {estado.causa ? CAUSA[estado.causa].toLowerCase() : ''}
-          {estado.proxima_acao ? <span className="t-label ml-2 text-silver">Próxima: {estado.proxima_acao.descricao.toLowerCase()} em {fmt.dataCurta(estado.proxima_acao.quando)}</span> : null}
+          {t('Recusada: {causa}', { causa: estado.causa ? CAUSA[estado.causa].toLowerCase() : '' })}
+          {estado.proxima_acao ? <span className="t-label ml-2 text-silver">{t('Próxima: {acao} em {data}', { acao: estado.proxima_acao.descricao.toLowerCase(), data: fmt.dataCurta(estado.proxima_acao.quando) })}</span> : null}
         </Faixa>
       )
     case 'mensagem_enviada':
       return (
         <Faixa tom="amber" icone={<IconSend width={15} height={15} />}>
-          Mensagem enviada{estado.mensagem_enviada ? ` por ${CANAL_DA_MENSAGEM[estado.mensagem_enviada.canal]}` : ''}
-          <span className="t-label ml-2 text-silver">{estado.proxima_acao ? `${estado.proxima_acao.descricao} em ${fmt.dataCurta(estado.proxima_acao.quando)}` : 'Aguardando a resposta do cliente'}</span>
+          {estado.mensagem_enviada ? t('Mensagem enviada por {canal}', { canal: CANAL_DA_MENSAGEM[estado.mensagem_enviada.canal] }) : t('Mensagem enviada')}
+          <span className="t-label ml-2 text-silver">{estado.proxima_acao ? t('{acao} em {data}', { acao: estado.proxima_acao.descricao, data: fmt.dataCurta(estado.proxima_acao.quando) }) : t('Aguardando a resposta do cliente')}</span>
         </Faixa>
       )
     case 'recuperada':
       return (
         <Faixa tom="ok" icone={<IconCheck width={15} height={15} />}>
-          {estado.desfecho?.tentativa === 0 ? 'Pagamento aprovado de primeira' : `Pagamento recuperado ${estado.desfecho?.via === 'mensagem' ? 'pela mensagem' : `na ${estado.desfecho?.tentativa}ª tentativa`}`}
-          {estado.desfecho && estado.desfecho.tentativa !== 0 ? <span className="tabular ml-2 font-[680] text-paper">{fmt.brl(estado.desfecho.valor_liquido)} para você</span> : null}
+          {estado.desfecho?.tentativa === 0 ? t('Pagamento aprovado de primeira') : estado.desfecho?.via === 'mensagem' ? t('Pagamento recuperado pela mensagem') : t('Pagamento recuperado na {n}ª tentativa', { n: String(estado.desfecho?.tentativa) })}
+          {estado.desfecho && estado.desfecho.tentativa !== 0 ? <span className="tabular ml-2 font-[680] text-paper">{t('{valor} para você', { valor: fmt.brl(estado.desfecho.valor_liquido) })}</span> : null}
         </Faixa>
       )
     case 'encerrada':
       return (
         <Faixa tom="neutro" icone={<IconAlert width={15} height={15} />}>
-          Encerrado sem recuperação
-          <span className="t-label ml-2 text-silver">Nada é cobrado</span>
+          {t('Encerrado sem recuperação')}
+          <span className="t-label ml-2 text-silver">{t('Nada é cobrado')}</span>
         </Faixa>
       )
     default:

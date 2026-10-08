@@ -215,7 +215,9 @@ Antes do primeiro commit, ative o hook que bloqueia segredos:
 
 Seis páginas no menu (Simulação do gateway, Visão geral, Churn involuntário, Churn
 voluntário, Assistente e API), mais a Configuração. **Nada é calculado no navegador**: cada página chama a API, e a
-tela desenha o que voltou. O tema claro ou escuro se escolhe em Configuração, Aparência.
+tela desenha o que voltou. O tema (claro ou escuro) e o idioma (português ou inglês) se escolhem em
+Configuração, Aparência. No inglês, continuam em português as mensagens enviadas aos clientes finais,
+o registro de cada decisão (Art. 20 da LGPD) e o texto de política de privacidade.
 
 **O login de desenvolvimento.** Neste repositório o dashboard entra sem senha: ao abrir,
 pede `POST /dev/token` e recebe um token de uma empresa fictícia, com o papel de dono. O

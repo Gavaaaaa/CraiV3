@@ -1,9 +1,13 @@
 import { motion } from 'framer-motion'
 import { useEffect } from 'react'
 import { IconClose } from '../../components/icons/Icons'
+import { t } from '../../lib/idioma'
 import { useReducedMotion } from '../../lib/useReducedMotion'
 
-/** O texto do painel, como foi aprovado. Mudou o texto, muda aqui e só aqui. */
+/**
+ * O texto do painel, como foi aprovado. Mudou o texto, muda aqui e só aqui. Fica em português:
+ * o painel passa cada texto por `t()` na hora de mostrar (o inglês está em `i18n/en/ciclos.ts`).
+ */
 export const O_QUE_A_API_FAZ = {
   titulo: 'O que a API faz',
   abertura: 'A API liga o seu sistema ao da CRAI. Com ela, a sua base de clientes se atualiza sozinha, sem ninguém precisar subir planilha.',
@@ -57,9 +61,9 @@ export function PainelOQueAApiFaz({ onFechar }: { onFechar: () => void }) {
   }, [onFechar])
 
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={O_QUE_A_API_FAZ.titulo}>
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={t(O_QUE_A_API_FAZ.titulo)}>
       {/* O fundo é um botão: clicar fora do painel fecha */}
-      <button type="button" aria-label="Fechar a explicação" onClick={onFechar} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
+      <button type="button" aria-label={t('Fechar a explicação')} onClick={onFechar} className="absolute inset-0 bg-sombra/60 backdrop-blur-[2px]" />
       <motion.aside
         initial={reduzido ? false : { x: 40, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -68,20 +72,20 @@ export function PainelOQueAApiFaz({ onFechar }: { onFechar: () => void }) {
       >
         <div className="flex flex-col gap-5 p-6">
           <header className="flex items-start justify-between gap-4">
-            <h3 className="t-h2 text-paper">{O_QUE_A_API_FAZ.titulo}</h3>
-            <button type="button" onClick={onFechar} aria-label="Fechar" className="rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
+            <h3 className="t-h2 text-paper">{t(O_QUE_A_API_FAZ.titulo)}</h3>
+            <button type="button" onClick={onFechar} aria-label={t('Fechar')} className="rounded-[8px] p-2 text-silver hover:bg-paper/[0.06] hover:text-paper">
               <IconClose />
             </button>
           </header>
-          <p className="text-normal leading-[1.6] text-paper/90">{O_QUE_A_API_FAZ.abertura}</p>
+          <p className="text-normal leading-[1.6] text-paper/90">{t(O_QUE_A_API_FAZ.abertura)}</p>
           {O_QUE_A_API_FAZ.blocos.map((bloco) => (
             <section key={bloco.titulo}>
-              <h4 className="text-apoio font-[640] text-paper">{bloco.titulo}</h4>
+              <h4 className="text-apoio font-[640] text-paper">{t(bloco.titulo)}</h4>
               <ul className="mt-2 flex flex-col gap-1.5">
                 {bloco.itens.map((item) => (
                   <li key={item} className="flex items-start gap-2 text-apoio leading-[1.55] text-silver">
                     <span className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-orange" aria-hidden="true" />
-                    <span>{item}</span>
+                    <span>{t(item)}</span>
                   </li>
                 ))}
               </ul>
