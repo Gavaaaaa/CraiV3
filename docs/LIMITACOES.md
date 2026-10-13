@@ -784,10 +784,20 @@ As rotas de leitura das páginas Voluntário e Visão geral (`api/voluntario.py`
     cliente foi avaliado como crítico (um evento do SDK ou do disparo em lote).
 
 13. **O voluntário depende da claim `plano` do token.** Fora do premium, os campos do
-    voluntário vêm `null` na visão geral, na série, na atividade e no extrato. O login real
-    só terá a claim na Etapa 5: até lá, só o token de desenvolvimento vê o voluntário na
-    visão geral. As rotas próprias do voluntário (`/clientes/recentes`,
-    `/metrics/voluntario/*`) não conferem o plano.
+    voluntário vêm `null` na visão geral, na série, na atividade e no extrato. Desde
+    10/10/2026, as rotas próprias do voluntário (`/clientes/recentes`, `/clientes/base`,
+    `/metrics/voluntario/*`) e a simulação de retenção respondem 403
+    `plano_sem_voluntario` fora do premium. `/insights` continua aberto aos dois planos (o
+    ranking da base é o funil gratuito). O login do site já grava a claim `plano` (hook do
+    Supabase de 06/10/2026).
+
+    **A assinatura vem da claim `assinatura` do token (10/10/2026).** O hook do Supabase
+    grava `dispensada` enquanto a chave `assinatura_obrigatoria` do site estiver desligada
+    (até o lançamento, no início de 2027), e `ativa` ou `pendente` depois que for ligada.
+    Com `pendente`, toda rota de login responde 403 `assinatura_pendente`. A chave de API
+    não passa por essa conferência: uma empresa com a assinatura vencida continua com as
+    chaves que já tinha até revogá-las. Quem marca a empresa como `ativa` é o pagamento, e o
+    pagamento ainda é simulado.
 
 14. **`GET /health` diz se o redator TEM chave, não se ele respondeu.** `redator.disponivel`
     é a presença de `ANTHROPIC_API_KEY`. Os modelos contados são os quatro que o serviço

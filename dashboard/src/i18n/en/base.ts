@@ -66,7 +66,7 @@ export const base: Record<string, string> = {
   'Membro': 'Member',
   'Olá, {nome}': 'Hello, {nome}',
   'O que a CRAI fez pela sua receita hoje.': "What CRAI did for your revenue today.",
-  'Plano essencial': 'Essential plan',
+  'Plano standard': 'Standard plan',
   'Papel do login de desenvolvimento': 'Development login role',
   'Login de desenvolvimento: troque o papel para testar as permissões': 'Development login: switch roles to test permissions',
 

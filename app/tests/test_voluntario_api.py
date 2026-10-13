@@ -60,7 +60,7 @@ def cliente(monkeypatch, supabase_falso):
 
 
 def _get(cliente, tenant, caminho, **params):
-    return cliente.get(caminho, params=params, headers=cliente.projeto.bearer(tenant, papel="owner"))
+    return cliente.get(caminho, params=params, headers=cliente.projeto.bearer(tenant, papel="owner", plano="premium"))
 
 
 def _oferta(tenant, cid, oferta="desconto_20", mrr=500.0, canal="email", enviada=True,
@@ -187,7 +187,7 @@ class TestRecentes:
 
     def test_a_leitura_entra_no_registro_de_acesso(self, cliente):
         ci.gravar(A, [_c("c1", dias=5, uso=2)])
-        cliente.get("/clientes/recentes", headers=cliente.projeto.bearer(A, papel="membro"))
+        cliente.get("/clientes/recentes", headers=cliente.projeto.bearer(A, papel="membro", plano="premium"))
         acessos = registro_acesso.acessos(A)
         assert [(a["rota"], a["papel"]) for a in acessos] == [("GET /clientes/recentes", "membro")]
         assert registro_acesso.acessos(B) == []
@@ -212,13 +212,13 @@ class TestBase:
         assert base["atualizada_em"] is not None
 
     def test_a_origem_e_api_depois_de_uma_rota_da_api(self, cliente):
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         assert cliente.post("/clientes", json=_c("c1", dias=1, uso=1), headers=dono).status_code == 200
         base = _get(cliente, A, "/clientes/base").json()["base"]
         assert base["origem"] == "api" and base["total"] == 1
 
     def test_a_origem_e_anexo_depois_da_planilha(self, cliente):
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         cliente.post("/clientes", json=_c("c1", dias=1, uso=1), headers=dono)
         csv = "customer_id_externo,mrr,billing_profile\nc2,100,PJ\nc3,200,CLT\n".encode()
         r = cliente.post("/clientes/importar", headers=dono,
@@ -228,7 +228,7 @@ class TestBase:
         assert base["origem"] == "anexo" and base["total"] == 3
 
     def test_requisicao_recusada_nao_muda_a_origem(self, cliente):
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         assert cliente.post("/clientes", json={"customer_id_externo": "x"},
                             headers=dono).status_code == 422
         assert cliente.patch("/clientes/nao-existe", json={"mrr": 1.0},
@@ -236,7 +236,7 @@ class TestBase:
         assert origem_da_base.ultima(A) is None
 
     def test_a_origem_de_uma_empresa_nao_e_a_da_outra(self, cliente):
-        cliente.post("/clientes", json=_c("c1"), headers=cliente.projeto.bearer(A, papel="owner"))
+        cliente.post("/clientes", json=_c("c1"), headers=cliente.projeto.bearer(A, papel="owner", plano="premium"))
         ci.gravar(B, [_c("c9")])
         assert _get(cliente, B, "/clientes/base").json()["base"]["origem"] is None
 
@@ -269,7 +269,7 @@ class TestCache:
         ci.gravar(A, [_c("c1", dias=3, uso=4), _c("c2", dias=3, uso=4)])
         antes = _get(cliente, A, "/clientes/recentes").json()
         assert contador == [A]
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         if escrita == "upsert":
             ci.upsert_um(A, _c("c1", mrr=999.0, dias=3, uso=4))
         elif escrita == "lote":
@@ -328,7 +328,7 @@ class TestCache:
 
     def test_o_insights_antigo_continua_recalculando(self, cliente, contador):
         ci.gravar(A, [_c("c1", dias=3, uso=4)])
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         cliente.get("/insights", headers=dono)
         cliente.get("/insights", headers=dono)
         assert contador == [A, A]
@@ -398,7 +398,7 @@ class TestMantido:
         assert mes["valor_liquido_mantido"] == 0 and mes["clientes_mantidos"] == 0
 
     def test_v2_v3_cancelar_no_prazo_pelo_delete_estorna(self, cliente):
-        dono = cliente.projeto.bearer(A, papel="owner")
+        dono = cliente.projeto.bearer(A, papel="owner", plano="premium")
         ci.gravar(A, [_c("c1", mrr=500.0, dias=20, uso=1)])
         _oferta(A, "c1")
         _aceitar(A, "c1")
@@ -676,7 +676,7 @@ class TestIsolamento:
         _oferta(B, "b1", mrr=900.0)
         _aceitar(B, "b1")
         cliente.post("/clientes", json=_c("b3", dias=1, uso=1),
-                     headers=cliente.projeto.bearer(B, papel="owner"))
+                     headers=cliente.projeto.bearer(B, papel="owner", plano="premium"))
         return cliente
 
     @pytest.mark.parametrize("rota", ROTAS)

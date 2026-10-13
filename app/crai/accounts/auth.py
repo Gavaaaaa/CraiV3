@@ -35,11 +35,25 @@ qualquer plano). O login real só terá a claim na Etapa 5.
 
 A CHAVE DE API (Rodada 2). `get_tenant_id` aceita, além do token de login, a
 chave `crai_live_...` da empresa (`chaves_api.py`), e SÓ nas rotas de
-`chaves_api.ROTAS_COM_CHAVE` — as quatro da API de clientes. Em qualquer outra
-rota, um `Authorization` com cara de chave recebe 401 sem que a chave seja
-consultada: a resposta é a mesma para chave válida, revogada ou inventada, e
-nenhuma outra rota serve de teste para saber se uma chave existe. A chave
-nunca chega ao validador de JWT nem ao log.
+`chaves_api.ROTAS_COM_CHAVE` — as quatro da API de clientes e o
+`POST /eventos`. Em qualquer outra rota, um `Authorization` com cara de
+chave recebe 401 sem que a chave seja consultada: a resposta é a mesma para
+chave válida, revogada ou inventada, e nenhuma outra rota serve de teste
+para saber se uma chave existe. A chave nunca chega ao validador de JWT nem
+ao log.
+
+O PLANO NO VOLUNTÁRIO (10/10/2026). As rotas do painel do churn voluntário
+(`/clientes/recentes`, `/clientes/base`, `/metrics/voluntario/*`) e a simulação
+de retenção chamam `exigir_plano_voluntario`: 403 `plano_sem_voluntario` para o
+plano essencial (o Standard do site). Antes, só a tela bloqueava. `/insights`
+fica aberto aos dois planos: o ranking de risco da base é o funil gratuito.
+
+A ASSINATURA (10/10/2026). O hook do Supabase grava a claim `assinatura`:
+`dispensada` (a chave `assinatura_obrigatoria` do site está desligada, como até
+o lançamento), `ativa` ou `pendente`. Com `pendente`, toda rota de login
+responde 403 `assinatura_pendente`. Sem a claim (token antigo ou de
+desenvolvimento), nada muda: quem bloqueia é o hook, e ele só marca `pendente`
+com a chave ligada. A chave de API não passa por aqui e não é afetada.
 """
 
 import logging
@@ -63,6 +77,7 @@ PAPEIS = ("owner", "admin", "membro")
 PLANO_ESSENCIAL = "essencial"
 PLANO_PREMIUM = "premium"
 PLANOS = (PLANO_ESSENCIAL, PLANO_PREMIUM)
+ASSINATURA_PENDENTE = "pendente"
 
 
 def _401(motivo: str, mensagem: str) -> HTTPException:
@@ -131,6 +146,10 @@ async def get_conta(authorization: Optional[str] = Header(default=None)) -> dict
         raise _401("papel_invalido",
                    f"claim `papel` fora do vocabulário: esperado um de {', '.join(PAPEIS)}")
     plano = claims.get("plano")
+    if claims.get("assinatura") == ASSINATURA_PENDENTE:
+        raise HTTPException(status_code=403, detail={
+            "motivo": "assinatura_pendente",
+            "detalhe": "a empresa ainda não tem assinatura ativa; conclua a assinatura no site"})
     email = claims.get("email")
     return {
         "tenant_id": tenant,
@@ -159,6 +178,15 @@ def exigir_plano_premium(conta: dict) -> None:
         raise HTTPException(status_code=403, detail={
             "motivo": "plano_sem_api",
             "detalhe": "gerar chave de API faz parte do plano Premium"})
+
+
+def exigir_plano_voluntario(conta: dict) -> None:
+    """403 `plano_sem_voluntario` se a empresa da conta não é do plano premium:
+    o churn voluntário faz parte só do Premium."""
+    if conta.get("plano") != PLANO_PREMIUM:
+        raise HTTPException(status_code=403, detail={
+            "motivo": "plano_sem_voluntario",
+            "detalhe": "o churn voluntário faz parte do plano Premium"})
 
 
 def _rota_aceita_chave(request: Optional[Request]) -> bool:

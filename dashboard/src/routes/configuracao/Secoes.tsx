@@ -208,7 +208,7 @@ export function SecaoEmpresa({ empresa }: { empresa: EmpresaDetalhe | null }) {
       <Bloco titulo={t('Identificação')}>
         <dl className="grid gap-4 sm:grid-cols-2">
           <Dado rotulo={t('Nome')} valor={empresa?.nome} />
-          <Dado rotulo={t('Plano')} valor={empresa ? (empresa.plano === 'premium' ? t('Premium (recuperação + retenção)') : t('Essencial (recuperação)')) : undefined} />
+          <Dado rotulo={t('Plano')} valor={empresa ? (empresa.plano === 'premium' ? t('Premium (recuperação + retenção)') : t('Standard (recuperação)')) : undefined} />
           <Dado rotulo="CNPJ" valor={empresa?.cnpj_mascarado} apoio={t('Mascarado aqui por segurança')} />
           <Dado rotulo={t('Cliente da CRAI desde')} valor={empresa ? fmt.dataComAno(empresa.desde) : undefined} />
         </dl>
@@ -338,7 +338,7 @@ export function SecaoIntegracao({ premium, podeEditar }: { premium: boolean; pod
   if (!premium) {
     return (
       <Secao titulo={t('Integração')} apoio={t('Chaves de API e webhook para a sua base se atualizar sozinha e as cobranças chegarem em tempo real.')}>
-        <Aviso>{t('A integração por API faz parte do plano premium. No essencial, a base entra por anexo na página do voluntário.')}</Aviso>
+        <Aviso>{t('A integração por API e por SDK faz parte do plano premium. No standard, a CRAI cuida só do churn involuntário.')}</Aviso>
       </Secao>
     )
   }

@@ -27,7 +27,7 @@ export function Topbar({ empresa, onTrocarPapel }: { empresa: Empresa | null; on
         <SinoDoTopo />
         <div className="hidden items-center gap-3 rounded-[10px] border border-line bg-slate/60 px-3 py-2 md:flex">
           <div className="hidden text-right lg:block">
-            <div className="t-label text-silver">{empresa?.plano === 'premium' ? t('Plano premium') : t('Plano essencial')}</div>
+            <div className="t-label text-silver">{empresa?.plano === 'premium' ? t('Plano premium') : t('Plano standard')}</div>
           </div>
           {MODO_REAL && onTrocarPapel ? (
             // Login de desenvolvimento: o selo do papel É o controle. Trocar o papel aqui pede outro token.

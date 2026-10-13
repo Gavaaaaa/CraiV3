@@ -35,7 +35,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import simulador
-from ..accounts import get_conta, get_tenant_id
+from ..accounts import get_conta
+from ..accounts.auth import exigir_plano_voluntario
 from ..churn_voluntary import (batch_scoring, clientes_importados, insights_unificados,
                                mantido, origem_da_base, retention_log, risk_scorer)
 from ..dunning import configuracao
@@ -252,6 +253,7 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
     (`nao_contatar`); e `?cliente=<id>` devolve só aquele cliente, esteja ou
     não entre os mais recentes (a busca do topo leva a ele). Id que não é da
     empresa devolve a lista vazia, igual ao que não existe."""
+    exigir_plano_voluntario(conta)
     tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
     if not 1 <= limite <= LIMITE_MAXIMO:
@@ -312,11 +314,13 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
 # ── GET /clientes/base ────────────────────────────────────────────────────
 
 @router.get("/clientes/base")
-async def base_de_clientes(tenant_id: str = Depends(get_tenant_id)) -> dict:
+async def base_de_clientes(conta: dict = Depends(get_conta)) -> dict:
     """A base da empresa: quantos clientes ativos, quantos têm dado de
     comportamento, para quantos o modelo decide o risco, quando foi a última
     atualização e por onde ela chegou (`api`, `anexo`, ou `null` se a base é
     anterior a este registro). Sem nenhum cliente, `base` é `null`."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
     try:
         resumo = clientes_importados.resumo(tenant_id)
     except clientes_importados.ConfiguracaoAusente as e:
@@ -364,11 +368,13 @@ def faixas_da_base(tenant_id: str) -> dict:
 
 @router.get("/metrics/voluntario/mes")
 async def metricas_do_mes(mes: Optional[str] = None, incluir_simulados: bool = False,
-                          tenant_id: str = Depends(get_tenant_id)) -> dict:
+                          conta: dict = Depends(get_conta)) -> dict:
     """O mês do voluntário (`?mes=AAAA-MM`; padrão: o mês corrente). O valor
     mantido é líquido da fee: as retenções aceitas no mês menos os estornos do
     mês (V4: o estorno entra no mês do cancelamento, e o mês fechado não muda).
     `grave` e `preocupante` são de agora, na base inteira."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
     rotulo, inicio, fim = periodo_do_mes(mes)
     feito = mantido.sincronizar_sem_levantar(tenant_id) or {}
     faixas = faixas_da_base(tenant_id)
@@ -404,9 +410,11 @@ def serie_do_voluntario(tenant_id: str, dias: int, primeiro: date, inicio: datet
 
 @router.get("/metrics/voluntario/serie")
 async def serie_diaria(dias: Optional[int] = None, incluir_simulados: bool = False,
-                       tenant_id: str = Depends(get_tenant_id)) -> dict:
+                       conta: dict = Depends(get_conta)) -> dict:
     """Um ponto por dia, dos últimos `?dias=` (1..365, padrão 30) até hoje,
     pelo dia do ACEITE. O estorno sai no dia do cancelamento."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
     dias, primeiro, inicio, fim = periodo_dos_dias(dias)
     mantido.sincronizar_sem_levantar(tenant_id)
     return {"dias": dias, "inicio": datas.iso_com_fuso(inicio), "fim": datas.iso_com_fuso(fim),
@@ -459,12 +467,14 @@ def _comparar(tenant_id: str, inicio: datetime, fim: datetime) -> dict:
 
 @router.get("/metrics/voluntario/regua-x-modelo")
 async def regua_x_modelo(dias: Optional[int] = None,
-                         tenant_id: str = Depends(get_tenant_id)) -> dict:
+                         conta: dict = Depends(get_conta)) -> dict:
     """Entre os clientes com dado de comportamento, quantos cancelaram nos
     últimos `?dias=`, quantos cada avaliador marca como grave e quantos dos
     cancelamentos cada um tinha marcado, com os últimos dados do cliente antes
     de cancelar. Sem desfecho suficiente, `comparacao` é `null` e
     `motivo_vazio` diz por quê: a tela esconde a comparação."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
     dias, primeiro, inicio, fim = periodo_dos_dias(dias)
     try:
         resultado = insights_unificados.em_cache(

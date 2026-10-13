@@ -51,7 +51,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .. import ambiente, simulador
 from ..accounts import get_conta
-from ..accounts.auth import exigir_papel
+from ..accounts.auth import exigir_papel, exigir_plano_voluntario
 from ..agent.pix_codes import CAUSA_LEGIVEL, CAUSA_REVOGADA, causa_do_codigo
 from ..churn_voluntary import batch_scoring, mantido, retention_log, voluntary_agent
 from ..churn_voluntary.risk_scorer import EVENTO_DADO_ESTATICO
@@ -637,8 +637,9 @@ async def simular_retencao(corpo: dict = Body(...), conta: dict = Depends(get_co
     Quando o modelo de IA decide, o corte não vale (`corte_de_intervencao` vem
     nulo): o sistema intervém por intenção explícita ou pela posição na base
     (`regra_de_intervencao`), e `sem_oferta_porque` diz por que não interveio.
-    Exige `owner` ou `admin`."""
+    Exige `owner` ou `admin` e o plano premium."""
     exigir_papel(conta, "owner", "admin")
+    exigir_plano_voluntario(conta)
     tenant_id = conta["tenant_id"]
     try:
         cliente = simulador.validar_cliente_em_risco(corpo)
