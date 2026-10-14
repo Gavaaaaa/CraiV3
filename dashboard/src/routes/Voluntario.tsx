@@ -69,7 +69,6 @@ export function Voluntario() {
   const carga = useCarregar(
     () =>
       Promise.all([
-        api.clientesRecentes({ incluirSimulados: sim, limite: 10 }),
         api.serieVoluntario({ incluirSimulados: sim }),
         api.resumoVoluntario({ incluirSimulados: sim }),
         api.baseClientes(),
@@ -77,11 +76,11 @@ export function Voluntario() {
       ]),
     [sim],
   )
-  const [clientes, serie, resumo, base, comparacao] = carga.dados ?? [null, null, null, null, null]
+  const [serie, resumo, base, comparacao] = carga.dados ?? [null, null, null, null]
   const semBase = carga.dados !== null && base === null
 
   // A busca do topo leva a `?aba=clientes&cliente=<id>`: aquele cliente é lido à parte (ele pode
-  // não estar entre os 10 mais recentes) e vai para o topo da lista.
+  // não estar na primeira página da lista) e vai para o topo dela.
   const idBuscado = params.get('cliente')?.trim() || null
   const cargaDoBuscado = useCarregar<ClienteRisco | 'nao_encontrado' | null>(
     () => (idBuscado ? api.clientesRecentes({ cliente: idBuscado, limite: 1, incluirSimulados: sim }).then((l) => l[0] ?? 'nao_encontrado') : Promise.resolve(null)),
@@ -107,7 +106,8 @@ export function Voluntario() {
     )
   }
 
-  const graves = clientes ? clientes.filter((c) => c.faixa === 'grave').length : null
+  // Os graves da base inteira, o mesmo número do cartão "Em risco grave".
+  const graves = resumo ? resumo.grave : null
 
   const abas: Aba<AbaVol>[] = [
     { valor: 'base', rotulo: t('Sua base') },
@@ -197,14 +197,14 @@ export function Voluntario() {
                     <span>
                       {buscado === 'nao_encontrado'
                         ? t('O cliente buscado não está na base da sua empresa.')
-                        : t('O cliente buscado está no topo da lista, antes dos mais recentes.')}
+                        : t('O cliente buscado está no topo da lista, antes dos outros.')}
                     </span>
                     <button type="button" onClick={limparBusca} className="t-label rounded-[8px] border border-line px-3 py-1.5 font-[560] text-silver hover:text-paper">
                       {t('Limpar a busca')}
                     </button>
                   </div>
                 ) : null}
-                {carga.erro ? <div className="p-4"><ErroCarregar mensagem={carga.erro} onTentar={carga.recarregar} /></div> : <TabelaClientes clientes={clientes} total={base?.total ?? null} buscado={buscado && buscado !== 'nao_encontrado' ? buscado : null} />}
+                <TabelaClientes incluirSimulados={sim} total={base?.total ?? null} buscado={buscado && buscado !== 'nao_encontrado' ? buscado : null} recarga={carga.dados} />
               </Card>
             ) : aba === 'mantido' ? (
               <Card className="p-5 md:p-6">

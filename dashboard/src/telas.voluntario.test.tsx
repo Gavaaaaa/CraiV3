@@ -219,3 +219,38 @@ describe('voluntário em modo real', () => {
     await waitFor(() => expect(chamadas.filter((c) => c.startsWith('GET /clientes/base')).length).toBeGreaterThan(antes), ESPERA)
   })
 })
+
+describe('a lista de clientes por risco (14/10/2026)', () => {
+  const POR_RISCO = { ...RECENTES, total_na_base: 300, contagem_por_faixa: { grave: 38, preocupante: 28, sem_risco: 228, sem_dado: 6 }, total_filtrado: 300 }
+
+  it('pede a lista por risco, e os filtros contam a base inteira', async () => {
+    const chamadas = ligarBackendFalso({ ...COM_DADOS, 'GET /clientes/recentes': POR_RISCO })
+    abrir('/voluntario?aba=clientes')
+    expect(await screen.findByText('Clientes por risco', {}, ESPERA)).toBeTruthy()
+    await waitFor(() => expect(chamadas.some((c) => c.startsWith('GET /clientes/recentes?ordem=risco'))).toBe(true), ESPERA)
+    const filtros = within(screen.getByRole('tablist', { name: 'Filtrar por faixa' }))
+    await waitFor(() => expect(filtros.getByRole('tab', { name: /Grave\s*38/ })).toBeTruthy(), ESPERA)
+    expect(filtros.getByRole('tab', { name: /Todos\s*300/ })).toBeTruthy()
+    expect(filtros.getByRole('tab', { name: /Preocupante\s*28/ })).toBeTruthy()
+    expect(screen.getByText('Mostrando 2 de 300')).toBeTruthy()
+  })
+
+  it('o filtro consulta a base inteira, e "Ver mais" pede a página seguinte', async () => {
+    const chamadas = ligarBackendFalso({ ...COM_DADOS, 'GET /clientes/recentes': POR_RISCO })
+    abrir('/voluntario?aba=clientes')
+    const filtros = within(await screen.findByRole('tablist', { name: 'Filtrar por faixa' }, ESPERA))
+    await waitFor(() => expect(filtros.getByRole('tab', { name: /Grave\s*38/ })).toBeTruthy(), ESPERA)
+    fireEvent.click(filtros.getByRole('tab', { name: /Grave/ }))
+    await waitFor(() => expect(chamadas.some((c) => c.includes('ordem=risco') && c.includes('faixa=grave'))).toBe(true), ESPERA)
+    const verMais = await screen.findByRole('button', { name: 'Ver mais 25' }, ESPERA)
+    fireEvent.click(verMais)
+    await waitFor(() => expect(chamadas.some((c) => c.includes('faixa=grave') && c.includes('deslocamento=2'))).toBe(true), ESPERA)
+  })
+
+  it('o número de graves na aba é o da base inteira, igual ao cartão', async () => {
+    ligarBackendFalso({ ...COM_DADOS, 'GET /metrics/voluntario/mes': { ...MES_VOLUNTARIO, grave: 38 } })
+    abrir('/voluntario')
+    await carregada()
+    expect(screen.getByText('38 graves')).toBeTruthy()
+  })
+})

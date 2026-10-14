@@ -56,6 +56,7 @@ import type {
   SugestaoDoCiclo,
   TentativaSimulada,
   TipoAtividade,
+  PaginaClientes,
 } from './tipos'
 import { t } from '../lib/idioma'
 import { doBackend } from '../lib/doBackend'
@@ -863,6 +864,9 @@ export interface ClienteRecenteApi {
 export interface ClientesRecentesApi {
   clientes: ClienteRecenteApi[]
   total_na_base: number
+  /** 14/10/2026: a base inteira por faixa, e quantos passam no filtro. Ausentes num backend anterior. */
+  contagem_por_faixa?: Partial<Record<string, number>>
+  total_filtrado?: number
 }
 
 const FAIXAS: FaixaRisco[] = ['grave', 'preocupante', 'sem_risco', 'sem_dado']
@@ -890,6 +894,29 @@ export function adaptarClienteRecente(c: ClienteRecenteApi): ClienteRisco {
     atualizado_em: c.atualizado_em,
     nao_contatar: c.nao_contatar === true,
     simulado: Boolean(c.simulado),
+  }
+}
+
+/**
+ * A página da lista por risco. Sem `contagem_por_faixa` (backend anterior), conta a própria página;
+ * sem `total_filtrado`, vale o tamanho da página (e não há "Ver mais").
+ */
+export function adaptarPaginaPorRisco(r: ClientesRecentesApi): PaginaClientes {
+  const clientes = r.clientes.map(adaptarClienteRecente)
+  const contagem = { grave: 0, preocupante: 0, sem_risco: 0, sem_dado: 0 } as Record<FaixaRisco, number>
+  if (r.contagem_por_faixa) {
+    for (const f of FAIXAS) {
+      const n = r.contagem_por_faixa[f]
+      contagem[f] = typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0
+    }
+  } else {
+    for (const c of clientes) contagem[c.faixa] += 1
+  }
+  return {
+    clientes,
+    contagem,
+    totalFiltrado: typeof r.total_filtrado === 'number' ? r.total_filtrado : clientes.length,
+    totalNaBase: r.total_na_base,
   }
 }
 

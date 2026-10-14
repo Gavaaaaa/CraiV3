@@ -48,6 +48,11 @@ router = APIRouter(tags=["voluntario"])
 
 LIMITE_PADRAO = 10
 LIMITE_MAXIMO = 100
+# `?ordem=` da lista de clientes: `recentes` (padrão, do mais recente ao mais
+# antigo) ou `risco` (a ordem do ranking: do maior risco ao menor).
+ORDENS = ("recentes", "risco")
+# A ordem das faixas quando a lista sai por risco.
+ORDEM_DAS_FAIXAS = {"grave": 0, "preocupante": 1, "sem_risco": 2, "sem_dado": 3}
 DIAS_PADRAO = 30
 DIAS_MAXIMO = 365
 
@@ -238,7 +243,8 @@ def _clientes_ficticios_em_risco(tenant_id: str) -> list:
 
 @router.get("/clientes/recentes")
 async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: bool = False,
-                            cliente: Optional[str] = None,
+                            cliente: Optional[str] = None, ordem: Optional[str] = None,
+                            faixa: Optional[str] = None, deslocamento: Optional[int] = None,
                             conta: dict = Depends(get_conta)) -> dict:
     """Os clientes da empresa atualizados mais recentemente (`?limite=` 1..100,
     padrão 10), cada um com a faixa de risco, o motivo em uma frase, quem
@@ -252,12 +258,29 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
     Rodada 4: cada cliente diz se está marcado como "não contatar"
     (`nao_contatar`); e `?cliente=<id>` devolve só aquele cliente, esteja ou
     não entre os mais recentes (a busca do topo leva a ele). Id que não é da
-    empresa devolve a lista vazia, igual ao que não existe."""
+    empresa devolve a lista vazia, igual ao que não existe.
+
+    14/10/2026: `?ordem=risco` devolve a lista na ordem do ranking (do maior
+    risco ao menor; sem dado no fim), em vez de pela data de atualização. Uma
+    base que entrou inteira por anexo tem a mesma data em todos os clientes, e
+    "os mais recentes" ali não diz nada. `?faixa=` (`grave`, `preocupante`,
+    `sem_risco`, `sem_dado`) filtra a base INTEIRA antes do corte, e
+    `?deslocamento=` pula os N primeiros (o "Ver mais" da tela). A resposta traz
+    também `contagem_por_faixa` (a base inteira) e `total_filtrado` (quantos
+    passam no filtro, antes do corte). Sem esses parâmetros, nada muda."""
     exigir_plano_voluntario(conta)
     tenant_id = conta["tenant_id"]
     limite = LIMITE_PADRAO if limite is None else limite
     if not 1 <= limite <= LIMITE_MAXIMO:
         raise _422("limite_invalido", f"esperado inteiro entre 1 e {LIMITE_MAXIMO}", "limite")
+    ordem = ordem or "recentes"
+    if ordem not in ORDENS:
+        raise _422("ordem_invalida", f"esperado um de: {', '.join(ORDENS)}", "ordem")
+    if faixa is not None and faixa not in ORDEM_DAS_FAIXAS:
+        raise _422("faixa_invalida", f"esperado um de: {', '.join(ORDEM_DAS_FAIXAS)}", "faixa")
+    deslocamento = 0 if deslocamento is None else deslocamento
+    if deslocamento < 0:
+        raise _422("deslocamento_invalido", "esperado inteiro >= 0", "deslocamento")
     ranking = _ranking(tenant_id)
     try:
         carimbos = insights_unificados.em_cache(
@@ -278,10 +301,12 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
         quando = _atualizado_em(l, carimbos)
         linhas.append((quando, posicao, l))
     minimo = datetime.min.replace(tzinfo=datas.fuso_local())
-    linhas.sort(key=lambda t: (t[0] or minimo, t[2]["customer_id_externo"]), reverse=True)
+    if ordem == "recentes":
+        linhas.sort(key=lambda t: (t[0] or minimo, t[2]["customer_id_externo"]), reverse=True)
+    # Com `ordem=risco`, as linhas já estão na ordem do ranking.
 
     clientes = []
-    for quando, posicao, l in linhas[:limite]:
+    for quando, posicao, l in linhas:
         cid = l["customer_id_externo"]
         clientes.append({
             "id": cid,
@@ -300,15 +325,29 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
         })
     if incluir_simulados:
         # Os clientes fictícios em risco da simulação do gateway entram na mesma
-        # lista, marcados, e a lista continua do mais recente ao mais antigo.
+        # lista, marcados, e a lista continua na ordem pedida.
         clientes += [c for c in _clientes_ficticios_em_risco(tenant_id)
                      if so_este is None or c["id"] == so_este]
-        clientes.sort(key=lambda c: datas.com_fuso(c["atualizado_em"]) or minimo, reverse=True)
-        clientes = clientes[:limite]
+        if ordem == "recentes":
+            clientes.sort(key=lambda c: datas.com_fuso(c["atualizado_em"]) or minimo, reverse=True)
+    if ordem == "risco":
+        # Pela faixa; dentro dela, pela posição no ranking (o fictício, sem
+        # posição, vem primeiro na sua faixa). `sorted` é estável.
+        clientes = sorted(clientes, key=lambda c: (
+            ORDEM_DAS_FAIXAS.get(c["faixa"], len(ORDEM_DAS_FAIXAS)),
+            c["posicao_no_ranking"] if c["posicao_no_ranking"] is not None else 0))
+    contagem = {f: 0 for f in ORDEM_DAS_FAIXAS}
+    for c in clientes:
+        contagem[c["faixa"] if c["faixa"] in contagem else "sem_dado"] += 1
+    if faixa is not None:
+        clientes = [c for c in clientes if c["faixa"] == faixa]
+    total_filtrado = len(clientes)
+    clientes = clientes[deslocamento:deslocamento + limite]
     # A lista lê o nome do cliente final na base: é leitura de dado de titular.
     registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CLIENTES_RECENTES,
                               conta.get("papel"), datas.agora_local())
-    return {"clientes": clientes, "total_na_base": len(ranking)}
+    return {"clientes": clientes, "total_na_base": len(ranking),
+            "contagem_por_faixa": contagem, "total_filtrado": total_filtrado}
 
 
 # ── GET /clientes/base ────────────────────────────────────────────────────

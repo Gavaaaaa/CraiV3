@@ -199,7 +199,7 @@ describe('a busca do topo', () => {
     const clientes = await within(resultados).findByRole('region', { name: 'Clientes' }, ESPERA)
     fireEvent.click(within(clientes).getByText('Ana Prado'))
     await waitFor(() => expect(endereco()).toBe('/voluntario?aba=clientes&cliente=cli-ana'), ESPERA)
-    expect(await screen.findByText('O cliente buscado está no topo da lista, antes dos mais recentes.', {}, ESPERA)).toBeTruthy()
+    expect(await screen.findByText('O cliente buscado está no topo da lista, antes dos outros.', {}, ESPERA)).toBeTruthy()
     expect(chamadas.some((c) => c.startsWith('GET /clientes/recentes?') && c.includes('cliente=cli-ana'))).toBe(true)
     const linhas = [...document.querySelectorAll('tbody tr')]
     expect(linhas[0].getAttribute('data-buscado')).toBe('true')
@@ -340,7 +340,8 @@ describe('a barra "Mostrar" só aparece onde o clique muda alguma coisa', () => 
   it.each([
     ['/', 'GET /metrics/visao-geral'],
     ['/involuntario', 'GET /ciclos'],
-    ['/voluntario', 'GET /clientes/recentes'],
+    // A lista de clientes só é lida na aba dela; a página abre na aba da base.
+    ['/voluntario', 'GET /metrics/voluntario/mes'],
   ])('em %s, "Simulação" pede os dados de novo, com os simulados', async (pagina, rota) => {
     const chamadas = ligarBackendFalso()
     abrir(pagina)

@@ -52,6 +52,7 @@ import {
   adaptarChaves,
   adaptarCiclo,
   adaptarClienteRecente,
+  adaptarPaginaPorRisco,
   adaptarComparacao,
   adaptarConfiguracao,
   adaptarDetalhe,
@@ -152,6 +153,8 @@ import type {
   SaudeSistema,
   StatusTela,
   SugestaoDoCiclo,
+  FaixaRisco,
+  PaginaClientes,
 } from './tipos'
 
 export { ErroApi } from './erros'
@@ -719,6 +722,41 @@ export const api = {
       .filter((c) => opcoes.incluirSimulados || !c.simulado)
       .filter((c) => !opcoes.cliente || c.id === opcoes.cliente)
       .slice(0, opcoes.limite ?? 10)
+  },
+
+  /**
+   * GET /clientes/recentes?ordem=risco — a lista da aba "Clientes em risco": do maior risco ao menor,
+   * filtrada na base inteira (`faixa`), em páginas (`deslocamento` + `limite`).
+   */
+  async clientesPorRisco(
+    opcoes: { incluirSimulados?: boolean; faixa?: FaixaRisco | null; deslocamento?: number; limite?: number } = {},
+  ): Promise<PaginaClientes> {
+    const limite = opcoes.limite ?? 25
+    const deslocamento = opcoes.deslocamento ?? 0
+    if (real('clientesRecentes')) {
+      const faixa = opcoes.faixa ? `&faixa=${opcoes.faixa}` : ''
+      return adaptarPaginaPorRisco(
+        await chamar<ClientesRecentesApi>(
+          'GET',
+          `/clientes/recentes?ordem=risco&limite=${limite}&deslocamento=${deslocamento}${faixa}${simulados(opcoes.incluirSimulados, '&')}`,
+        ),
+      )
+    }
+    await espera(200)
+    const ordem: Record<FaixaRisco, number> = { grave: 0, preocupante: 1, sem_risco: 2, sem_dado: 3 }
+    const todos = (vazio ? [] : clientesRisco)
+      .filter((c) => opcoes.incluirSimulados || !c.simulado)
+      .slice()
+      .sort((a, b) => ordem[a.faixa] - ordem[b.faixa] || (a.posicao_na_base ?? 0) - (b.posicao_na_base ?? 0))
+    const contagem: Record<FaixaRisco, number> = { grave: 0, preocupante: 0, sem_risco: 0, sem_dado: 0 }
+    for (const c of todos) contagem[c.faixa] += 1
+    const filtrados = opcoes.faixa ? todos.filter((c) => c.faixa === opcoes.faixa) : todos
+    return {
+      clientes: filtrados.slice(deslocamento, deslocamento + limite),
+      contagem,
+      totalFiltrado: filtrados.length,
+      totalNaBase: todos.filter((c) => !c.simulado).length,
+    }
   },
 
   /** GET /busca?q= — clientes e ciclos da empresa, pelo nome ou pelo identificador (Rodada 4) */

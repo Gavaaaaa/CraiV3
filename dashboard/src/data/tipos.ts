@@ -445,6 +445,18 @@ export interface ClienteRisco {
   simulado: boolean
 }
 
+/**
+ * Uma página da lista de clientes por risco (`GET /clientes/recentes?ordem=risco`): do maior risco
+ * ao menor, com a contagem de cada faixa na base INTEIRA (é ela que vai nos botões de filtro) e
+ * quantos passam no filtro pedido (para saber se ainda há "Ver mais").
+ */
+export interface PaginaClientes {
+  clientes: ClienteRisco[]
+  contagem: Record<FaixaRisco, number>
+  totalFiltrado: number
+  totalNaBase: number
+}
+
 /** O resultado da busca do topo: clientes da base e ciclos de cobrança da empresa. Sem contato. */
 export interface ResultadoBusca {
   clientes: { id: string; nome: string; mrr: number | null; cancelado: boolean; nao_contatar: boolean }[]

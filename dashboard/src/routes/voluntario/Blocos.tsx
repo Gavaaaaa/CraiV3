@@ -1,10 +1,10 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { IconCheck, IconDownload, IconSpark, IconTable } from '../../components/icons/Icons'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
-import { Vazio } from '../../components/ui/Estados'
+import { ErroCarregar, Vazio } from '../../components/ui/Estados'
 import { ErroApi, agoraDaTela, api } from '../../data/api'
-import type { BaseClientes, ClienteRisco, ComparacaoReguaModelo, FaixaRisco, ResultadoImportacao } from '../../data/tipos'
+import type { BaseClientes, ClienteRisco, ComparacaoReguaModelo, FaixaRisco, PaginaClientes, ResultadoImportacao } from '../../data/tipos'
 import { baixarCsv } from '../../lib/csv'
 import { cx } from '../../lib/cx'
 import { fmt } from '../../lib/format'
@@ -39,23 +39,95 @@ const STATUS_OFERTA = {
 }
 
 /* ------------------------------------------------------------------ */
-/* Tabela dos 10 clientes                                              */
+/* Tabela dos clientes, por risco                                      */
 /* ------------------------------------------------------------------ */
 
 type Filtro = FaixaRisco | 'todos'
 
+/** Quantos clientes cada "Ver mais" traz. */
+const POR_PAGINA = 25
+
 interface PropsDaTabela {
-  clientes: ClienteRisco[] | null
+  /** Inclui os clientes fictícios da Simulação do gateway (o "Mostrar: Simulação"). */
+  incluirSimulados: boolean
   total: number | null
   /** O cliente que a busca do topo pediu: vai para o topo da lista, destacado. */
   buscado?: ClienteRisco | null
+  /** Muda quando a página lê os dados de novo (base anexada, atualização automática): a lista relê. */
+  recarga?: unknown
 }
 
-export function TabelaClientes({ clientes: recentes, total, buscado = null }: PropsDaTabela) {
+/**
+ * A lista da aba "Clientes em risco", do maior risco ao menor. O filtro e a contagem de cada faixa
+ * olham a base INTEIRA (o backend filtra antes de cortar a página), e "Ver mais" traz os próximos.
+ * Antes eram os 10 atualizados por último: numa base anexada de uma vez, todos têm a mesma data, e
+ * a lista mostrava quem estava no fim do arquivo.
+ */
+export function TabelaClientes({ incluirSimulados, total, buscado = null, recarga }: PropsDaTabela) {
   const [filtro, setFiltro] = useState<Filtro>('todos')
-  const clientes = recentes === null ? null : buscado ? [buscado, ...recentes.filter((c) => c.id !== buscado.id)] : recentes
-  const lista = (clientes ?? []).filter((c) => filtro === 'todos' || c.faixa === filtro)
-  const contagem = (f: Filtro) => (clientes ?? []).filter((c) => f === 'todos' || c.faixa === f).length
+  const [pagina, setPagina] = useState<PaginaClientes | null>(null)
+  const [erro, setErro] = useState<string | null>(null)
+  const [carregandoMais, setCarregandoMais] = useState(false)
+  const [tentativa, setTentativa] = useState(0)
+  // Quantos já estavam na tela: uma releitura (atualização automática) não encolhe a lista.
+  const mostrados = useRef(POR_PAGINA)
+  const faixaPedida = filtro === 'todos' ? null : filtro
+
+  useEffect(() => {
+    let vivo = true
+    setErro(null)
+    api
+      .clientesPorRisco({ incluirSimulados, faixa: faixaPedida, limite: Math.min(100, Math.max(POR_PAGINA, mostrados.current)) })
+      .then((p) => {
+        if (vivo) setPagina(p)
+      })
+      .catch((e: unknown) => {
+        if (vivo) setErro(e instanceof ErroApi ? e.message : t('Não foi possível carregar os clientes.'))
+      })
+    return () => {
+      vivo = false
+    }
+  }, [faixaPedida, incluirSimulados, recarga, tentativa])
+
+  const escolherFiltro = (f: Filtro) => {
+    if (f === filtro) return
+    mostrados.current = POR_PAGINA
+    setPagina(null)
+    setFiltro(f)
+  }
+
+  const verMais = () => {
+    if (!pagina || carregandoMais) return
+    setCarregandoMais(true)
+    api
+      .clientesPorRisco({ incluirSimulados, faixa: faixaPedida, deslocamento: pagina.clientes.length, limite: POR_PAGINA })
+      .then((p) => {
+        setPagina((atual) => {
+          if (!atual) return p
+          const novos = p.clientes.filter((c) => !atual.clientes.some((x) => x.id === c.id))
+          const juntos = { ...p, clientes: [...atual.clientes, ...novos] }
+          mostrados.current = juntos.clientes.length
+          return juntos
+        })
+      })
+      .catch((e: unknown) => setErro(e instanceof ErroApi ? e.message : t('Não foi possível carregar os clientes.')))
+      .finally(() => setCarregandoMais(false))
+  }
+
+  const daPagina = pagina ? pagina.clientes : null
+  // O buscado vai para o topo quando cabe no filtro escolhido.
+  const lista =
+    daPagina === null
+      ? null
+      : buscado && (filtro === 'todos' || buscado.faixa === filtro)
+        ? [buscado, ...daPagina.filter((c) => c.id !== buscado.id)]
+        : daPagina
+  const contagem = (f: Filtro): number | null => {
+    if (!pagina) return null
+    if (f === 'todos') return pagina.contagem.grave + pagina.contagem.preocupante + pagina.contagem.sem_risco + pagina.contagem.sem_dado
+    return pagina.contagem[f]
+  }
+  const faltam = pagina ? Math.max(0, pagina.totalFiltrado - pagina.clientes.length) : 0
   const filtros: { valor: Filtro; rotulo: string }[] = [
     { valor: 'todos', rotulo: t('Todos') },
     { valor: 'grave', rotulo: t('Grave') },
@@ -67,8 +139,8 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
-          <h3 className="t-h3 text-paper">{t('Últimos 10 clientes atualizados')}</h3>
-          <p className="t-apoio mt-0.5 text-silver">{t('Do mais recente ao mais antigo. O motivo é o que pesou na avaliação; a abordagem é o que o sistema fez.')}</p>
+          <h3 className="t-h3 text-paper">{t('Clientes por risco')}</h3>
+          <p className="t-apoio mt-0.5 text-silver">{t('Do maior risco ao menor. O motivo é o que pesou na avaliação; a abordagem é o que o sistema fez.')}</p>
           <p className="t-label mt-1 text-muted">{t('Grave é o topo 10% da base pelo risco; Preocupante, os 20% seguintes. Sempre com um sinal real de abandono.')}</p>
         </div>
         <div className="flex flex-wrap gap-1.5" role="tablist" aria-label={t('Filtrar por faixa')}>
@@ -78,14 +150,14 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
               type="button"
               role="tab"
               aria-selected={filtro === f.valor}
-              onClick={() => setFiltro(f.valor)}
+              onClick={() => escolherFiltro(f.valor)}
               className={cx(
                 'rounded-full border px-3 py-1.5 text-rotulo font-[520] transition-colors',
                 filtro === f.valor ? 'border-orange/60 bg-orange/10 text-orange' : 'border-line text-silver hover:border-graphite hover:text-paper',
               )}
             >
               {f.rotulo}
-              <span className="tabular ml-1.5 text-rotulo opacity-70">{contagem(f.valor)}</span>
+              {contagem(f.valor) !== null ? <span className="tabular ml-1.5 text-rotulo opacity-70">{fmt.numero(contagem(f.valor) ?? 0)}</span> : null}
             </button>
           ))}
         </div>
@@ -103,7 +175,13 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
             </tr>
           </thead>
           <tbody>
-            {clientes === null ? (
+            {erro && lista === null ? (
+              <tr className="border-t border-line">
+                <td colSpan={6} className="p-4">
+                  <ErroCarregar mensagem={erro} onTentar={() => setTentativa((n) => n + 1)} />
+                </td>
+              </tr>
+            ) : lista === null ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={i} className="border-t border-line">
                   <td colSpan={6} className="px-5 py-4">
@@ -114,7 +192,7 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
             ) : lista.length === 0 ? (
               <tr className="border-t border-line">
                 <td colSpan={6}>
-                  {clientes.length === 0 ? (
+                  {pagina && pagina.totalNaBase === 0 && !buscado ? (
                     <Vazio titulo={t('Nenhum cliente avaliado ainda')} texto={t('Anexe a base na aba “Sua base” ou ligue a API. Assim que a base entrar, os clientes aparecem aqui com a faixa de risco e o motivo.')} icone={<IconTable width={22} height={22} />} />
                   ) : (
                     <Vazio titulo={t('Nenhum cliente nesta faixa')} texto={t('Tente outra faixa.')} />
@@ -171,6 +249,23 @@ export function TabelaClientes({ clientes: recentes, total, buscado = null }: Pr
           </tbody>
         </table>
       </div>
+      {pagina && pagina.clientes.length > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-3.5">
+          <span className="t-label text-silver" aria-live="polite">
+            {t('Mostrando {mostrados} de {total}', { mostrados: fmt.numero(pagina.clientes.length), total: fmt.numero(pagina.totalFiltrado) })}
+          </span>
+          {faltam > 0 ? (
+            <Button size="sm" variant="ghost" onClick={verMais} disabled={carregandoMais}>
+              {carregandoMais ? t('Carregando…') : t('Ver mais {n}', { n: fmt.numero(Math.min(POR_PAGINA, faltam)) })}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {erro && lista !== null ? (
+        <div className="border-t border-line p-4">
+          <ErroCarregar mensagem={erro} onTentar={verMais} />
+        </div>
+      ) : null}
     </div>
   )
 }

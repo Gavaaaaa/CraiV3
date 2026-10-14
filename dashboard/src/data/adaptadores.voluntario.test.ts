@@ -221,3 +221,34 @@ describe('o anexo na camada HTTP', () => {
     await expect(http.chamar('POST', '/clientes/importar', new FormData())).rejects.toMatchObject({ codigo: 'invalido', status, message: frase })
   })
 })
+
+describe('adaptarPaginaPorRisco (14/10/2026)', () => {
+  const linha = (id: string, faixa: string) => ({
+    id, nome: id, mrr: 100, faixa, motivo: '', decidido_por: null, posicao_no_ranking: null,
+    abordagem: null, atualizado_em: null, simulado: false,
+  })
+
+  it('usa a contagem da base inteira e o total filtrado do backend', async () => {
+    const { adaptarPaginaPorRisco } = await import('./adaptadores')
+    const p = adaptarPaginaPorRisco({
+      clientes: [linha('a', 'grave')], total_na_base: 300,
+      contagem_por_faixa: { grave: 38, preocupante: 28, sem_risco: 228, sem_dado: 6 }, total_filtrado: 38,
+    })
+    expect(p.contagem).toEqual({ grave: 38, preocupante: 28, sem_risco: 228, sem_dado: 6 })
+    expect(p.totalFiltrado).toBe(38)
+    expect(p.totalNaBase).toBe(300)
+  })
+
+  it('backend anterior, sem a contagem: conta a própria página, e não há "Ver mais"', async () => {
+    const { adaptarPaginaPorRisco } = await import('./adaptadores')
+    const p = adaptarPaginaPorRisco({ clientes: [linha('a', 'grave'), linha('b', 'sem_dado'), linha('c', 'faixa-nova')], total_na_base: 3 })
+    expect(p.contagem).toEqual({ grave: 1, preocupante: 0, sem_risco: 0, sem_dado: 2 })
+    expect(p.totalFiltrado).toBe(3)
+  })
+
+  it('contagem estranha do backend vira zero, nunca um número inventado', async () => {
+    const { adaptarPaginaPorRisco } = await import('./adaptadores')
+    const p = adaptarPaginaPorRisco({ clientes: [], total_na_base: 0, contagem_por_faixa: { grave: -1, preocupante: Number.NaN } })
+    expect(p.contagem).toEqual({ grave: 0, preocupante: 0, sem_risco: 0, sem_dado: 0 })
+  })
+})
