@@ -341,9 +341,11 @@ class TestWebhooksIntocados:
         # mandado pelo servidor da empresa, com a chave de API ou o token.
         # `/busca` entrou na Rodada 4 (Fase 2): a busca do topo do painel lê os
         # clientes e os ciclos da empresa do token, e só dela.
+        # `/voluntario` entrou em 14/10/2026: as 3 mensagens do voluntário, que
+        # esperam a escolha da empresa do token, e só dela.
         SELF_SERVICE = ("/clientes", "/insights", "/titular", "/metrics", "/ciclos",
                         "/configuracao", "/integracao", "/atividade", "/extrato",
-                        "/simulacao", "/assistente", "/eventos", "/busca")
+                        "/simulacao", "/assistente", "/eventos", "/busca", "/voluntario")
 
         def _e_self_service(caminho: str) -> bool:
             return any(caminho == p or caminho.startswith(p + "/")

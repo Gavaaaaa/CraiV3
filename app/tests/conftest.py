@@ -260,6 +260,12 @@ def mensagem_do_involuntario_neutra(monkeypatch):
     from crai.dunning import configuracao
     monkeypatch.setitem(configuracao.PADROES, "modo_mensagem_involuntario",
                         configuracao.MODO_AUTOMATICO)
+    # 14/10/2026: o voluntário passou a ler o modo também (a oferta por WhatsApp
+    # ou e-mail espera a escolha das 3 mensagens). Pelo mesmo motivo, a suíte
+    # roda no automático, como o voluntário era até aqui; os testes das 3
+    # mensagens (`test_mensagens_voluntario.py`) gravam o modo escolha.
+    monkeypatch.setitem(configuracao.PADROES, "modo_mensagem_voluntario",
+                        configuracao.MODO_AUTOMATICO)
     monkeypatch.setitem(configuracao.PADROES, "janela_contato_inicio", "00:00")
     monkeypatch.setitem(configuracao.PADROES, "janela_contato_fim", "24:00")
     monkeypatch.setitem(configuracao.PADROES, "canal_presumido", "whatsapp")

@@ -56,6 +56,11 @@ class ChurnVoluntaryState(TypedDict):
     # risco ficou abaixo do corte.
     sem_oferta_por: Optional[str]
 
+    # 14/10/2026: no modo "eu escolho", a oferta por WhatsApp ou e-mail espera a
+    # escolha da empresa entre 3 mensagens (`mensagens_voluntario`) em vez de
+    # sair na hora. É o id dessa espera; None quando a oferta saiu (ou não houve).
+    mensagem_pendente_id: Optional[int]
+
     # Resultado
     offer_sent: bool
     accepted:   Optional[bool]

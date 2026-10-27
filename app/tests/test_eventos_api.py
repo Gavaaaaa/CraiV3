@@ -56,9 +56,17 @@ def _ambiente(monkeypatch):
 
 @pytest.fixture
 def producao(monkeypatch):
-    """Os padroes de PRODUCAO da configuracao (a suite roda com os neutros)."""
+    """Os padroes de PRODUCAO da configuracao (a suite roda com os neutros).
+
+    Menos o modo de envio do voluntario (14/10/2026): no padrao de producao
+    ("eu escolho") a oferta espera a escolha das 3 mensagens e so conta como
+    enviada depois. Estes testes medem o limite de contato sobre a oferta
+    enviada; a oferta que espera a escolha tem os testes dela em
+    `test_mensagens_voluntario.py`, inclusive contra o mesmo limite."""
     for chave, valor in configuracao.PADROES_DE_PRODUCAO.items():
         monkeypatch.setitem(configuracao.PADROES, chave, valor)
+    monkeypatch.setitem(configuracao.PADROES, "modo_mensagem_voluntario",
+                        configuracao.MODO_AUTOMATICO)
 
 
 @pytest.fixture

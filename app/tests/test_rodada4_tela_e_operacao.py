@@ -552,7 +552,8 @@ class TestAnonimizacaoDosCiclos:
         agora = datas.agora_local()
         primeira = await relogio.passagem(agora)
         assert primeira["ciclos_anonimizados"] == 1 and primeira["simulacoes_apagadas"] == 0
-        assert set(primeira) == {"disparos", "expurgo", "expurgo_da_trilha", "ciclos_anonimizados",
+        assert set(primeira) == {"disparos", "mensagens_voluntario", "expurgo",
+                                 "expurgo_da_trilha", "ciclos_anonimizados",
                                  "simulacoes_apagadas"}
         segunda = await relogio.passagem(agora)
         assert "ciclos_anonimizados" not in segunda and "simulacoes_apagadas" not in segunda

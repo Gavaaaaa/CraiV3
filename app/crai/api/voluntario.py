@@ -5,6 +5,10 @@
     GET /metrics/voluntario/mes              o mês: valor mantido líquido, contagens
     GET /metrics/voluntario/serie            um ponto por dia
     GET /metrics/voluntario/regua-x-modelo   régua e modelo sobre a mesma base
+    GET /voluntario/mensagens                as ofertas esperando a escolha da mensagem
+    GET /voluntario/mensagens/{id}           uma delas: o risco, as 3 mensagens, a linha do tempo
+    POST /voluntario/mensagens/{id}/escolher a empresa escolhe uma das 3
+    POST /voluntario/mensagens/{id}/regerar  outras 3 para a mesma oferta
 
 O QUE ESTAS ROTAS GARANTEM:
 
@@ -32,13 +36,14 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Path
 
 from .. import simulador
 from ..accounts import get_conta
-from ..accounts.auth import exigir_plano_voluntario
+from ..accounts.auth import exigir_papel, exigir_plano_voluntario
 from ..churn_voluntary import (batch_scoring, clientes_importados, insights_unificados,
-                               mantido, origem_da_base, retention_log, risk_scorer)
+                               mantido, mensagens_voluntario, origem_da_base, retention_log,
+                               risk_scorer)
 from ..dunning import configuracao
 from . import datas, registro_acesso
 
@@ -173,14 +178,22 @@ def abordagens_por_cliente(tenant_id: str) -> dict:
     return por_cliente
 
 
-def _abordagem(ciclo: Optional[dict]) -> Optional[dict]:
+def _abordagem(ciclo: Optional[dict], mensagem: Optional[dict] = None) -> Optional[dict]:
+    """A abordagem do último ciclo do cliente. Com `mensagem` (14/10/2026), a
+    oferta passou pela escolha das 3 mensagens: `mensagem_id` leva ao painel
+    delas, e enquanto ela espera a situação é `aguardando_escolha`."""
     if ciclo is None:
         return None
     oferta, canal = ciclo["offer_type"], ciclo.get("channel")
+    situacao = situacao_da_oferta(ciclo)
+    if mensagem is not None and situacao == "aguardando":
+        situacao = ("aguardando_escolha" if mensagem["estado"] == mensagens_voluntario.AGUARDANDO
+                    else "nao_enviada")
     return {"oferta": oferta, "oferta_legivel": retention_log.ROTULOS_DE_OFERTA.get(oferta, oferta),
             "canal": canal, "canal_legivel": retention_log.ROTULOS_DE_CANAL.get(canal, canal),
-            "situacao": situacao_da_oferta(ciclo),
+            "situacao": situacao,
             "decidida_em": datas.iso_com_fuso(ciclo.get("registrado_em")),
+            "mensagem_id": mensagem["id"] if mensagem is not None else None,
             "simulado": _ciclo_e_sorteio(ciclo)}
 
 
@@ -288,6 +301,7 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
     except clientes_importados.ConfiguracaoAusente as e:
         raise _500_base(e) from e
     abordagens = abordagens_por_cliente(tenant_id)
+    mensagens = mensagens_voluntario.por_ciclo(tenant_id)
     try:
         marcados = clientes_importados.marcados_nao_contatar(tenant_id)
     except clientes_importados.ConfiguracaoAusente:
@@ -316,7 +330,8 @@ async def clientes_recentes(limite: Optional[int] = None, incluir_simulados: boo
             "motivo": l.get("explicacao"),
             "decidido_por": decidido_por(l),
             "posicao_no_ranking": posicao if l.get("risk_score") is not None else None,
-            "abordagem": _abordagem(abordagens.get(cid)),
+            "abordagem": _abordagem(abordagens.get(cid),
+                                    mensagens.get((abordagens.get(cid) or {}).get("id"))),
             "atualizado_em": quando.isoformat(timespec="seconds") if quando else None,
             "origem": l.get("origem"),
             # Rodada 4: quem pediu para não receber mensagens (ou foi marcado pela empresa).
@@ -424,6 +439,8 @@ async def metricas_do_mes(mes: Optional[str] = None, incluir_simulados: bool = F
             "aceites_sem_valor": feito.get("sem_valor", 0),
             "grave": faixas["grave"], "preocupante": faixas["preocupante"],
             **ofertas_do_periodo(tenant_id, inicio, fim, incluir_simulados),
+            # 14/10/2026: agora, não no mês: quantas ofertas esperam a escolha da mensagem.
+            "aguardando_escolha": mensagens_voluntario.contar_aguardando(tenant_id),
             "meses_de_mrr": mantido.MESES_DE_MRR_MANTIDOS,
             "prazo_estorno_dias": configuracao.ler(tenant_id)["prazo_estorno_dias"]}
 
@@ -522,3 +539,267 @@ async def regua_x_modelo(dias: Optional[int] = None,
     except clientes_importados.ConfiguracaoAusente as e:
         raise _500_base(e) from e
     return {"dias": dias, "minimo_de_cancelamentos": MINIMO_DE_CANCELAMENTOS, **resultado}
+
+
+# ── As 3 mensagens do voluntário (14/10/2026) ─────────────────────────────
+#
+# O mesmo que o involuntário faz com as cobranças: no modo "eu escolho", a
+# oferta de retenção por WhatsApp ou e-mail espera a empresa escolher uma de 3
+# mensagens; sem escolha no prazo, sai a recomendada. A regra e o registro
+# estão em `churn_voluntary/mensagens_voluntario.py`.
+
+ID_MAXIMO = 2**63 - 1
+
+
+def _404_mensagem() -> HTTPException:
+    return HTTPException(status_code=404, detail={"motivo": "mensagem_nao_encontrada",
+                                                  "detalhe": "mensagem não encontrada"})
+
+
+def _409(motivo: str, detalhe: str) -> HTTPException:
+    return HTTPException(status_code=409, detail={"motivo": motivo, "detalhe": detalhe})
+
+
+def _clientes_por_id(tenant_id: str) -> tuple:
+    """({id da base: (nome, mrr, faixa, posição, explicação)}, total na base).
+    Um cliente que só chegou por evento não está aqui: a tela usa o id."""
+    ranking = _ranking(tenant_id)
+    try:
+        carimbos = insights_unificados.em_cache(
+            tenant_id, "carimbos", lambda: clientes_importados.carimbos(tenant_id))
+    except clientes_importados.ConfiguracaoAusente:
+        carimbos = {}
+    por_id = {}
+    for posicao, l in enumerate(ranking, start=1):
+        cid = l["customer_id_externo"]
+        por_id[cid] = {"nome": carimbos.get(cid, (None, None, None))[2], "mrr": l.get("mrr"),
+                       "faixa": FAIXA_DA_CRITICIDADE.get(l["criticality"], "sem_dado"),
+                       "posicao_no_ranking": posicao if l.get("risk_score") is not None else None,
+                       "motivo": l.get("explicacao")}
+    return por_id, len(ranking)
+
+
+def _escolha_ate(m: dict) -> Optional[str]:
+    if m["estado"] != mensagens_voluntario.AGUARDANDO or m["escolhida_abordagem"]:
+        return None
+    return datas.iso_com_fuso(m["prazo_ate"])
+
+
+def _sugestao_publica(m: dict, s: dict) -> dict:
+    return {"rodada": s["rodada"], "abordagem": s["abordagem"],
+            "rotulo": mensagens_voluntario.ROTULO_DA_ABORDAGEM.get(s["abordagem"], s["abordagem"]),
+            "recomendada": bool(s.get("recomendada")),
+            "escolhida": (s["rodada"] == m["escolhida_rodada"]
+                          and s["abordagem"] == m["escolhida_abordagem"]),
+            "origem": s.get("origem"),
+            # {"pt": ..., "en": ...} do modelo pronto; só "pt" no texto gerado; None
+            # depois do prazo de guarda.
+            "textos": s.get("textos")}
+
+
+def _resumo_da_mensagem(m: dict, clientes: dict) -> dict:
+    cid = insights_unificados._id_cru(m["user_id"])
+    cliente = clientes.get(cid) or {}
+    recomendada = mensagens_voluntario.recomendada(m["sugestoes"])
+    return {
+        "id": m["id"], "cliente_id": cid, "nome": cliente.get("nome"), "mrr": cliente.get("mrr"),
+        "faixa": cliente.get("faixa") or "sem_dado",
+        "estado": m["estado"],
+        "oferta": m["oferta"],
+        "oferta_legivel": retention_log.ROTULOS_DE_OFERTA.get(m["oferta"], m["oferta"]),
+        "canal": m["canal"],
+        "canal_legivel": retention_log.ROTULOS_DE_CANAL.get(m["canal"], m["canal"]),
+        "criado_em": datas.iso_com_fuso(m["criado_em"]),
+        "escolha_ate": _escolha_ate(m),
+        "recomendada": _sugestao_publica(m, recomendada) if recomendada else None,
+    }
+
+
+@router.get("/voluntario/mensagens")
+async def listar_mensagens(conta: dict = Depends(get_conta)) -> dict:
+    """As ofertas de retenção que esperam a empresa escolher a mensagem, das
+    que vencem primeiro às últimas, cada uma com a recomendada (a que sai sozinha
+    no prazo). `modo` é o modo de envio do voluntário: no `automatico` nada
+    espera, e a lista vem vazia. Sem telefone, e-mail ou CPF."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
+    config = configuracao.ler(tenant_id)
+    pendentes = mensagens_voluntario.listar(tenant_id, so_aguardando=True)
+    clientes, _ = _clientes_por_id(tenant_id) if pendentes else ({}, 0)
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CLIENTES_RECENTES,
+                              conta.get("papel"), datas.agora_local())
+    return {"mensagens": [_resumo_da_mensagem(m, clientes) for m in pendentes],
+            "modo": config["modo_mensagem_voluntario"],
+            "prazo_escolha_horas": config["prazo_escolha_horas"]}
+
+
+def _contribuicoes(risco: dict) -> list:
+    """As (até) cinco contribuições do SHAP gravadas na decisão, com o rótulo
+    da trilha; sem rótulo legível, a linha não sai (nunca o nome cru)."""
+    entradas = risco.get("entradas") or {}
+    itens = []
+    for c in (risco.get("contribuicoes") or [])[:5]:
+        nome = c.get("feature")
+        valor = entradas.get(nome)
+        rotulo = (retention_log._rotular(nome, valor, retention_log.ROTULOS_DE_FEATURE)
+                  if valor is not None else None)
+        if rotulo is None or rotulo.startswith(f"{nome} = "):
+            continue
+        direcao = c.get("direcao") or c.get("direction")
+        itens.append({"fator": rotulo, "efeito": ("aumentou" if direcao == "+"
+                                                  else "reduziu" if direcao == "-" else None)})
+    return itens
+
+
+def _decisao_de_risco(tenant_id: str, m: dict) -> Optional[dict]:
+    """A decisão de risco que levou a esta oferta: a mais recente do cliente
+    até o momento em que as mensagens foram escritas."""
+    criado = mensagens_voluntario._utc(m["criado_em"])
+    for d in retention_log.decisoes_do_sujeito(tenant_id, m["user_id"], limite=50):
+        if d["dominio"] != retention_log.DOMINIO_VOLUNTARIO or d["tipo_decisao"] != retention_log.TIPO_RISCO:
+            continue
+        quando = mensagens_voluntario._utc(d["decidido_em"])
+        if quando is None or criado is None or quando <= criado + timedelta(seconds=5):
+            return d
+    return None
+
+
+def _linha_do_tempo(m: dict, ciclo: Optional[dict], risco: Optional[dict]) -> list:
+    """Os fatos desta oferta, em ordem. Só códigos e valores: a tela escreve a
+    frase no idioma de quem lê."""
+    eventos = []
+    if risco is not None or ciclo is not None:
+        eventos.append({"em": datas.iso_com_fuso((risco or {}).get("decidido_em")
+                                                 or (ciclo or {}).get("registrado_em")),
+                        "tipo": "sinal_de_risco", "evento": m.get("evento")})
+    eventos.append({"em": datas.iso_com_fuso(m["criado_em"]), "tipo": "mensagens_sugeridas",
+                    "oferta_legivel": retention_log.ROTULOS_DE_OFERTA.get(m["oferta"], m["oferta"]),
+                    "canal_legivel": retention_log.ROTULOS_DE_CANAL.get(m["canal"], m["canal"]),
+                    "rodadas": max((s["rodada"] for s in m["sugestoes"]), default=1)})
+    if m["escolhida_abordagem"]:
+        eventos.append({"em": datas.iso_com_fuso(m["escolhida_em"]), "tipo": "mensagem_escolhida",
+                        "abordagem": m["escolhida_abordagem"], "escolhida_por": m["escolhida_por"]})
+    if m["estado"] == mensagens_voluntario.ENVIADA:
+        eventos.append({"em": datas.iso_com_fuso(m["enviada_em"]), "tipo": "mensagem_enviada",
+                        "canal_legivel": retention_log.ROTULOS_DE_CANAL.get(m["canal"], m["canal"])})
+    elif m["estado"] == mensagens_voluntario.NAO_ENVIADA:
+        eventos.append({"em": datas.iso_com_fuso(m["escolhida_em"] or m["criado_em"]),
+                        "tipo": "mensagem_nao_enviada", "motivo": m["motivo_nao_enviada"]})
+    if ciclo is not None and ciclo.get("accepted") is not None:
+        eventos.append({"em": datas.iso_com_fuso(ciclo.get("desfecho_em")),
+                        "tipo": "oferta_aceita" if ciclo["accepted"] == 1 else "oferta_recusada"})
+    return [e for e in eventos if e["em"]]
+
+
+def detalhe_da_mensagem(tenant_id: str, m: dict) -> dict:
+    clientes, total = _clientes_por_id(tenant_id)
+    cid = insights_unificados._id_cru(m["user_id"])
+    cliente = clientes.get(cid) or {}
+    ciclo = next((c for c in retention_log.ciclos_com_oferta(tenant_id)
+                  if c["id"] == m["ciclo_id"]), None) if m["ciclo_id"] else None
+    risco = _decisao_de_risco(tenant_id, m)
+    saida = (risco or {}).get("saida") or {}
+    pontuacao = saida.get("risk_score", (ciclo or {}).get("risk_score"))
+    return {
+        **_resumo_da_mensagem(m, clientes),
+        "posicao_no_ranking": cliente.get("posicao_no_ranking"),
+        "total_na_base": total,
+        "modo": configuracao.ler(tenant_id)["modo_mensagem_voluntario"],
+        "escolhida_por": m["escolhida_por"],
+        "enviada_em": datas.iso_com_fuso(m["enviada_em"]),
+        "motivo_nao_enviada": m["motivo_nao_enviada"],
+        "texto_apagado": bool(m["texto_apagado_em"]),
+        "risco": {
+            "pontuacao": None if pontuacao is None else round(float(pontuacao), 4),
+            "decidido_por": (None if risco is None else
+                             "regua" if risco.get("modelo") == retention_log.MODELO_REGRA
+                             else "modelo"),
+            "motivo": cliente.get("motivo"),
+            "contribuicoes": _contribuicoes(risco) if risco else [],
+        },
+        "sugestoes": [_sugestao_publica(m, s) for s in m["sugestoes"]],
+        "linha_do_tempo": _linha_do_tempo(m, ciclo, risco),
+    }
+
+
+def _mensagem_do_tenant(tenant_id: str, mensagem_id: int) -> dict:
+    m = mensagens_voluntario.ler(tenant_id, mensagem_id)
+    if m is None:
+        raise _404_mensagem()
+    return m
+
+
+@router.get("/voluntario/mensagens/{mensagem_id}")
+async def ler_mensagem(mensagem_id: int = Path(..., ge=1, le=ID_MAXIMO),
+                       conta: dict = Depends(get_conta)) -> dict:
+    """Uma oferta e as suas mensagens: por que o cliente está em risco (a
+    pontuação, quem decidiu e o que pesou), as 3 mensagens de cada rodada com a
+    recomendada e a escolhida marcadas, o prazo e a linha do tempo. 404 idêntico
+    para mensagem inexistente e de outra empresa."""
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
+    m = _mensagem_do_tenant(tenant_id, mensagem_id)
+    registro_acesso.registrar(tenant_id, registro_acesso.ROTA_CLIENTES_RECENTES,
+                              conta.get("papel"), datas.agora_local())
+    return detalhe_da_mensagem(tenant_id, m)
+
+
+@router.post("/voluntario/mensagens/{mensagem_id}/escolher")
+async def escolher_mensagem(mensagem_id: int = Path(..., ge=1, le=ID_MAXIMO),
+                            corpo: dict = Body(...), conta: dict = Depends(get_conta)) -> dict:
+    """A empresa escolhe UMA das mensagens: `{"rodada": n, "abordagem":
+    "<cuidado_proximo|facilitacao|direto_ao_ponto>"}`, de qualquer rodada. Não
+    há campo de texto: a mensagem é sempre uma das sugeridas. Ela sai na hora.
+    Exige `owner` ou `admin`. 409 se a mensagem não espera mais a escolha."""
+    papel = exigir_papel(conta, "owner", "admin")
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
+    _mensagem_do_tenant(tenant_id, mensagem_id)
+    if not isinstance(corpo, dict) or set(corpo) - {"rodada", "abordagem"}:
+        extras = sorted(set(corpo) - {"rodada", "abordagem"}) if isinstance(corpo, dict) else []
+        raise _422("campo_desconhecido", "o corpo aceita só `rodada` e `abordagem`: a mensagem "
+                   "é sempre uma das sugeridas", extras[0] if extras else "corpo")
+    rodada, abordagem = corpo.get("rodada"), corpo.get("abordagem")
+    if isinstance(rodada, bool) or not isinstance(rodada, int) or rodada < 1:
+        raise _422("rodada_invalida", "esperado inteiro >= 1", "rodada")
+    if abordagem not in mensagens_voluntario.ABORDAGENS:
+        raise _422("abordagem_invalida",
+                   f"esperado um de {', '.join(mensagens_voluntario.ABORDAGENS)}", "abordagem")
+    try:
+        mensagens_voluntario.registrar_escolha(tenant_id, mensagem_id, rodada, abordagem, papel)
+    except mensagens_voluntario.SugestaoInexistente:
+        raise _422("sugestao_inexistente", "não há esta mensagem nesta oferta", "rodada") from None
+    except mensagens_voluntario.NaoAguarda:
+        raise _409("mensagem_nao_aguarda_escolha",
+                   "a escolha já foi feita (pela empresa ou pelo prazo)") from None
+    m = await mensagens_voluntario.enviar(tenant_id, mensagem_id)
+    return {"id": mensagem_id, "rodada": rodada, "abordagem": abordagem, "escolhida_por": papel,
+            "enviada": m["estado"] == mensagens_voluntario.ENVIADA,
+            "motivo_nao_enviada": m["motivo_nao_enviada"]}
+
+
+@router.post("/voluntario/mensagens/{mensagem_id}/regerar")
+async def regerar_mensagens(mensagem_id: int = Path(..., ge=1, le=ID_MAXIMO),
+                            conta: dict = Depends(get_conta)) -> dict:
+    """Outras 3 mensagens para a mesma oferta, dentro do prazo (que não é
+    reiniciado). A recomendada da ÚLTIMA rodada é a que sai por prazo. Exige
+    `owner` ou `admin`. 409 se a mensagem não espera mais a escolha ou o prazo
+    acabou."""
+    exigir_papel(conta, "owner", "admin")
+    exigir_plano_voluntario(conta)
+    tenant_id = conta["tenant_id"]
+    m = _mensagem_do_tenant(tenant_id, mensagem_id)
+    try:
+        r = await mensagens_voluntario.regerar(tenant_id, mensagem_id)
+    except mensagens_voluntario.NaoAguarda as e:
+        if str(e) == "prazo":
+            raise _409("prazo_de_escolha_vencido", "o prazo de escolha acabou") from None
+        if str(e) == "rodadas":
+            raise _409("rodadas_esgotadas", f"no máximo {mensagens_voluntario.MAXIMO_DE_RODADAS} "
+                       "rodadas por oferta") from None
+        raise _409("mensagem_nao_aguarda_escolha",
+                   "esta oferta não está esperando uma escolha") from None
+    m = mensagens_voluntario.ler(tenant_id, mensagem_id)
+    return {"id": mensagem_id, "rodada": r["rodada"],
+            "sugestoes": [_sugestao_publica(m, s) for s in r["sugestoes"]],
+            "escolha_ate": _escolha_ate(m)}

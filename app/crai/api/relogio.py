@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..churn_voluntary import retention_log
+from ..churn_voluntary import mensagens_voluntario, retention_log
 from ..dunning import ciclo_cobranca, configuracao, retry_scheduler
 from . import datas, registro_acesso
 
@@ -170,6 +170,11 @@ def expurgar(agora: datetime) -> dict:
     for tenant_id in tenants:
         dias = configuracao.ler(tenant_id)["retencao_mensagens_dias"]
         textos += ciclo_cobranca.apagar_texto_expirado(agora, tenant_id, dias)
+    # 14/10/2026: o mesmo prazo vale para o texto das mensagens do voluntário,
+    # contado do envio.
+    for tenant_id in mensagens_voluntario.tenants_com_texto():
+        dias = configuracao.ler(tenant_id)["retencao_mensagens_dias"]
+        textos += mensagens_voluntario.apagar_texto_expirado(agora, tenant_id, dias)
     acessos = registro_acesso.expurgar(agora)
     logger.info("[EXPURGO] %s: %d texto(s) de mensagem apagado(s), em %d empresa(s) "
                 "verificada(s); %d registro(s) de acesso apagado(s).",
@@ -247,6 +252,9 @@ async def passagem(agora: datetime) -> dict:
     NÃO é marcado e a próxima passagem tenta de novo."""
     disparos = await retry_scheduler.processar_tentativas_devidas(agora)
     resultado = {"disparos": disparos}
+    # 14/10/2026: as mensagens do voluntário cujo prazo de escolha venceu (ou cuja
+    # empresa passou para o modo automático) saem pela recomendada.
+    resultado["mensagens_voluntario"] = await mensagens_voluntario.enviar_devidas(agora)
     hoje = agora.date().isoformat()
     if _estado.get("ultimo_expurgo_em") != hoje:
         resultado["expurgo"] = expurgar(agora)

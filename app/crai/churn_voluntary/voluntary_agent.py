@@ -69,6 +69,7 @@ from ..config import AVISO_SAIR
 from ..dunning import configuracao
 from ..integrations.hubspot_crm import HubSpotCRM
 from . import clientes_importados
+from . import mensagens_voluntario
 from ..integrations.whatsapp_sender import destino_utilizavel, send_whatsapp
 
 claude   = AsyncAnthropic()
@@ -223,7 +224,8 @@ async def assess_risk(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
         {**state, "risk_score": risk, "profile": profile, "criticality": criticality,
          "regra_de_intervencao": regra, "intensidade_da_oferta": None,
          "decisoes": [], "ofertas_consideradas": None, "candidatas": None,
-         "canais_considerados": None, "sem_oferta_por": None}, dec)
+         "canais_considerados": None, "sem_oferta_por": None,
+         "mensagem_pendente_id": None}, dec)
 
 
 async def choose_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
@@ -750,6 +752,16 @@ async def send_offer(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     if pediu_para_nao_ser_contatado(state.get("tenant_id") or TENANT_PADRAO, state["user_id"]):
         print(f"[CHURN-VOL] Não contatar: {FRASE_DO_NAO_CONTATAR} — oferta não enviada")
         return {**state, "offer_sent": False, "sem_oferta_por": MOTIVO_NAO_CONTATAR}
+    # 14/10/2026: no modo "eu escolho", WhatsApp e e-mail esperam a empresa
+    # escolher uma das 3 mensagens (`mensagens_voluntario`); o relógio envia a
+    # recomendada quando o prazo vence. O pop-up não espera: o cliente está no
+    # site agora. Se a gravação falhar, a oferta sai na hora, como antes.
+    tenant = state.get("tenant_id") or TENANT_PADRAO
+    if mensagens_voluntario.espera_escolha(tenant, state.get("channel")):
+        pendente = await mensagens_voluntario.criar(state)
+        if pendente is not None:
+            print(f"[CHURN-VOL] Oferta esperando a escolha da empresa (mensagem {pendente})")
+            return {**state, "offer_sent": False, "mensagem_pendente_id": pendente}
     if state["channel"] in CANAIS_COM_LINHA_DE_SAIDA:
         # A candidata vencedora que o painel mostra é, linha por linha, o texto
         # que sai: ela ganha a mesma linha.
@@ -907,7 +919,9 @@ async def update_crm(state: ChurnVoluntaryState) -> ChurnVoluntaryState:
     # viés não desaparece — não há desfecho para quem não recebeu oferta —, mas
     # com as linhas gravadas ele é MENSURÁVEL em vez de invisível. Está
     # documentado no README_treino.md.
-    registrar_ciclo(state)
+    ciclo_id = registrar_ciclo(state)
+    if state.get("mensagem_pendente_id"):
+        mensagens_voluntario.ligar_ciclo(state["mensagem_pendente_id"], ciclo_id)
     # A trilha do Art. 20, numa transação só para as decisões deste ciclo.
     # Best effort, como o ciclo: falha aqui não derruba a retenção.
     trilha.registrar_decisoes(state.get("decisoes") or [])
@@ -1097,6 +1111,11 @@ def oferta_recente(tenant_id: str, user_id: str, ultimas: dict | None = None) ->
     if not isinstance(intervalo, int) or isinstance(intervalo, bool) or intervalo <= 0:
         return None
     if ultimas is None:
+        # Uma oferta que espera a escolha da empresa já é a oferta deste cliente:
+        # um segundo evento não abre outra (14/10/2026).
+        if mensagens_voluntario.aguardando_do_cliente(tenant, user_id):
+            return {"dias_desde_a_ultima_oferta": 0, "intervalo_minimo_ofertas_dias": intervalo,
+                    "aguardando_escolha": True}
         ultimas = trilha.ultima_oferta_enviada(tenant, user_id)
     dias = dias_desde(ultimas.get(user_id))
     if dias is None or dias < 0 or dias >= intervalo:
@@ -1107,6 +1126,9 @@ def oferta_recente(tenant_id: str, user_id: str, ultimas: dict | None = None) ->
 
 def frase_do_limite(recente: dict) -> str:
     """O motivo do limite de contato, em uma frase (a trilha e o lote usam a mesma)."""
+    if recente.get("aguardando_escolha"):
+        return ("o cliente já tem uma oferta esperando a escolha da mensagem pela empresa, e "
+                "ela vale como a oferta deste período")
     dias = recente.get("dias_desde_a_ultima_oferta")
     ha = ("há menos de 1 dia" if not dias else "há 1 dia" if dias == 1 else f"há {dias} dias")
     return (f"o cliente recebeu uma oferta {ha}, e a empresa permite uma oferta a cada "

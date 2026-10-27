@@ -113,6 +113,25 @@ emite um token de uma empresa fictícia (`demo_dashboard`, ou `demo_testes` para
 vivo do dashboard). Ele não carrega dado de pessoa
 (sem e-mail, `sub` genérico) e não é gravado. Fora de `development` não existe.
 
+
+## 1h. As mensagens do voluntário (14/10/2026)
+
+Onde: tabela `mensagens_voluntario`, no mesmo arquivo dos ciclos de retenção
+(`app/data/retention_cycles.db`, env `CRAI_RETENTION_DB`). Origem: o pipeline do
+voluntário, quando a empresa está no modo "eu escolho" e a oferta sai por WhatsApp
+ou e-mail (`churn_voluntary/mensagens_voluntario.py`). Uma linha por oferta que
+esperou ou espera a escolha das 3 mensagens.
+
+| tabela · campo | pessoal? | sensível? | base legal | prazo | vai para |
+|---|---|---|---|---|---|
+| `mensagens_voluntario.sugestoes` (o texto das 3 mensagens de cada rodada) | **sim (texto dirigido à pessoa; nunca o nome)** | não | contrato | **90 dias depois do envio** (`retencao_mensagens_dias`), depois o texto é apagado e fica a abordagem (expurgo diário) | o canal, só a escolhida, quando o envio é real; **nunca** entra no dataset de treino nem na trilha |
+| `mensagens_voluntario.destino` (o telefone do WhatsApp) | **sim (contato)** | não | contrato | **só enquanto a mensagem espera a escolha**; sai no envio, no descarte e na anonimização | o provedor do WhatsApp, no envio |
+| `mensagens_voluntario.user_id`, oferta, canal, criticidade, evento, estado, `escolhida_*` (papel, nunca nome), datas | fraco (pseudônimo e decisão sobre a mensagem) | não | contrato | mesma do ciclo de retenção | — |
+
+A exportação do titular (`POST /titular/exportar`) traz as mensagens de cada oferta
+de retenção, sem o telefone; a anonimização (`POST /titular/anonimizar`) apaga o
+texto e o telefone na hora, e a mensagem que esperava a escolha não sai mais.
+
 ## 1c. As chaves de API da empresa (Rodada 2)
 
 Tabelas `chaves_api` e `chaves_api_uso`, no arquivo do ciclo de cobrança

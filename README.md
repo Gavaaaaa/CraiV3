@@ -477,7 +477,7 @@ da URL nem do corpo); "chave" é a chave de API da empresa (`crai_live_...`).
 | API de clientes | `POST /clientes`, `POST /clientes/lote`, `PATCH /clientes/{id}`, `DELETE /clientes/{id}` | O servidor da empresa, com a chave ou o token |
 | Base de clientes no painel | `POST /clientes/importar` (dono ou administrador), `GET /clientes/base`, `GET /clientes/recentes`, `POST` e `DELETE /clientes/{id}/nao-contatar` (dono ou administrador), `GET /insights`, `POST /insights/enviar` | Token |
 | Involuntário | `GET /ciclos`, `GET /ciclos/{id}`, `POST /ciclos/{id}/mensagens/escolher` e `/regerar` (dono ou administrador), `GET /metrics/involuntario/mes`, `/serie` e `/funil`, `GET /metrics/recovery` | Token |
-| Voluntário | `GET /metrics/voluntario/mes`, `/serie` e `/regua-x-modelo` | Token (plano premium) |
+| Voluntário | `GET /metrics/voluntario/mes`, `/serie` e `/regua-x-modelo`, `GET /voluntario/mensagens`, `GET /voluntario/mensagens/{id}`, `POST /voluntario/mensagens/{id}/escolher` e `/regerar` (dono ou administrador) | Token (plano premium) |
 | Visão geral | `GET /metrics/visao-geral`, `GET /metrics/serie`, `GET /metrics/o-que-funciona`, `GET /atividade`, `GET /extrato` e `GET /extrato/csv` (dono ou administrador; são as únicas com a taxa da CRAI; para empresa em período de piloto, a taxa é zero e a coluna "Taxa fora do piloto" mostra o que seria cobrado), `GET /busca` | Token |
 | Configuração e chaves | `GET` e `PUT /configuracao`, `GET` e `POST /integracao/chaves`, `DELETE /integracao/chaves/{id}` | Token (gravar: dono ou administrador) |
 | Direitos do titular (LGPD) | `GET /titular/explicacao/{id}`, `POST /titular/exportar`, `POST /titular/anonimizar`, `GET /titular/texto-para-politica` | Token (exportar e anonimizar: dono ou administrador) |

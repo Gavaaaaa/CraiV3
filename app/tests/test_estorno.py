@@ -508,7 +508,11 @@ class TestIsolamentoEOrigem:
             # Rodada 3, Fase 6: os direitos do titular e o descadastro. Apagam
             # texto e contato, e marcam "não contatar"; nenhuma gera estorno.
             "/titular/exportar", "/titular/anonimizar",
-            "/clientes/{customer_id_externo}/nao-contatar"}
+            "/clientes/{customer_id_externo}/nao-contatar",
+            # 14/10/2026: as 3 mensagens do voluntário. Escolher envia a oferta;
+            # regerar escreve outras 3. Nenhuma toca o ciclo de cobrança.
+            "/voluntario/mensagens/{mensagem_id}/escolher",
+            "/voluntario/mensagens/{mensagem_id}/regerar"}
 
         ciclo = _recuperar(cliente, relogio, "RN_a_mao")
         dono = cliente.projeto.bearer(A, papel="owner")

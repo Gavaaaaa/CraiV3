@@ -358,8 +358,14 @@ class TestR1:
     def test_as_unicas_rotas_de_mensagem_sao_escolher_e_regerar(self):
         rotas = {(m, r.path) for r in app_module.app.routes
                  for m in getattr(r, "methods", set()) if "mensag" in r.path}
+        # 14/10/2026: o voluntário ganhou as mesmas duas (e a leitura delas), com
+        # a mesma regra: escolher só aceita rodada e abordagem, nunca texto.
         assert rotas == {("POST", "/ciclos/{ciclo_id}/mensagens/escolher"),
-                         ("POST", "/ciclos/{ciclo_id}/mensagens/regerar")}
+                         ("POST", "/ciclos/{ciclo_id}/mensagens/regerar"),
+                         ("GET", "/voluntario/mensagens"),
+                         ("GET", "/voluntario/mensagens/{mensagem_id}"),
+                         ("POST", "/voluntario/mensagens/{mensagem_id}/escolher"),
+                         ("POST", "/voluntario/mensagens/{mensagem_id}/regerar")}
 
     def test_escolher_nao_aceita_texto(self, cliente, relogio, producao):
         rec = "RN_texto"

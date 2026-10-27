@@ -48,7 +48,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from ..accounts import get_conta, get_tenant_id
 from ..accounts.auth import exigir_papel
-from ..churn_voluntary import clientes_importados, mantido
+from ..churn_voluntary import clientes_importados, mantido, mensagens_voluntario
 from ..churn_voluntary import retention_log as trilha
 from ..dunning import ciclo_cobranca as cc
 from ..dunning import configuracao
@@ -257,6 +257,9 @@ def dados_do_titular(tenant_id: str, cid: str) -> Optional[dict]:
     marca = _marca(tenant_id, cid)
     if cliente is None and not retencao and not decisoes and marca is None:
         return None
+    mensagens_vol = mensagens_voluntario.do_cliente(tenant_id, user_id)
+    for r in retencao:
+        r["mensagens"] = [m for m in mensagens_vol if m.get("ciclo_id") == r.get("id")]
     return {"cliente": cliente, "recorrencia": recorrencia, "ciclos": ciclos,
             "retencao": retencao, "decisoes": sorted(decisoes, key=lambda d: d["id"]),
             "mantidas": mantido.do_cliente(tenant_id, cid), "marca": marca}
@@ -293,7 +296,18 @@ def _retencao_exportada(ciclo: dict) -> dict:
             "oferta": ciclo.get("offer_type"), "canal": ciclo.get("channel"),
             "oferta_enviada": bool(ciclo.get("offer_sent")),
             "aceitou": None if ciclo.get("accepted") is None else bool(ciclo["accepted"]),
-            "desfecho_em": datas.iso_com_fuso(ciclo.get("desfecho_em"))}
+            "desfecho_em": datas.iso_com_fuso(ciclo.get("desfecho_em")),
+            # 14/10/2026: as mensagens sugeridas desta oferta, quando ela esperou a
+            # escolha da empresa (sem o telefone de destino).
+            "mensagens": [{"abordagem": s["abordagem"], "rodada": s["rodada"], "canal": m["canal"],
+                           "texto": mensagens_voluntario.texto_em(s, "pt"),
+                           "recomendada": bool(s.get("recomendada")),
+                           "escolhida": (s["rodada"] == m.get("escolhida_rodada")
+                                         and s["abordagem"] == m.get("escolhida_abordagem")),
+                           "gerada_em": datas.iso_com_fuso(m.get("criado_em")),
+                           "enviada_em": datas.iso_com_fuso(m.get("enviada_em")),
+                           "texto_apagado_em": datas.iso_com_fuso(m.get("texto_apagado_em"))}
+                          for m in ciclo.get("mensagens") or [] for s in m["sugestoes"]]}
 
 
 @router.post("/titular/exportar")
@@ -365,6 +379,9 @@ async def anonimizar_titular(corpo: dict = Body(...), conta: dict = Depends(get_
     mensagens = (cc.apagar_texto_da_recorrencia(tenant_id, dados["recorrencia"], agora)
                  if dados["recorrencia"] else 0)
     apagados = clientes_importados.apagar_contatos(tenant_id, cid) if dados["cliente"] else []
+    # 14/10/2026: as mensagens do voluntário (texto e telefone de destino); a que
+    # esperava a escolha não sai mais.
+    mensagens += mensagens_voluntario.apagar_do_cliente(tenant_id, [f"user:{cid}"], agora)
     registro_acesso.registrar(tenant_id, registro_acesso.ROTA_ANONIMIZAR, conta.get("papel"),
                               agora)
     logger.info("[ART18] tenant=%s anonimizacao: %d contato(s), %d mensagem(ns)", tenant_id,
